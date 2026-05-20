@@ -1,0 +1,377 @@
+/* ============================================================
+   COLOR-SCHEME GLOBAL OVERRIDES
+   ------------------------------------------------------------
+   Originally this app was light-only and remapped Mantine's
+   `--mantine-color-dark-*` tokens to light colors at :root so
+   the ~60 places that reference them inline would render light.
+   The dashboard now supports a dark/light toggle, so these
+   overrides are scoped per color scheme. In dark mode we let
+   Mantine's native dark palette through.
+   ============================================================ */
+[data-mantine-color-scheme="light"] {
+  --mantine-color-dark-0: #212529;
+  --mantine-color-dark-1: #868e96;
+  --mantine-color-dark-2: #adb5bd;
+  --mantine-color-dark-3: #ced4da;
+  --mantine-color-dark-4: #dee2e6;
+  --mantine-color-dark-5: #e9ecef;
+  --mantine-color-dark-6: #f1f3f5;
+  --mantine-color-dark-7: #f8f9fa;
+  --mantine-color-dark-8: #ffffff;
+  --mantine-color-dark-9: #ffffff;
+  /* Mantine's semantic tokens used by some inline styles */
+  --mantine-color-bright: #1a1b1e;
+  --mantine-color-body: #ffffff;
+  --mantine-color-text: #1a1b1e;
+  --mantine-color-dimmed: #6b7280;
+  /* Surface used by Card / WidgetTile / WidgetFrame. Slightly off-white
+     so cards lift cleanly off the page tint. */
+  --widget-tile-surface: #ffffff;
+  --widget-tile-border: rgba(15, 23, 42, 0.08);
+  --widget-tile-border-strong: rgba(15, 23, 42, 0.14);
+}
+
+[data-mantine-color-scheme="dark"] {
+  /* The page body is #0b1220 (deep navy). Tiles render one step
+     lighter (#141d2e) so they read as physically raised surfaces.
+     Border lifts on the same hierarchy. */
+  --widget-tile-surface: #141d2e;
+  --widget-tile-border: rgba(148, 197, 221, 0.10);
+  --widget-tile-border-strong: rgba(148, 197, 221, 0.20);
+  /* Override Mantine's default `dimmed` (dark.2 = #adb5bd) with a
+     slightly brighter slate so secondary text (descriptions, captions,
+     timestamps) is comfortably readable against tile + sidebar
+     backgrounds. */
+  --mantine-color-dimmed: #b9c3d4;
+}
+
+body {
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-variant-numeric: tabular-nums;
+  text-rendering: optimizeLegibility;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+/* Headings get a tighter tracking + slightly bolder weight on dark
+   surfaces so titles "pop" against the lifted card backgrounds. */
+[data-mantine-color-scheme="dark"] h1,
+[data-mantine-color-scheme="dark"] h2,
+[data-mantine-color-scheme="dark"] h3,
+[data-mantine-color-scheme="dark"] h4,
+[data-mantine-color-scheme="dark"] h5,
+[data-mantine-color-scheme="dark"] h6 {
+  color: #f3f6fb;
+  letter-spacing: -0.012em;
+}
+
+[data-mantine-color-scheme="light"] body {
+  background:
+    radial-gradient(ellipse at top left, rgba(0, 96, 128,0.05), transparent 50%),
+    radial-gradient(ellipse at bottom right, rgba(0, 128, 166,0.07), transparent 50%),
+    #f4f8fb;
+  color: #1a1b1e;
+}
+
+[data-mantine-color-scheme="dark"] body {
+  background:
+    radial-gradient(ellipse at top left, rgba(0, 128, 166,0.10), transparent 50%),
+    radial-gradient(ellipse at bottom right, rgba(0, 96, 128,0.18), transparent 50%),
+    #0b1220;
+  color: var(--mantine-color-text);
+}
+
+/* Custom scrollbar — thin, theme-aware */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+[data-mantine-color-scheme="light"] *::-webkit-scrollbar-thumb {
+  background: #ced4da;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+[data-mantine-color-scheme="light"] *::-webkit-scrollbar-thumb:hover {
+  background: #adb5bd;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+[data-mantine-color-scheme="light"] * {
+  scrollbar-width: thin;
+  scrollbar-color: #ced4da transparent;
+}
+[data-mantine-color-scheme="dark"] *::-webkit-scrollbar-thumb {
+  background: #2c3340;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+[data-mantine-color-scheme="dark"] *::-webkit-scrollbar-thumb:hover {
+  background: #404a5c;
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+[data-mantine-color-scheme="dark"] * {
+  scrollbar-width: thin;
+  scrollbar-color: #2c3340 transparent;
+}
+
+/* ---- Dashboard backdrop ------------------------------------------------ */
+/* Subtle dot grid behind the content. AppDirect teal dots at low opacity. */
+.dot-grid-bg {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(
+    circle at center,
+    rgba(0, 96, 128, 0.06) 1px,
+    transparent 1px
+  );
+}
+[data-mantine-color-scheme="dark"] .dot-grid-bg {
+  background-image: radial-gradient(
+    circle at center,
+    rgba(148, 197, 221, 0.08) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+  mask-image: radial-gradient(
+    ellipse at center,
+    black 0%,
+    black 50%,
+    transparent 90%
+  );
+  -webkit-mask-image: radial-gradient(
+    ellipse at center,
+    black 0%,
+    black 50%,
+    transparent 90%
+  );
+}
+
+/* ---- Header pulse dot animation --------------------------------------- */
+@keyframes dashboard-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 96, 128, 0.55),
+                0 0 6px rgba(0, 96, 128, 0.8);
+    opacity: 1;
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(0, 96, 128, 0),
+                0 0 8px rgba(0, 96, 128, 0.4);
+  }
+}
+.dashboard-status-pulse {
+  animation: dashboard-pulse 2.2s ease-out infinite;
+}
+
+/* ---- Widget tile hover treatment -------------------------------------- */
+/* `.widget-tile` has --accent-color set inline based on the tile's icon
+   color. Cards lift off the page with a soft shadow + accent-tinted
+   border. Dark mode uses a stronger border and inner glow because shadows
+   read poorly on near-black backgrounds. */
+.widget-tile {
+  transition:
+    transform 200ms cubic-bezier(0.2, 0.7, 0.2, 1),
+    box-shadow 200ms ease,
+    border-color 200ms ease;
+}
+[data-mantine-color-scheme="light"] .widget-tile {
+  border-color: var(--widget-tile-border);
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 14px -8px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+[data-mantine-color-scheme="light"] .widget-tile:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent-color) 35%, var(--widget-tile-border));
+  box-shadow:
+    0 18px 36px -16px color-mix(in srgb, var(--accent-color) 45%, transparent),
+    0 6px 16px rgba(15, 23, 42, 0.08);
+}
+[data-mantine-color-scheme="light"] .widget-tile--featured {
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.06),
+    0 12px 28px -16px color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+[data-mantine-color-scheme="light"] .widget-tile--featured:hover {
+  transform: translateY(-5px);
+  box-shadow:
+    0 24px 48px -20px color-mix(in srgb, var(--accent-color) 55%, transparent),
+    0 10px 24px rgba(15, 23, 42, 0.1);
+}
+
+[data-mantine-color-scheme="dark"] .widget-tile {
+  border-color: var(--widget-tile-border);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 8px 24px -12px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.03);
+}
+[data-mantine-color-scheme="dark"] .widget-tile:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent-color) 50%, var(--widget-tile-border-strong));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 24px 40px -20px rgba(0, 0, 0, 0.6),
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 25%, transparent),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+}
+[data-mantine-color-scheme="dark"] .widget-tile--featured {
+  border-color: color-mix(in srgb, var(--accent-color) 22%, var(--widget-tile-border));
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 12px 32px -16px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+}
+[data-mantine-color-scheme="dark"] .widget-tile--featured:hover {
+  transform: translateY(-5px);
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.5),
+    0 28px 48px -20px rgba(0, 0, 0, 0.65),
+    0 0 0 1px color-mix(in srgb, var(--accent-color) 35%, transparent),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+.widget-tile:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+.widget-tile__stripe {
+  transition: opacity 180ms ease, height 180ms ease;
+}
+.widget-tile:hover .widget-tile__stripe {
+  opacity: 1;
+}
+.widget-tile__chevron {
+  transition: transform 180ms cubic-bezier(0.2, 0.7, 0.2, 1),
+              color 180ms ease;
+}
+.widget-tile:hover .widget-tile__chevron {
+  transform: translate(2px, -2px);
+  color: var(--accent-color);
+}
+
+/* ---- Sidebar tool item hover ----------------------------------------- */
+.sidebar-item {
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+[data-mantine-color-scheme="light"] .sidebar-item:hover:not([data-active]) {
+  background: rgba(15, 23, 42, 0.04);
+  transform: translateX(1px);
+}
+[data-mantine-color-scheme="dark"] .sidebar-item:hover:not([data-active]) {
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateX(1px);
+}
+.sidebar-item:focus-visible {
+  outline: 2px solid var(--mantine-color-appdirect-6);
+  outline-offset: 2px;
+}
+
+/* ---- Mantine Alert — theme-aware refinement -------------------------- */
+/* Mantine's default `variant="light"` Alert paints a saturated tinted
+   panel (peach for yellow, pink for red, etc.) that looks heavy on a
+   white dashboard and jarring against our dark surface. We retune the
+   background + border to a much subtler mix of the variant color into
+   the active tile surface, and ensure body text always reads in the
+   primary text color so contrast stays high in both modes.
+
+   `--alert-color` is Mantine's own per-variant accent token (set by the
+   `color="..."` prop). Mixing 10–12% of it into `--widget-tile-surface`
+   keeps the semantic hue cue while sitting flush on our card surface. */
+.mantine-Alert-root[data-variant="light"] {
+  --alert-bg: color-mix(
+    in srgb,
+    var(--alert-color) 11%,
+    var(--widget-tile-surface)
+  );
+  --alert-bd: 1px solid
+    color-mix(in srgb, var(--alert-color) 32%, transparent);
+}
+.mantine-Alert-root[data-variant="light"] .mantine-Alert-title {
+  color: var(--mantine-color-text);
+}
+.mantine-Alert-root[data-variant="light"] .mantine-Alert-message,
+.mantine-Alert-root[data-variant="light"] .mantine-Alert-body {
+  color: var(--mantine-color-text);
+}
+
+/* ---- AI-rendered markdown (used by widgets that stream LLM output) ---- */
+.ai-markdown h1,
+.ai-markdown h2,
+.ai-markdown h3,
+.ai-markdown h4 {
+  font-weight: 600;
+  margin: 0.9em 0 0.4em;
+  color: var(--mantine-color-text);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+.ai-markdown h1 { font-size: 1.25rem; }
+.ai-markdown h2 { font-size: 1.1rem; }
+.ai-markdown h3 { font-size: 1rem; }
+.ai-markdown h4 { font-size: 0.95rem; }
+.ai-markdown p { margin: 0.4em 0; }
+.ai-markdown ul,
+.ai-markdown ol { margin: 0.3em 0 0.5em; padding-left: 1.4em; }
+.ai-markdown li { margin: 0.15em 0; }
+.ai-markdown code {
+  background: var(--mantine-color-dark-6);
+  color: var(--mantine-color-text);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+.ai-markdown pre {
+  background: var(--mantine-color-dark-7);
+  padding: 10px 12px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.85em;
+  margin: 0.5em 0;
+  border: 1px solid var(--mantine-color-dark-4);
+}
+.ai-markdown pre code {
+  background: transparent;
+  padding: 0;
+}
+.ai-markdown blockquote {
+  border-left: 3px solid var(--mantine-color-appdirect-6);
+  margin: 0.5em 0;
+  padding: 0.2em 0 0.2em 0.9em;
+  color: var(--mantine-color-dimmed);
+}
+.ai-markdown a { color: var(--mantine-color-appdirect-6); }
+.ai-markdown a:hover { color: var(--mantine-color-appdirect-5); }
+.ai-markdown table {
+  border-collapse: collapse;
+  margin: 0.6em 0;
+  font-size: 0.9em;
+}
+.ai-markdown th,
+.ai-markdown td {
+  border: 1px solid var(--mantine-color-dark-4);
+  padding: 4px 8px;
+  text-align: left;
+}
+.ai-markdown th {
+  background: var(--mantine-color-dark-6);
+  font-weight: 600;
+}
+.ai-markdown hr {
+  border: none;
+  border-top: 1px solid var(--mantine-color-dark-4);
+  margin: 0.8em 0;
+}
+.ai-markdown strong { color: var(--mantine-color-text); }
