@@ -87,7 +87,14 @@ export async function handleCollection(table, req, res) {
         q = q.limit(Number(limit));
       }
       const { data, error } = await q;
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        // If the table doesn't exist yet (schema not pushed), return empty
+        // array instead of 500 so the UI degrades gracefully.
+        if (error.message && error.message.includes("schema cache")) {
+          return res.status(200).json([]);
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json(data ?? []);
     }
 

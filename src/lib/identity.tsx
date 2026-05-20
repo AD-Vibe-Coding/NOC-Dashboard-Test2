@@ -1,19 +1,24 @@
 /**
- * Identity hook — Google SSO via server-mediated /api/auth/* routes.
+ * Identity context — Google SSO via server-mediated /api/auth/* routes.
+ *
+ * The session check (GET /api/auth/me + /api/auth/config) runs ONCE in the
+ * <IdentityProvider>, and all 20+ components that call `useIdentity()` share
+ * the same result via React context. This eliminates the duplicate 401 requests
+ * that occurred when every component fired its own fetch.
  *
  * Flow:
- *   1. On mount, calls GET /api/auth/me to check for an existing session cookie.
+ *   1. <IdentityProvider> mounts → fetches /api/auth/config + /api/auth/me.
  *   2. If authenticated → sets `identity` with name/email/role/picture.
  *   3. If not → identity is null, UI shows sign-in button.
  *
  * Sign-in:
- *   - With Google (production): `signIn()` → navigates to /api/auth/login → Google → callback → session cookie set → page reloads.
- *   - Dev mode (no Google OAuth configured): `devSignIn(name)` → POST /api/auth/dev-login → session cookie set → identity updated.
+ *   - With Google (production): `signIn()` → navigates to /api/auth/login.
+ *   - Dev mode (no Google OAuth configured): `devSignIn(name)` → POST /api/auth/dev-login.
  *
  * Sign-out:
  *   `signOut()` → POST /api/auth/logout → clears session cookie → identity set to null.
  */
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { type Role } from "./roles";
 
 export interface Identity {
@@ -27,7 +32,24 @@ export interface Identity {
   picture?: string;
 }
 
-export function useIdentity() {
+interface IdentityContextValue {
+  identity: Identity | null;
+  loading: boolean;
+  ssoEnabled: boolean;
+  signIn: () => void;
+  devSignIn: (name: string) => Promise<void>;
+  signOut: () => Promise<void>;
+  setRole: (role: Role) => void;
+  clearIdentity: () => Promise<void>;
+}
+
+const IdentityContext = createContext<IdentityContextValue | null>(null);
+
+/**
+ * Wrap your app in <IdentityProvider> (once, in main.tsx).
+ * Every component that calls useIdentity() reads from this shared context.
+ */
+export function IdentityProvider({ children }: { children: ReactNode }) {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [loading, setLoading] = useState(true);
   const [ssoEnabled, setSsoEnabled] = useState(false);
@@ -40,12 +62,17 @@ export function useIdentity() {
         .then((r) => r.json())
         .catch(() => ({ google_sso: false })),
       fetch("/api/auth/me")
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null),
+        .then((r) => r.json())
+        .catch(() => ({ authenticated: false })),
     ]).then(([config, session]) => {
       if (cancelled) return;
       setSsoEnabled(!!(config as { google_sso?: boolean })?.google_sso);
-      if (session && typeof session === "object" && "name" in session) {
+      if (
+        session &&
+        typeof session === "object" &&
+        (session as { authenticated?: boolean }).authenticated &&
+        "name" in session
+      ) {
         const s = session as { name: string; role: string; email?: string; picture?: string };
         setIdentity({
           name: s.name,
@@ -60,12 +87,10 @@ export function useIdentity() {
     return () => { cancelled = true; };
   }, []);
 
-  /** Redirect to Google OAuth consent page. Only works when Google SSO is configured. */
   const signIn = useCallback(() => {
     window.location.href = "/api/auth/login";
   }, []);
 
-  /** Dev-mode sign-in: pick a name from the roster. Only works when Google OAuth is NOT configured. */
   const devSignIn = useCallback(async (name: string) => {
     try {
       const res = await fetch("/api/auth/dev-login", {
@@ -86,7 +111,6 @@ export function useIdentity() {
     }
   }, []);
 
-  /** Clear session on server and locally. */
   const signOut = useCallback(async () => {
     try {
       await fetch("/api/auth/logout", { method: "POST" });
@@ -96,12 +120,11 @@ export function useIdentity() {
     setIdentity(null);
   }, []);
 
-  /** Update role locally (UI-level only for now). */
   const setRole = useCallback((role: Role) => {
     setIdentity((prev) => (prev ? { ...prev, role } : null));
   }, []);
 
-  return {
+  const value: IdentityContextValue = {
     identity,
     loading,
     ssoEnabled,
@@ -109,7 +132,24 @@ export function useIdentity() {
     devSignIn,
     signOut,
     setRole,
-    /** Legacy alias — widgets that destructure `clearIdentity` still compile. */
     clearIdentity: signOut,
   };
+
+  return (
+    <IdentityContext.Provider value={value}>
+      {children}
+    </IdentityContext.Provider>
+  );
+}
+
+/**
+ * Read identity from the shared context. Must be used inside <IdentityProvider>.
+ * All 20+ call sites share one fetch — no duplicate /api/auth/me requests.
+ */
+export function useIdentity(): IdentityContextValue {
+  const ctx = useContext(IdentityContext);
+  if (!ctx) {
+    throw new Error("useIdentity() must be used inside <IdentityProvider>");
+  }
+  return ctx;
 }

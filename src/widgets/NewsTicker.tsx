@@ -61,7 +61,7 @@ const PRIORITY_CONFIG: Record<
 export function NewsTicker() {
   const { identity } = useIdentity();
   const [updates, setUpdates] = useState<ManagerUpdate[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
   const [postModalOpen, setPostModalOpen] = useState(false);
   const [manageModalOpen, setManageModalOpen] = useState(false);
   const tickerRef = useRef<HTMLDivElement>(null);
@@ -94,8 +94,43 @@ export function NewsTicker() {
     return () => clearInterval(id);
   }, [fetchUpdates]);
 
-  // Don't render anything if no updates and not a manager
-  if (!loading && updates.length === 0 && !isManager) return null;
+  // Show for everyone — managers see "Post Update", agents see updates,
+  // unauthenticated users see a sign-in prompt.
+  if (!identity) {
+    return (
+      <Box
+        mb="md"
+        style={{
+          borderRadius: 12,
+          overflow: "hidden",
+          border: "1px solid var(--widget-tile-border)",
+          background: "var(--widget-tile-surface)",
+        }}
+      >
+        <Group
+          gap="xs"
+          px="sm"
+          py={6}
+          style={{
+            borderBottom: "1px solid var(--widget-tile-border)",
+            background: "rgba(0, 96, 128, 0.06)",
+          }}
+        >
+          <ThemeIcon size="xs" variant="transparent" color="appdirect">
+            <IconBell size={14} />
+          </ThemeIcon>
+          <Text size="xs" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.06em" }}>
+            Manager Updates
+          </Text>
+        </Group>
+        <Box px="sm" py={8}>
+          <Text size="xs" c="dimmed" ta="center">
+            Sign in to see team updates.
+          </Text>
+        </Box>
+      </Box>
+    );
+  }
 
   // Sort: pinned first, then by created_at desc
   const sorted = [...updates].sort((a, b) => {

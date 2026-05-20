@@ -8,16 +8,17 @@ import { verifyJwt } from "../_lib/jwt.js";
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const token = req.cookies?.noc_session;
   if (!token) {
-    return res.status(401).json({ error: "Not authenticated" });
+    return res.status(200).json({ authenticated: false });
   }
 
   const payload = verifyJwt(token);
   if (!payload) {
     res.setHeader("Set-Cookie", "noc_session=; Path=/; HttpOnly; Max-Age=0");
-    return res.status(401).json({ error: "Session expired or invalid" });
+    return res.status(200).json({ authenticated: false });
   }
 
   return res.status(200).json({
+    authenticated: true,
     name: payload.name,
     email: payload.email,
     role: payload.role,

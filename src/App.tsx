@@ -422,7 +422,7 @@ export default function App() {
           ) : (
             <>
               <IdentityWelcomeCard />
-              {identity && <NewsTicker />}
+              <NewsTicker />
               <FeaturedGrid widgets={featuredWidgets} onExpand={expand} />
             </>
           )}
