@@ -28,7 +28,6 @@ import {
   IconUser,
   IconUsers,
 } from "@tabler/icons-react";
-import { eq } from "drizzle-orm";
 import { db, schema } from "../../db";
 import {
   BREAK_TYPE_COLORS,
@@ -138,7 +137,7 @@ export function BreakTrackerWidget() {
       });
     }
 
-    await db.insert(schema.breaks).values({
+    await db.breaks.insert({
       employee_name: trimmed,
       break_type: breakType,
       start_time: new Date().toISOString(),
@@ -201,14 +200,11 @@ export function BreakTrackerWidget() {
       });
     }
 
-    await db
-      .update(schema.breaks)
-      .set({
-        end_time: end.toISOString(),
-        duration_minutes: duration,
-        is_active: false,
-      })
-      .where(eq(schema.breaks.id, b.id));
+    await db.breaks.updateById(b.id, {
+      end_time: end.toISOString(),
+      duration_minutes: duration,
+      is_active: false,
+    });
     setPosting(false);
     refresh();
   }

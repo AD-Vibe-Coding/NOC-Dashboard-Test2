@@ -35,8 +35,7 @@ import {
   IconWand,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
-import { eq } from "drizzle-orm";
-import { db, schema } from "../../db";
+import { db } from "../../db";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { useIdentity } from "../../lib/identity";
 import { formatDateTime } from "../../lib/format";
@@ -307,7 +306,7 @@ Now output the polished email starting with "Subject:".`;
     const text = await ai.complete(prompt);
     if (text && text.trim().length > 0) {
       const { subject, body } = splitSubjectBody(text);
-      await db.insert(schema.polished_emails).values({
+      await db.polished_emails.insert({
         audience,
         recipient_name: recipientName.trim() || null,
         customer_name: customerName.trim() || null,
@@ -337,7 +336,7 @@ Now output the polished email starting with "Subject:".`;
   }
 
   async function deleteEmail(id: number) {
-    await db.delete(schema.polished_emails).where(eq(schema.polished_emails.id, id));
+    await db.polished_emails.deleteById(id);
     if (viewing?.id === id) setViewing(null);
     refresh();
   }

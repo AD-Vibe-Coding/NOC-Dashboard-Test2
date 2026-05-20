@@ -19,14 +19,14 @@
  * All functions return plain JS objects/arrays so console.table works
  * directly on the result.
  */
-import { db, dbReady, schema } from "../../db";
+import { db, dbReady } from "../../db";
 import { rederivePeriodsForAllRows } from "./data";
 
 type AnyRecord = Record<string, unknown>;
 
 async function getAllMetrics() {
   await dbReady;
-  return db.select().from(schema.performance_metrics);
+  return db.performance_metrics.list();
 }
 
 function parseRaw(rawJson: string): AnyRecord {

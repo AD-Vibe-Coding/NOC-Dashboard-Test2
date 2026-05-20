@@ -1,15 +1,13 @@
 import { useEffect, useState } from "react";
-import { desc, eq } from "drizzle-orm";
 import { db, dbReady, schema } from "../../db";
 
 type Break = typeof schema.breaks.$inferSelect;
 
 /**
- * Data hook for the Break Tracker widget. The widget tracks breaks entirely
- * in the local PGlite DB — there is no longer a Slack read path. Slack is
- * still used as a notification target (the widget posts break-start and
- * break-end messages to #noc-team), but the list of who's on break and the
- * history both live in the local DB.
+ * Data hook for the Break Tracker widget. Persists to Supabase via the
+ * server-mediated /api/breaks route. The widget still posts notifications
+ * to Slack on start/end, but the source of truth for who's on a break
+ * (and the history) is the `breaks` table.
  */
 export function useBreakData() {
   const [ready, setReady] = useState(false);
@@ -18,17 +16,17 @@ export function useBreakData() {
   const [tick, setTick] = useState(0);
 
   async function refresh() {
-    const activeRows = await db
-      .select()
-      .from(schema.breaks)
-      .where(eq(schema.breaks.is_active, true))
-      .orderBy(desc(schema.breaks.start_time));
-    const historyRows = await db
-      .select()
-      .from(schema.breaks)
-      .where(eq(schema.breaks.is_active, false))
-      .orderBy(desc(schema.breaks.start_time))
-      .limit(50);
+    const [activeRows, historyRows] = await Promise.all([
+      db.breaks.list({
+        filter: { is_active: true },
+        orderBy: { column: "start_time", ascending: false },
+      }),
+      db.breaks.list({
+        filter: { is_active: false },
+        orderBy: { column: "start_time", ascending: false },
+        limit: 50,
+      }),
+    ]);
     setActive(activeRows);
     setHistory(historyRows);
   }

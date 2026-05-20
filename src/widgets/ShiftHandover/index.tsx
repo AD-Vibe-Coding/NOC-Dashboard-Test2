@@ -36,8 +36,7 @@ import {
 } from "@tabler/icons-react";
 
 import ReactMarkdown from "react-markdown";
-import { eq } from "drizzle-orm";
-import { db, schema } from "../../db";
+import { db } from "../../db";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { useIdentity } from "../../lib/identity";
 import { formatDateTime } from "../../lib/format";
@@ -412,7 +411,7 @@ Now produce the handover.`;
         tickets.length > 0
           ? tickets.length
           : (body.match(/\*\*Ticket #/g) || []).length;
-      await db.insert(schema.shift_handovers).values({
+      await db.shift_handovers.insert({
         shift_name: effectiveShift,
         shift_date: dateForPrompt.toISOString().slice(0, 10),
         handoff_style: handoffStyle || null,
@@ -444,7 +443,7 @@ Now produce the handover.`;
   }
 
   async function deleteHandover(id: number) {
-    await db.delete(schema.shift_handovers).where(eq(schema.shift_handovers.id, id));
+    await db.shift_handovers.deleteById(id);
     if (viewing?.id === id) setViewing(null);
     refresh();
   }

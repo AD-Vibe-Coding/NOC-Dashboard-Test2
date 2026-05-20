@@ -7,11 +7,16 @@ import { confluenceProxyPlugin } from "./vite-plugins/confluence-proxy";
 import { aiProxyPlugin } from "./vite-plugins/ai-proxy";
 import { wfhProxyPlugin } from "./vite-plugins/wfh-proxy";
 import { logicMonitorProxyPlugin } from "./vite-plugins/logicmonitor-proxy";
+import { appbuilderApiDevServer } from "./vite-plugins/appbuilder-api-dev-server";
 
 export default defineConfig({
   optimizeDeps: { exclude: ["@electric-sql/pglite"] },
   plugins: [
     react(),
+    // appbuilderApiDevServer MUST come before the other proxy plugins so
+    // its /api middleware is registered first and can pick up table CRUD
+    // routes under api/<table>.ts before any catch-all matchers below.
+    appbuilderApiDevServer(),
     slackProxyPlugin(),
     zoomProxyPlugin(),
     confluenceProxyPlugin(),

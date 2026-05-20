@@ -28,8 +28,7 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
-import { eq } from "drizzle-orm";
-import { db, schema } from "../../db";
+import { db } from "../../db";
 import { parseMhtmlFile, type ParsedMhtml } from "../../lib/mhtml";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { formatDateTime } from "../../lib/format";
@@ -114,7 +113,7 @@ ${truncated}${truncationNote}`;
 
     const summary = await complete(prompt);
     if (summary && summary.trim().length > 0) {
-      await db.insert(schema.ticket_summaries).values({
+      await db.ticket_summaries.insert({
         file_name: fileName,
         file_size_bytes: fileSize,
         ticket_number: parsed.ticket_number ?? null,
@@ -137,7 +136,7 @@ ${truncated}${truncationNote}`;
   }
 
   async function deleteSummary(id: number) {
-    await db.delete(schema.ticket_summaries).where(eq(schema.ticket_summaries.id, id));
+    await db.ticket_summaries.deleteById(id);
     if (viewing?.id === id) setViewing(null);
     refresh();
   }

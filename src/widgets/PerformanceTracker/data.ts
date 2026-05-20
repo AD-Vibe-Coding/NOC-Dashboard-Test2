@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { desc, eq } from "drizzle-orm";
 import { db, dbReady, schema } from "../../db";
 import { extractSummary, type ImportResult, type SourceType } from "./import";
 
@@ -25,14 +24,12 @@ export function usePerformanceData() {
       try {
         await dbReady;
         const [m, i] = await Promise.all([
-          db
-            .select()
-            .from(schema.performance_metrics)
-            .orderBy(desc(schema.performance_metrics.created_at)),
-          db
-            .select()
-            .from(schema.performance_imports)
-            .orderBy(desc(schema.performance_imports.created_at)),
+          db.performance_metrics.list({
+            orderBy: { column: "created_at", ascending: false },
+          }),
+          db.performance_imports.list({
+            orderBy: { column: "created_at", ascending: false },
+          }),
         ]);
         if (!cancelled) {
           setMetrics(m);
@@ -51,23 +48,22 @@ export function usePerformanceData() {
 }
 
 /**
- * PGlite (like Postgres) caps a single statement at 65,535 bind parameters
- * (the wire protocol uses a uint16 for the parameter count). With 17
- * columns per row, that's a hard upper bound of ~3,855 rows per INSERT —
- * but pglite's internal allocator throws "Invalid array length" before
- * we get anywhere near that, because some implementations reserve more.
+ * Postgres caps a single statement at 65,535 bind parameters (the wire
+ * protocol uses a uint16 for the parameter count). With 17 columns per
+ * row, that's a hard upper bound of ~3,855 rows per INSERT.
  *
  * 500 rows × 17 cols = 8,500 params per batch, well under any limit, and
- * keeps each transaction small enough to remain responsive in IndexedDB.
+ * keeps each HTTP round-trip to the /api/performance_metrics route a
+ * reasonable payload size.
  */
 const INSERT_BATCH_SIZE = 500;
 
 /**
- * Persist an ImportResult to the DB. Each sheet becomes one row in
+ * Persist an ImportResult to Supabase. Each sheet becomes one row in
  * `performance_imports`, plus N rows in `performance_metrics` (chunked
- * into INSERT_BATCH_SIZE-sized batches to stay under the PGlite parameter
- * limit). Idempotent in the sense that calling it twice creates two
- * distinct imports (the user can roll back via the History tab).
+ * into INSERT_BATCH_SIZE-sized batches to keep each /api/* request
+ * payload reasonable). Idempotent in the sense that calling it twice
+ * creates two distinct imports (the user can roll back via History).
  */
 export async function persistImport(
   result: ImportResult,
@@ -76,18 +72,21 @@ export async function persistImport(
   await dbReady;
   let totalInserts = 0;
   for (const sheet of result.bySheet) {
-    const [imp] = await db
-      .insert(schema.performance_imports)
-      .values({
-        file_name: result.fileName,
-        imported_by: importedBy ?? null,
-        source_type: sheet.sourceType,
-        sheet_name: sheet.sheetName,
-        row_count: sheet.totalRows,
-        matched_count: sheet.matchedRows,
-        skipped_count: sheet.skippedRows,
-      })
-      .returning({ id: schema.performance_imports.id });
+    const inserted = await db.performance_imports.insert({
+      file_name: result.fileName,
+      imported_by: importedBy ?? null,
+      source_type: sheet.sourceType,
+      sheet_name: sheet.sheetName,
+      row_count: sheet.totalRows,
+      matched_count: sheet.matchedRows,
+      skipped_count: sheet.skippedRows,
+    });
+    const imp = inserted[0];
+    if (!imp) {
+      throw new Error(
+        `Insert for sheet "${sheet.sheetName}" returned no row (was the table provisioned via Push to Supabase?)`,
+      );
+    }
 
     if (sheet.rows.length === 0) continue;
 
@@ -117,7 +116,7 @@ export async function persistImport(
     for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
       const batch = rows.slice(i, i + INSERT_BATCH_SIZE);
       try {
-        await db.insert(schema.performance_metrics).values(batch);
+        await db.performance_metrics.insert(batch);
         totalInserts += batch.length;
       } catch (err) {
         console.error(
@@ -136,19 +135,15 @@ export async function persistImport(
 /** Delete a single import + all its metric rows. */
 export async function deleteImport(importId: number): Promise<void> {
   await dbReady;
-  await db
-    .delete(schema.performance_metrics)
-    .where(eq(schema.performance_metrics.import_id, importId));
-  await db
-    .delete(schema.performance_imports)
-    .where(eq(schema.performance_imports.id, importId));
+  await db.performance_metrics.deleteWhere({ import_id: importId });
+  await db.performance_imports.deleteById(importId);
 }
 
 /** Wipe all performance data — used by the "Reset" button. */
 export async function clearAllPerformanceData(): Promise<void> {
   await dbReady;
-  await db.delete(schema.performance_metrics);
-  await db.delete(schema.performance_imports);
+  await db.performance_metrics.deleteAll();
+  await db.performance_imports.deleteAll();
 }
 
 /**
@@ -166,7 +161,7 @@ export async function rederivePeriodsForAllRows(): Promise<{
 }> {
   await dbReady;
   const { extractSummary } = await import("./import");
-  const all = await db.select().from(schema.performance_metrics);
+  const all = await db.performance_metrics.list();
   let updated = 0;
   for (const row of all) {
     let raw: Record<string, unknown>;
@@ -188,15 +183,12 @@ export async function rederivePeriodsForAllRows(): Promise<{
       newSuccess !== row.success_count;
     if (!changed) continue;
     try {
-      await db
-        .update(schema.performance_metrics)
-        .set({
-          period_month: summary.period_month ?? null,
-          period_quarter: summary.period_quarter ?? null,
-          queue: summary.queue ?? null,
-          success_count: newSuccess,
-        })
-        .where(eq(schema.performance_metrics.id, row.id));
+      await db.performance_metrics.updateById(row.id, {
+        period_month: summary.period_month ?? null,
+        period_quarter: summary.period_quarter ?? null,
+        queue: summary.queue ?? null,
+        success_count: newSuccess,
+      });
       updated++;
     } catch (err) {
       console.warn(
@@ -234,10 +226,9 @@ export async function diagnoseMemberTickets(
 ): Promise<MemberTicketDiagnostic> {
   await dbReady;
   const sampleSize = options?.sampleSize ?? 8;
-  const all = await db
-    .select()
-    .from(schema.performance_metrics)
-    .where(eq(schema.performance_metrics.member_name, memberName));
+  const all = await db.performance_metrics.list({
+    filter: { member_name: memberName },
+  });
   const ticketRows = all.filter((r) => r.source_type === "tickets");
 
   const periodCounts = new Map<string | null, number>();

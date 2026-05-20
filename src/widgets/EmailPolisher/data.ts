@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { desc } from "drizzle-orm";
 import { db, dbReady, schema } from "../../db";
 
 export type PolishedEmail = typeof schema.polished_emails.$inferSelect;
@@ -9,11 +8,10 @@ export function usePolishedEmails() {
   const [ready, setReady] = useState(false);
 
   async function refresh() {
-    const rows = await db
-      .select()
-      .from(schema.polished_emails)
-      .orderBy(desc(schema.polished_emails.created_at))
-      .limit(30);
+    const rows = await db.polished_emails.list({
+      orderBy: { column: "created_at", ascending: false },
+      limit: 30,
+    });
     setEmails(rows);
   }
 

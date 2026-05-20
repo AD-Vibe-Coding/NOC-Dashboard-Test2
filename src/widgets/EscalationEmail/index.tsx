@@ -36,8 +36,7 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
-import { eq } from "drizzle-orm";
-import { db, schema } from "../../db";
+import { db } from "../../db";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { useIdentity } from "../../lib/identity";
 import { formatDateTime } from "../../lib/format";
@@ -415,7 +414,7 @@ export function EscalationEmailWidget() {
     if (outboundText && outboundText.trim()) {
       const { subject, body } = splitSubjectBody(outboundText);
       inserts.push(
-        db.insert(schema.escalation_drafts).values({
+        db.escalation_drafts.insert({
           ticket_number: ticketNumber.trim() || null,
           customer_name: customerName.trim() || null,
           service_provider: carrier?.carrier ?? null,
@@ -438,7 +437,7 @@ export function EscalationEmailWidget() {
     if (internalText && internalText.trim()) {
       const { subject, body } = splitSubjectBody(internalText);
       inserts.push(
-        db.insert(schema.escalation_drafts).values({
+        db.escalation_drafts.insert({
           ticket_number: ticketNumber.trim() || null,
           customer_name: customerName.trim() || null,
           service_provider: carrier?.carrier ?? null,
@@ -478,7 +477,7 @@ export function EscalationEmailWidget() {
   }
 
   async function deleteDraft(id: number) {
-    await db.delete(schema.escalation_drafts).where(eq(schema.escalation_drafts.id, id));
+    await db.escalation_drafts.deleteById(id);
     if (viewingOutbound?.id === id) setViewingOutbound(null);
     if (viewingInternal?.id === id) setViewingInternal(null);
     refresh();
