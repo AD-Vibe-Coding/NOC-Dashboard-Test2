@@ -157,6 +157,16 @@ body {
   );
 }
 
+/* ---- News ticker scroll animation ------------------------------------- */
+@keyframes ticker-scroll {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
 /* ---- Header pulse dot animation --------------------------------------- */
 @keyframes dashboard-pulse {
   0%, 100% {

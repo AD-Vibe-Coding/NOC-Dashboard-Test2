@@ -106,6 +106,7 @@ type PolishedEmailRow = typeof schema.polished_emails.$inferSelect;
 type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
 type TeamMemberRow = typeof schema.team_members.$inferSelect;
+type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
@@ -116,4 +117,5 @@ export const db = {
   performance_imports: tableClient<PerformanceImportRow>("performance_imports"),
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
   team_members: tableClient<TeamMemberRow>("team_members"),
+  manager_updates: tableClient<ManagerUpdateRow>("manager_updates"),
 };

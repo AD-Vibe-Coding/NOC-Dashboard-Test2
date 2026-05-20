@@ -45,6 +45,7 @@ import { WIDGETS } from "./widgets/registry";
 import type { WidgetDefinition } from "./widgets/types";
 import { SIZE_TO_SPAN } from "./widgets/types";
 import { IdentityBadge, IdentityWelcomeCard } from "./widgets/IdentityBadge";
+import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { useIdentity } from "./lib/identity";
 import {
@@ -86,16 +87,6 @@ export default function App() {
     [visibleWidgets],
   );
 
-  // Show a brief loading spinner while the session check runs (avoids a flash
-  // of the "not signed in" welcome card before the session cookie is verified).
-  if (identityLoading) {
-    return (
-      <Center h="100vh">
-        <Loader size="lg" color="appdirect" />
-      </Center>
-    );
-  }
-
   useEffect(() => {
     const fromHash = () => {
       const h = window.location.hash.replace(/^#\/?/, "");
@@ -119,6 +110,16 @@ export default function App() {
     window.addEventListener("hashchange", fromHash);
     return () => window.removeEventListener("hashchange", fromHash);
   }, [identity]);
+
+  // Show a brief loading spinner while the session check runs (avoids a flash
+  // of the "not signed in" welcome card before the session cookie is verified).
+  if (identityLoading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" color="appdirect" />
+      </Center>
+    );
+  }
 
   function expand(id: string) {
     window.location.hash = `#/${id}`;
@@ -421,6 +422,7 @@ export default function App() {
           ) : (
             <>
               <IdentityWelcomeCard />
+              {identity && <NewsTicker />}
               <FeaturedGrid widgets={featuredWidgets} onExpand={expand} />
             </>
           )}

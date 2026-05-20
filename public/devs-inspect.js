@@ -1,4 +1,5 @@
 (function() {
+  var INSPECT_SCRIPT_VERSION = '2026-05-19.no-thumbnail';
   var inspectEnabled = false;
   var highlightEl = null;
 
@@ -98,8 +99,15 @@
   }
 
   var _h2cPromise = null;
-  var H2C_URL = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
-  var H2C_SHA256 = 'e87e550794322e574a1fda0c1549a3c70dae5a93d9113417a429016838eab8cb';
+  // html2canvas-pro is a maintained fork that supports modern CSS
+  // color functions (oklch / lab / lch / color()). The original
+  // html2canvas@1.4.1 throws "Attempting to parse an unsupported
+  // color function 'oklch'" on Tailwind v4 apps and any app using
+  // modern color spaces, which is the majority of generated apps.
+  // The fork is a drop-in replacement: same global window.html2canvas
+  // callable, same options surface.
+  var H2C_URL = 'https://cdn.jsdelivr.net/npm/html2canvas-pro@2.0.2/dist/html2canvas-pro.min.js';
+  var H2C_SHA256 = '1c86f97c0617828870a1c24cca3cd614eae1034aec412aea0fe3a0764bc4597e';
   function verifySha256(text, expectedHex) {
     if (!window.crypto || !window.crypto.subtle || !window.TextEncoder) {
       return Promise.resolve(false);
@@ -117,7 +125,14 @@
   }
   function loadHtml2Canvas() {
     if (_h2cPromise) return _h2cPromise;
-    _h2cPromise = fetch(H2C_URL)
+    // Hard timeout protects against silent stalls inside the dynamic
+    // <script> tag (e.g. a sandbox CSP that disallows blob: sources
+    // would prevent both onload and onerror from ever firing). Without
+    // this cap, captureThumbnail() can never respond to the parent
+    // and the parent's 15s capture timeout is the only signal that
+    // something went wrong.
+    var H2C_LOAD_TIMEOUT_MS = 10000;
+    var loadPromise = fetch(H2C_URL)
       .then(function(r) {
         if (!r.ok) throw new Error('Failed to fetch html2canvas');
         return r.text();
@@ -138,9 +153,18 @@
           s.onerror = function() { URL.revokeObjectURL(url); resolve(null); };
           document.head.appendChild(s);
         });
-      })
+      });
+    var timeoutPromise = new Promise(function(resolve) {
+      setTimeout(function() { resolve('timeout'); }, H2C_LOAD_TIMEOUT_MS);
+    });
+    _h2cPromise = Promise.race([loadPromise, timeoutPromise])
       .then(function(h2c) {
-        if (!h2c) _h2cPromise = null;
+        if (h2c === 'timeout' || !h2c) {
+          // Reset so a future capture can attempt the load again
+          // (transient CDN issue, slow cold start, etc.).
+          _h2cPromise = null;
+          return null;
+        }
         return h2c;
       })
       .catch(function() {
@@ -294,6 +318,14 @@
     }).catch(function() { svgFallback(el, selectionToken); });
   }
 
+  // App card thumbnails are now captured server-side by the Temporal
+  // appBuilderThumbnailCaptureWorkflow (Playwright + MCP in a per-chat
+  // sandbox). The iframe used to expose a devs:capture-thumbnail
+  // handler here that called loadHtml2Canvas and shipped a PNG
+  // dataURL back via devs:thumbnail — both have been removed. The
+  // remaining html2canvas usage powers captureElement /
+  // devs:select-screenshot, the click-to-attach-screenshot inspect
+  // feature, which is unrelated.
   var _selectionCounter = 0;
   function nextSelectionToken() {
     _selectionCounter += 1;
@@ -356,7 +388,7 @@
         captureElement(el, selectionToken);
       }, { capture: true, passive: false });
     } else if (e.data.type === 'devs:ping') {
-      window.parent.postMessage({ type: 'devs:pong' }, '*');
+      window.parent.postMessage({ type: 'devs:pong', version: INSPECT_SCRIPT_VERSION }, '*');
     } else if (e.data.type === 'devs:db-query') {
       var queryId = e.data.queryId;
       var sql = e.data.sql;

@@ -132,6 +132,23 @@ export const performance_metrics = pgTable("performance_metrics", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+// =============================================================================
+// Manager Updates — news ticker / bulletin board
+// =============================================================================
+
+export const manager_updates = pgTable("manager_updates", {
+  id: serial("id").primaryKey(),
+  author_name: text("author_name").notNull(),
+  author_email: text("author_email"),
+  content: text("content").notNull(),
+  // "info" | "warning" | "urgent" | "success"
+  priority: text("priority").notNull(),
+  // Optional expiry (ISO date string). Null = never expires.
+  expires_at: text("expires_at"),
+  pinned: boolean("pinned"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const escalation_drafts = pgTable("escalation_drafts", {
   id: serial("id").primaryKey(),
   // Structured inputs (all optional — the AI will infer from notes if missing)

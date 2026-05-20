@@ -21,14 +21,31 @@ import ReactMarkdown from "react-markdown";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
-import { WIDGETS } from "../registry";
 
 export { SmartSearchTile } from "./Tile";
+
+// Widget descriptions are inlined here instead of importing from ../registry
+// to avoid a circular dependency (registry imports SmartSearchWidget).
+const WIDGET_LIST = [
+  { title: "My Day", desc: "Your tickets + calls for today" },
+  { title: "Team Performance", desc: "Excel-imported team metrics + per-member drill-down" },
+  { title: "LogicMonitor", desc: "Live alert feed + device health" },
+  { title: "Zoom Queue", desc: "Who's on a call and for how long" },
+  { title: "Break Tracker", desc: "Team breaks via Slack + local" },
+  { title: "QS Escalation Contacts", desc: "Carrier escalation lists" },
+  { title: "Ticket Summary", desc: "AI summarizes uploaded .mhtml tickets" },
+  { title: "WFH Requests", desc: "Apply for work-from-home approval" },
+  { title: "Escalation Email", desc: "AI drafts the ESC-MGR Alert email from your notes" },
+  { title: "Shift Handover", desc: "AI structures your ticket notes into a handover message" },
+  { title: "Email Polisher", desc: "Polish a draft for customer, internal, or carrier" },
+  { title: "NOC Troubleshooter", desc: "AI agent for network + circuit troubleshooting" },
+  { title: "Mobility Troubleshooter", desc: "AI agent for wireless + device troubleshooting" },
+];
 
 const SYSTEM_CONTEXT = `You are the vCom NOC Operations Dashboard AI assistant. You help NOC operators find information, troubleshoot issues, and navigate the dashboard efficiently.
 
 Available dashboard widgets:
-${WIDGETS.map((w) => `- **${w.title}**: ${w.description}`).join("\n")}
+${WIDGET_LIST.map((w) => `- **${w.title}**: ${w.desc}`).join("\n")}
 
 Guidelines:
 - Be concise and direct — NOC operators need quick answers during incidents.

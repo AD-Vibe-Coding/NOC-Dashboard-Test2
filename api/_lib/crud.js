@@ -27,6 +27,7 @@ const ALLOWED_TABLES = new Set([
   "performance_imports",
   "performance_metrics",
   "team_members",
+  "manager_updates",
 ]);
 
 // Strip auto-managed columns from POST/PATCH payloads so callers can't
