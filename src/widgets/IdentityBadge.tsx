@@ -1,6 +1,5 @@
 import { useState } from "react";
 import {
-  Alert,
   Avatar,
   Badge,
   Box,
@@ -17,9 +16,7 @@ import {
   Tooltip,
 } from "@mantine/core";
 import {
-  IconBrandGoogle,
   IconChevronDown,
-  IconInfoCircle,
   IconLogin,
   IconLogout,
   IconUser,
@@ -40,7 +37,7 @@ import { NOC_ROSTER } from "../lib/roster";
 /* -------------------------------------------------------------------------- */
 
 export function IdentityBadge() {
-  const { identity, loading, ssoEnabled, signIn, devSignIn, signOut, setRole } =
+  const { identity, loading, devSignIn, signOut, setRole } =
     useIdentity();
   const [opened, setOpened] = useState(false);
 
@@ -55,25 +52,20 @@ export function IdentityBadge() {
           size="xs"
           variant="light"
           color="appdirect"
-          leftSection={
-            ssoEnabled ? <IconBrandGoogle size={14} /> : <IconLogin size={14} />
-          }
-          onClick={() => (ssoEnabled ? signIn() : setOpened(true))}
+          leftSection={<IconLogin size={14} />}
+          onClick={() => setOpened(true)}
           aria-label="Sign in"
           className="dashboard-status-pulse"
           styles={{ root: { fontWeight: 600 } }}
         >
-          {ssoEnabled ? "Sign in with Google" : "Sign in"}
+          Sign in
         </Button>
 
-        {/* Dev-mode name picker modal */}
-        {!ssoEnabled && (
-          <DevSignInModal
-            opened={opened}
-            onClose={() => setOpened(false)}
-            devSignIn={devSignIn}
-          />
-        )}
+        <DevSignInModal
+          opened={opened}
+          onClose={() => setOpened(false)}
+          devSignIn={devSignIn}
+        />
       </>
     );
   }
@@ -185,25 +177,13 @@ function DevSignInModal({
           <ThemeIcon size="sm" radius="md" variant="light" color="appdirect">
             <IconUser size={14} />
           </ThemeIcon>
-          <Text fw={600}>Dev Sign-in</Text>
+          <Text fw={600}>Sign in</Text>
         </Group>
       }
       size="sm"
       centered
     >
       <Stack gap="md">
-        <Alert
-          color="yellow"
-          variant="light"
-          icon={<IconInfoCircle size={16} />}
-        >
-          <Text size="xs">
-            Google SSO is not configured. Using dev-mode name picker.
-            Set <code>GOOGLE_CLIENT_ID</code> in <code>.env</code> to enable
-            real Google SSO.
-          </Text>
-        </Alert>
-
         <Select
           label="Pick your name"
           placeholder="Select from NOC roster"
@@ -369,15 +349,10 @@ function AccountModal({
 /* -------------------------------------------------------------------------- */
 
 export function IdentityWelcomeCard() {
-  const { identity, loading, ssoEnabled, signIn, devSignIn } = useIdentity();
+  const { identity, loading, devSignIn } = useIdentity();
   const [devModalOpened, setDevModalOpened] = useState(false);
 
   if (loading || identity) return null;
-
-  // Check for auth errors in the URL
-  const params = new URLSearchParams(window.location.search);
-  const authError = params.get("auth_error");
-  const errorDomain = params.get("domain");
 
   return (
     <Box
@@ -406,16 +381,6 @@ export function IdentityWelcomeCard() {
         }}
       />
       <Stack gap="md" style={{ position: "relative" }}>
-        {authError && (
-          <Alert color="red" variant="light" icon={<IconInfoCircle size={16} />}>
-            {authError === "domain_not_allowed"
-              ? `Access denied — @${errorDomain || "unknown"} is not an allowed domain. Only @appdirect.com accounts can sign in.`
-              : authError === "consent_denied"
-                ? "Sign-in cancelled. Click the button below to try again."
-                : `Authentication error: ${authError}`}
-          </Alert>
-        )}
-
         <Group gap="md" wrap="nowrap">
           <BrandLogo size={44} />
           <Box style={{ minWidth: 0 }}>
@@ -423,38 +388,24 @@ export function IdentityWelcomeCard() {
               Welcome to the vCom NOC Operations Dashboard
             </Text>
             <Text size="xs" c="dimmed">
-              {ssoEnabled
-                ? "Sign in with your @appdirect.com Google account to access your tools."
-                : "Pick your name to get started (dev mode — no Google OAuth configured)."}
+              Pick your name from the NOC roster to access your tools.
             </Text>
           </Box>
         </Group>
 
         <Group gap="xs">
-          {ssoEnabled ? (
-            <Button
-              color="appdirect"
-              leftSection={<IconBrandGoogle size={16} />}
-              onClick={signIn}
-            >
-              Sign in with Google
-            </Button>
-          ) : (
-            <>
-              <Button
-                color="appdirect"
-                leftSection={<IconLogin size={14} />}
-                onClick={() => setDevModalOpened(true)}
-              >
-                Pick your name
-              </Button>
-              <DevSignInModal
-                opened={devModalOpened}
-                onClose={() => setDevModalOpened(false)}
-                devSignIn={devSignIn}
-              />
-            </>
-          )}
+          <Button
+            color="appdirect"
+            leftSection={<IconLogin size={14} />}
+            onClick={() => setDevModalOpened(true)}
+          >
+            Sign in
+          </Button>
+          <DevSignInModal
+            opened={devModalOpened}
+            onClose={() => setDevModalOpened(false)}
+            devSignIn={devSignIn}
+          />
         </Group>
       </Stack>
     </Box>
