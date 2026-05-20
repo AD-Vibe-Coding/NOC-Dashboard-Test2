@@ -1,216 +1,115 @@
+/**
+ * Identity hook — Google SSO via server-mediated /api/auth/* routes.
+ *
+ * Flow:
+ *   1. On mount, calls GET /api/auth/me to check for an existing session cookie.
+ *   2. If authenticated → sets `identity` with name/email/role/picture.
+ *   3. If not → identity is null, UI shows sign-in button.
+ *
+ * Sign-in:
+ *   - With Google (production): `signIn()` → navigates to /api/auth/login → Google → callback → session cookie set → page reloads.
+ *   - Dev mode (no Google OAuth configured): `devSignIn(name)` → POST /api/auth/dev-login → session cookie set → identity updated.
+ *
+ * Sign-out:
+ *   `signOut()` → POST /api/auth/logout → clears session cookie → identity set to null.
+ */
 import { useCallback, useEffect, useState } from "react";
-import { defaultRoleFor, MIGRATE_OLD_ROLE, type Role } from "./roles";
-import {
-  countPendingResetRequests,
-  createUser,
-  submitPasswordResetRequest,
-  updateUserProfile,
-  verifyPassword,
-  type CreateUserInput,
-  type StoredUser,
-  type SubmitResetInput,
-} from "./auth";
-
-const STORAGE_KEY = "noc-dashboard.identity";
+import { type Role } from "./roles";
 
 export interface Identity {
-  /** Canonical display name, e.g. "Sriram Parisa". */
+  /** Display name from Google profile (or roster pick in dev mode). */
   name: string;
+  /** Dashboard role derived from ROLE_BY_NAME mapping. */
   role: Role;
-  /** Lowercased username — present when the user signed in with credentials. */
-  username?: string;
-  /**
-   * How the user signed in. "password" means they authenticated against a
-   * local account; "manual" is the legacy roster-picker path retained for
-   * older sessions only. New sessions always use "password".
-   */
-  authMethod?: "password" | "manual";
+  /** Google email address. */
+  email?: string;
+  /** Google profile picture URL. */
+  picture?: string;
 }
 
-/**
- * Resolve a stored role value to a current `Role`. Handles legacy values
- * ("technician", "lead") and unknown values gracefully.
- */
-function resolveRole(stored: unknown, name: string): Role {
-  if (typeof stored === "string" && stored in MIGRATE_OLD_ROLE) {
-    return MIGRATE_OLD_ROLE[stored];
-  }
-  return defaultRoleFor(name);
-}
-
-function readIdentity(): Identity | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed.name !== "string" || !parsed.name.trim()) {
-      return null;
-    }
-    const name = parsed.name.trim();
-    const role: Role = resolveRole(parsed.role, name);
-    return {
-      name,
-      role,
-      username:
-        typeof parsed.username === "string" ? parsed.username : undefined,
-      authMethod:
-        parsed.authMethod === "password" || parsed.authMethod === "manual"
-          ? parsed.authMethod
-          : parsed.username
-            ? "password"
-            : "manual",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function persistIdentity(next: Identity | null) {
-  try {
-    if (next) {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } else {
-      window.localStorage.removeItem(STORAGE_KEY);
-    }
-  } catch {
-    /* quota / privacy mode — ignore */
-  }
-}
-
-/**
- * Per-browser identity stored in localStorage. The user signs in once
- * (with a username + password they created on the Sign Up form) and
- * doesn't have to repeat it. Used by every widget that needs to know who's
- * clicking — Break Tracker, WFH, Escalation Email signature, My Day, etc.
- *
- * Migration: older versions stored `{ name }` only, or `{ name, role }`
- * with legacy role values, or a Google-based identity. On read we normalize
- * to the current shape; any old Google profile fields are dropped silently.
- */
 export function useIdentity() {
-  const [identity, setIdentityState] = useState<Identity | null>(() =>
-    readIdentity(),
-  );
+  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
 
-  // Sync across tabs in the same browser.
   useEffect(() => {
-    function onStorage(e: StorageEvent) {
-      if (e.key !== STORAGE_KEY) return;
-      setIdentityState(readIdentity());
-    }
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
+    let cancelled = false;
 
-  /**
-   * Sign in with a local username + password. Throws on bad credentials so
-   * the form can show "Incorrect username or password."
-   */
-  const signIn = useCallback(
-    async (username: string, password: string): Promise<Identity> => {
-      const user = await verifyPassword(username, password);
-      if (!user) {
-        throw new Error("Incorrect username or password.");
+    Promise.all([
+      fetch("/api/auth/config")
+        .then((r) => r.json())
+        .catch(() => ({ google_sso: false })),
+      fetch("/api/auth/me")
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]).then(([config, session]) => {
+      if (cancelled) return;
+      setSsoEnabled(!!(config as { google_sso?: boolean })?.google_sso);
+      if (session && typeof session === "object" && "name" in session) {
+        const s = session as { name: string; role: string; email?: string; picture?: string };
+        setIdentity({
+          name: s.name,
+          role: s.role as Role,
+          email: s.email,
+          picture: s.picture ?? undefined,
+        });
       }
-      const next: Identity = {
-        name: user.displayName,
-        role: user.role,
-        username: user.username,
-        authMethod: "password",
-      };
-      persistIdentity(next);
-      setIdentityState(next);
-      return next;
-    },
-    [],
-  );
-
-  /**
-   * Create a new local account and sign in immediately. Throws on
-   * validation errors (short password, duplicate username, etc).
-   */
-  const signUp = useCallback(
-    async (input: CreateUserInput): Promise<Identity> => {
-      const user: StoredUser = await createUser(input);
-      const next: Identity = {
-        name: user.displayName,
-        role: user.role,
-        username: user.username,
-        authMethod: "password",
-      };
-      persistIdentity(next);
-      setIdentityState(next);
-      return next;
-    },
-    [],
-  );
-
-  /**
-   * Change role without changing name. Used by the IdentityBadge modal so
-   * users can switch tiers without re-signing-in. Also writes the new role
-   * back to the underlying user record so it sticks across sign-outs.
-   */
-  const setRole = useCallback((role: Role) => {
-    setIdentityState((prev) => {
-      if (!prev) return prev;
-      const next: Identity = { ...prev, role };
-      persistIdentity(next);
-      if (next.username) {
-        updateUserProfile(next.username, { role });
-      }
-      return next;
+      setLoading(false);
     });
+
+    return () => { cancelled = true; };
   }, []);
 
-  const clearIdentity = useCallback(() => {
-    persistIdentity(null);
-    setIdentityState(null);
+  /** Redirect to Google OAuth consent page. Only works when Google SSO is configured. */
+  const signIn = useCallback(() => {
+    window.location.href = "/api/auth/login";
   }, []);
 
-  /* ----- Forgot-password support ---------------------------------------- */
-
-  // Pending request count, used by the header IdentityBadge to surface a
-  // red badge for managers. Refreshes on submissions, on cross-tab storage
-  // events, and on a small interval.
-  const [pendingResetCount, setPendingResetCount] = useState<number>(() =>
-    typeof window === "undefined" ? 0 : countPendingResetRequests(),
-  );
-
-  const refreshResetRequests = useCallback(() => {
-    setPendingResetCount(countPendingResetRequests());
-  }, []);
-
-  useEffect(() => {
-    refreshResetRequests();
-    const t = window.setInterval(refreshResetRequests, 4000);
-    function onStorage(e: StorageEvent) {
-      if (e.key === "noc-dashboard.reset-requests") refreshResetRequests();
+  /** Dev-mode sign-in: pick a name from the roster. Only works when Google OAuth is NOT configured. */
+  const devSignIn = useCallback(async (name: string) => {
+    try {
+      const res = await fetch("/api/auth/dev-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { name: string; role: string; email: string };
+        setIdentity({
+          name: data.name,
+          role: data.role as Role,
+          email: data.email,
+        });
+      }
+    } catch {
+      // ignore — dev mode only
     }
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.clearInterval(t);
-      window.removeEventListener("storage", onStorage);
-    };
-  }, [refreshResetRequests]);
+  }, []);
 
-  const submitResetRequest = useCallback(
-    (input: SubmitResetInput) => {
-      const req = submitPasswordResetRequest(input);
-      refreshResetRequests();
-      return req;
-    },
-    [refreshResetRequests],
-  );
+  /** Clear session on server and locally. */
+  const signOut = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } catch {
+      // ignore
+    }
+    setIdentity(null);
+  }, []);
+
+  /** Update role locally (UI-level only for now). */
+  const setRole = useCallback((role: Role) => {
+    setIdentity((prev) => (prev ? { ...prev, role } : null));
+  }, []);
 
   return {
     identity,
+    loading,
+    ssoEnabled,
     signIn,
-    signUp,
+    devSignIn,
+    signOut,
     setRole,
-    clearIdentity,
-    submitResetRequest,
-    pendingResetCount,
-    refreshResetRequests,
+    /** Legacy alias — widgets that destructure `clearIdentity` still compile. */
+    clearIdentity: signOut,
   };
 }

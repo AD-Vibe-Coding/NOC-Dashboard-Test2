@@ -17,9 +17,11 @@ import {
   AppShell,
   Box,
   Button,
+  Center,
   Container,
   Grid,
   Group,
+  Loader,
   Text,
   Breadcrumbs,
   Anchor,
@@ -59,7 +61,7 @@ const APPDIRECT_BRAND_PRIMARY = "#006080";
 const APPDIRECT_BRAND_ACCENT = "#0080a6";
 
 export default function App() {
-  const { identity } = useIdentity();
+  const { identity, loading: identityLoading } = useIdentity();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [navOpened, { toggle: toggleNav, close: closeNav }] =
     useDisclosure(false);
@@ -83,6 +85,16 @@ export default function App() {
     () => visibleWidgets.filter((w) => !w.featured),
     [visibleWidgets],
   );
+
+  // Show a brief loading spinner while the session check runs (avoids a flash
+  // of the "not signed in" welcome card before the session cookie is verified).
+  if (identityLoading) {
+    return (
+      <Center h="100vh">
+        <Loader size="lg" color="appdirect" />
+      </Center>
+    );
+  }
 
   useEffect(() => {
     const fromHash = () => {

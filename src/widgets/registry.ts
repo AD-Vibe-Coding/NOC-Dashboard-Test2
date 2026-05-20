@@ -12,6 +12,7 @@ import {
   IconMail,
   IconMailForward,
   IconReportAnalytics,
+  IconSearch,
 } from "@tabler/icons-react";
 import { BreakTrackerWidget, BreakTrackerTile } from "./BreakTracker";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
@@ -35,6 +36,10 @@ import {
   PerformanceTrackerWidget,
   PerformanceTrackerTile,
 } from "./PerformanceTracker";
+import {
+  SmartSearchWidget,
+  SmartSearchTile,
+} from "./SmartSearch";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -51,6 +56,16 @@ import type { WidgetDefinition } from "./types";
  * expands it into the full view.
  */
 export const WIDGETS: WidgetDefinition[] = [
+  {
+    id: "smart-search",
+    title: "Smart Search",
+    description: "AI-powered natural language search across the dashboard",
+    icon: IconSearch,
+    iconColor: "indigo",
+    tileSize: "sm",
+    Tile: SmartSearchTile,
+    Full: SmartSearchWidget,
+  },
   {
     id: "my-day",
     title: "My Day",
