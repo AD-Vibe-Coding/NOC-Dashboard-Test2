@@ -927,7 +927,7 @@ const extractionCache = new Map<
   string,
   { result: ExtractionResult; cached_at: number }
 >();
-const EXTRACT_TTL_MS = 60 * 60 * 1000; // 1 hour
+const EXTRACT_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 function guessMime(url: string): string {
   const u = url.toLowerCase();
@@ -2110,7 +2110,7 @@ export function confluenceProxyPlugin(): Plugin {
       // Body: { carrier_id: string, refresh?: boolean }
       // Re-fetches the carrier's page, downloads the inline image(s), and
       // asks the Devs.ai agent to extract structured contacts via OCR.
-      // Cached per carrier for 1 hour.
+      // Cached per carrier for 24 hours.
       // -----------------------------------------------------------------
       server.middlewares.use(
         "/api/confluence/extract-images",
