@@ -38,6 +38,13 @@ function stripAuto(row) {
   return rest;
 }
 
+// Check if a Supabase error means the table hasn't been pushed yet.
+// When the table is missing, PostgREST returns an error containing
+// "schema cache". We degrade gracefully instead of 500-ing.
+function isTableMissing(error) {
+  return error?.message?.includes("schema cache");
+}
+
 // Coerce a query-string filter value (always a string) into the right
 // JS type before sending it to Supabase. Without this, eq("is_active", "true")
 // returns nothing because PostgREST treats the value as a string literal.
@@ -112,7 +119,14 @@ export async function handleCollection(table, req, res) {
         .from(table)
         .insert(rows)
         .select();
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isTableMissing(error)) {
+          return res.status(503).json({
+            error: `Table "${table}" not found — push the schema to Supabase first.`,
+          });
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(201).json(data ?? []);
     }
 
@@ -132,7 +146,10 @@ export async function handleCollection(table, req, res) {
         q = q.gte("id", 0);
       }
       const { error } = await q;
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isTableMissing(error)) return res.status(200).json({ ok: true });
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json({ ok: true });
     }
 
@@ -160,7 +177,10 @@ export async function handleItem(table, idRaw, req, res) {
         .select("*")
         .eq("id", id)
         .single();
-      if (error) return res.status(404).json({ error: error.message });
+      if (error) {
+        if (isTableMissing(error)) return res.status(404).json({ error: "Not found" });
+        return res.status(404).json({ error: error.message });
+      }
       return res.status(200).json(data);
     }
     if (req.method === "PATCH") {
@@ -171,12 +191,22 @@ export async function handleItem(table, idRaw, req, res) {
         .eq("id", id)
         .select()
         .single();
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isTableMissing(error)) {
+          return res.status(503).json({
+            error: `Table "${table}" not found — push the schema to Supabase first.`,
+          });
+        }
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json(data);
     }
     if (req.method === "DELETE") {
       const { error } = await supabaseAdmin.from(table).delete().eq("id", id);
-      if (error) return res.status(500).json({ error: error.message });
+      if (error) {
+        if (isTableMissing(error)) return res.status(200).json({ ok: true });
+        return res.status(500).json({ error: error.message });
+      }
       return res.status(200).json({ ok: true });
     }
     res.setHeader("Allow", "GET, PATCH, DELETE");
