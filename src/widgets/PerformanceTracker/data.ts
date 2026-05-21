@@ -5,6 +5,10 @@ import { extractSummary, type ImportResult, type SourceType } from "./import";
 export type PerformanceMetric = typeof schema.performance_metrics.$inferSelect;
 export type PerformanceImport = typeof schema.performance_imports.$inferSelect;
 
+// Hydration is now done server-side in api/_lib/crud.js — the GET
+// handler for performance_metrics fills derived fields from raw_json
+// and strips raw_json from the response (~11MB → ~1.4MB).
+
 /**
  * Hook for the Performance Tracker. Loads all imports + metrics from PGlite
  * and re-fetches whenever `refreshKey` increments.
@@ -23,17 +27,18 @@ export function usePerformanceData() {
       setLoading(true);
       try {
         await dbReady;
-        const [m, i] = await Promise.all([
+        // Use Promise.allSettled so one table failing doesn't block the other.
+        const [mResult, iResult] = await Promise.allSettled([
           db.performance_metrics.list({
-            orderBy: { column: "created_at", ascending: false },
+            orderBy: { column: "id", ascending: false },
           }),
           db.performance_imports.list({
             orderBy: { column: "created_at", ascending: false },
           }),
         ]);
         if (!cancelled) {
-          setMetrics(m);
-          setImports(i);
+          setMetrics(mResult.status === "fulfilled" ? mResult.value : []);
+          setImports(iResult.status === "fulfilled" ? iResult.value : []);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -49,14 +54,21 @@ export function usePerformanceData() {
 
 /**
  * Postgres caps a single statement at 65,535 bind parameters (the wire
- * protocol uses a uint16 for the parameter count). With 17 columns per
- * row, that's a hard upper bound of ~3,855 rows per INSERT.
- *
- * 500 rows × 17 cols = 8,500 params per batch, well under any limit, and
- * keeps each HTTP round-trip to the /api/performance_metrics route a
- * reasonable payload size.
+ * protocol uses a uint16 for the parameter count). With 7 effective columns
+ * (after missing-column stripping), 100 rows keeps each request small and
+ * avoids overwhelming the Supabase connection pool / Vite dev-server proxy.
  */
-const INSERT_BATCH_SIZE = 500;
+const INSERT_BATCH_SIZE = 100;
+
+/** Max retries per batch before giving up. */
+const BATCH_MAX_RETRIES = 6;
+
+/** Delay between batches (ms) to avoid connection pool / proxy exhaustion. */
+const BATCH_DELAY_MS = 200;
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 /**
  * Persist an ImportResult to Supabase. Each sheet becomes one row in
@@ -110,22 +122,43 @@ export async function persistImport(
       raw_json: JSON.stringify(r.raw),
     }));
 
-    // Chunked inserts — one await per batch. Per-batch try/catch surfaces
-    // any failure with a clear message instead of dropping it on the floor
-    // as an unhandled promise rejection.
+    // Chunked inserts with per-batch retry + throttle. The retry handles
+    // transient Supabase connection pool exhaustion; the delay between
+    // batches prevents overwhelming the free-tier pool (max 15 connections).
     for (let i = 0; i < rows.length; i += INSERT_BATCH_SIZE) {
       const batch = rows.slice(i, i + INSERT_BATCH_SIZE);
-      try {
-        await db.performance_metrics.insert(batch);
-        totalInserts += batch.length;
-      } catch (err) {
+      let lastErr: unknown = null;
+      for (let attempt = 1; attempt <= BATCH_MAX_RETRIES; attempt++) {
+        try {
+          await db.performance_metrics.insertBulk(batch);
+          totalInserts += batch.length;
+          lastErr = null;
+          break; // success
+        } catch (err) {
+          lastErr = err;
+          console.warn(
+            `[performance-tracker] Batch ${Math.floor(i / INSERT_BATCH_SIZE) + 1} attempt ${attempt}/${BATCH_MAX_RETRIES} failed:`,
+            err instanceof Error ? err.message : err,
+          );
+          if (attempt < BATCH_MAX_RETRIES) {
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+            // The sandbox edge proxy returns 502 under sustained load;
+            // giving it progressively more time to recover is key.
+            await sleep(1000 * Math.pow(2, attempt - 1));
+          }
+        }
+      }
+      if (lastErr) {
         console.error(
-          `[performance-tracker] Insert batch failed for sheet "${sheet.sheetName}" rows ${i}–${i + batch.length}:`,
-          err,
+          `[performance-tracker] Insert batch failed for sheet "${sheet.sheetName}" rows ${i}–${i + batch.length} after ${BATCH_MAX_RETRIES} attempts`,
         );
         throw new Error(
-          `Failed to import sheet "${sheet.sheetName}" (${batch.length} rows starting at row ${i}): ${err instanceof Error ? err.message : String(err)}`,
+          `Failed to import sheet "${sheet.sheetName}" (${batch.length} rows starting at row ${i}): ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
         );
+      }
+      // Small delay between batches to avoid connection pool saturation
+      if (i + INSERT_BATCH_SIZE < rows.length) {
+        await sleep(BATCH_DELAY_MS);
       }
     }
   }
@@ -335,6 +368,37 @@ function pickEvenly<T>(arr: T[], n: number): T[] {
 
 export type Queue = "noc" | "mobility";
 
+export type DayFilter = "all" | "weekday" | "weekend";
+export type ShiftFilter = "all" | "early" | "mid" | "late";
+
+/** Human-readable labels for the shift dropdown. */
+export const SHIFT_LABELS: Record<ShiftFilter, string> = {
+  all: "All shifts",
+  early: "Early (3 AM – 12 PM)",
+  mid: "Mid (11 AM – 8 PM)",
+  late: "Late (7 PM – 4 AM)",
+};
+
+// Shift hour ranges (inclusive). Overlap hours belong to both shifts.
+//   Early: 3–11   (hour 11 shared with Mid, hour 3 shared with Late)
+//   Mid:   11–19   (hour 11 shared with Early, hour 19 shared with Late)
+//   Late:  19–3    (hour 19 shared with Mid, hour 3 shared with Early)
+const SHIFT_HOURS: Record<Exclude<ShiftFilter, "all">, Set<number>> = {
+  early: new Set([3, 4, 5, 6, 7, 8, 9, 10, 11]),
+  mid: new Set([11, 12, 13, 14, 15, 16, 17, 18, 19]),
+  late: new Set([19, 20, 21, 22, 23, 0, 1, 2, 3]),
+};
+
+/** Check if a given hour (0-23) matches the selected shift. */
+export function hourMatchesShift(
+  hour: number | null | undefined,
+  shift: ShiftFilter,
+): boolean {
+  if (shift === "all") return true;
+  if (hour === null || hour === undefined) return true; // unknown → include
+  return SHIFT_HOURS[shift].has(hour);
+}
+
 export interface AggregateOptions {
   queue?: Queue | "all";
   period?:
@@ -342,36 +406,42 @@ export interface AggregateOptions {
     | { type: "month"; value: string }
     | { type: "quarter"; value: string };
   excludeMaintenance?: boolean;
+  /** Filter by weekday/weekend. "all" = no filter (default). */
+  dayFilter?: DayFilter;
+  /** Filter by shift. "all" = no filter (default). */
+  shiftFilter?: ShiftFilter;
 }
 
-const maintenanceCache = new WeakMap<PerformanceMetric, boolean>();
+/**
+ * Check if a metric row is a "Maintenance Notification" ticket.
+ *
+ * The server-side hydration sets `is_maintenance` on every performance_metrics
+ * row (derived from raw_json's issue/issue_type column). We use that flag
+ * here. Falls back to parsing raw_json directly if the flag isn't present
+ * (e.g. during a race between schema push and hydration).
+ */
 export function isMaintenanceTicket(m: PerformanceMetric): boolean {
   if (m.source_type !== "tickets") return false;
-  const cached = maintenanceCache.get(m);
-  if (cached !== undefined) return cached;
-  let result = false;
-  if (m.raw_json) {
-    try {
-      const raw = JSON.parse(m.raw_json) as Record<string, unknown>;
-      const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-      const targets = new Set([norm("issue"), norm("issue_type"), norm("Issue Type")]);
-      let value: unknown;
-      for (const k of Object.keys(raw)) {
-        if (targets.has(norm(k))) {
-          value = raw[k];
-          break;
-        }
-      }
-      if (value != null && value !== "") {
-        const v = String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
-        if (v.includes("maintenancenotification")) result = true;
-      }
-    } catch {
-      /* corrupt raw_json — treat as non-maintenance, don't crash */
-    }
+  // Use the server-hydrated flag if available
+  if ((m as Record<string, unknown>).is_maintenance !== undefined) {
+    return !!(m as Record<string, unknown>).is_maintenance;
   }
-  maintenanceCache.set(m, result);
-  return result;
+  // Fallback: parse raw_json (only needed if server didn't hydrate)
+  if (!m.raw_json) return false;
+  try {
+    const raw = JSON.parse(m.raw_json) as Record<string, unknown>;
+    const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+    const targets = new Set([norm("issue"), norm("issue_type"), norm("Issue Type")]);
+    let value: unknown;
+    for (const k of Object.keys(raw)) {
+      if (targets.has(norm(k))) { value = raw[k]; break; }
+    }
+    if (value != null && value !== "") {
+      const v = String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+      return v.includes("maintenancenotification");
+    }
+  } catch { /* treat as non-maintenance */ }
+  return false;
 }
 
 export interface SourceBucket {
@@ -491,6 +561,18 @@ export function filterMetrics(
     }
     if (options.excludeMaintenance && isMaintenanceTicket(m)) {
       return false;
+    }
+    // Weekday / weekend filter — uses server-hydrated `is_weekend` flag
+    if (options.dayFilter && options.dayFilter !== "all") {
+      const isWeekend = (m as Record<string, unknown>).is_weekend;
+      if (isWeekend === null || isWeekend === undefined) return true; // unknown → include
+      if (options.dayFilter === "weekday" && isWeekend === true) return false;
+      if (options.dayFilter === "weekend" && isWeekend === false) return false;
+    }
+    // Shift filter — uses server-hydrated `hour` field (0-23)
+    if (options.shiftFilter && options.shiftFilter !== "all") {
+      const hour = (m as Record<string, unknown>).hour as number | null | undefined;
+      if (!hourMatchesShift(hour, options.shiftFilter)) return false;
     }
     return true;
   });

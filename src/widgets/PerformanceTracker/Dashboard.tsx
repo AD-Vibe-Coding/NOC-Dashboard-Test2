@@ -52,12 +52,16 @@ import {
 import {
   aggregateMetrics,
   diagnoseMemberTickets,
+  isMaintenanceTicket,
   listAvailablePeriods,
+  SHIFT_LABELS,
   type AggregateOptions,
+  type DayFilter,
   type MemberSummary,
   type MemberTicketDiagnostic,
   type PerformanceMetric,
   type Queue,
+  type ShiftFilter,
   type SourceBucket,
 } from "./data";
 import { type SourceType } from "./import";
@@ -92,6 +96,8 @@ export function PerformanceDashboard({
   // aren't real incident work and skew the team KPIs upward. Toggle
   // applies to tickets only; call data is never affected.
   const [excludeMaintenance, setExcludeMaintenance] = useState(true);
+  const [dayFilter, setDayFilter] = useState<DayFilter>("all");
+  const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
 
   const periods = useMemo(() => listAvailablePeriods(metrics), [metrics]);
 
@@ -114,11 +120,13 @@ export function PerformanceDashboard({
           ? { type: "month", value: effectivePeriodValue }
           : { type: "quarter", value: effectivePeriodValue },
     excludeMaintenance,
+    dayFilter,
+    shiftFilter,
   };
 
   const summaries = useMemo(
     () => aggregateMetrics(metrics, LOCKED_TEAM_NAMES, options),
-    [metrics, options.queue, options.period, options.excludeMaintenance],
+    [metrics, options.queue, options.period, options.excludeMaintenance, options.dayFilter, options.shiftFilter],
   );
 
   // ---- Auto-diagnostic: do we have ticket rows that don't have a
@@ -194,6 +202,13 @@ export function PerformanceDashboard({
         availableQuarters={periods.quarters}
         excludeMaintenance={excludeMaintenance}
         onExcludeMaintenanceChange={setExcludeMaintenance}
+        maintenanceCount={
+          metrics.filter((m) => isMaintenanceTicket(m)).length
+        }
+        dayFilter={dayFilter}
+        onDayFilterChange={setDayFilter}
+        shiftFilter={shiftFilter}
+        onShiftFilterChange={setShiftFilter}
       />
 
       {scopedMember ? (
@@ -233,6 +248,11 @@ function FilterBar({
   availableQuarters,
   excludeMaintenance,
   onExcludeMaintenanceChange,
+  maintenanceCount,
+  dayFilter,
+  onDayFilterChange,
+  shiftFilter,
+  onShiftFilterChange,
 }: {
   queueFilter: Queue | "all";
   onQueueChange: (q: Queue | "all") => void;
@@ -244,6 +264,11 @@ function FilterBar({
   availableQuarters: string[];
   excludeMaintenance: boolean;
   onExcludeMaintenanceChange: (v: boolean) => void;
+  maintenanceCount: number;
+  dayFilter: DayFilter;
+  onDayFilterChange: (v: DayFilter) => void;
+  shiftFilter: ShiftFilter;
+  onShiftFilterChange: (v: ShiftFilter) => void;
 }) {
   const periodOptions = useMemo(() => {
     if (periodMode === "month") {
@@ -352,8 +377,78 @@ function FilterBar({
               onChange={(e) =>
                 onExcludeMaintenanceChange(e.currentTarget.checked)
               }
-              label="Exclude maintenance"
+              label={`Exclude maintenance${maintenanceCount > 0 ? ` (${maintenanceCount})` : ""}`}
               styles={{ label: { fontSize: 11, fontWeight: 600 } }}
+            />
+          </Tooltip>
+        </Group>
+
+        {/* Weekday / Weekend toggle — applies to tickets, calls, and tasks */}
+        <Group gap={6} wrap="nowrap">
+          <ThemeIcon
+            variant="light"
+            color="gray"
+            radius="md"
+            size="sm"
+            aria-label="Day type filter"
+          >
+            <IconCalendar size={12} />
+          </ThemeIcon>
+          <Tooltip
+            label="Filter all KPIs (tickets, calls, tasks) to show only weekday or weekend data. Affects every metric on this page."
+            withinPortal
+            multiline
+            w={260}
+          >
+            <SegmentedControl
+              size="xs"
+              value={dayFilter}
+              onChange={(v) => onDayFilterChange(v as DayFilter)}
+              data={[
+                { label: "All days", value: "all" },
+                { label: "Weekday", value: "weekday" },
+                { label: "Weekend", value: "weekend" },
+              ]}
+              styles={{
+                label: { fontSize: 11, fontWeight: 600, padding: "2px 8px" },
+              }}
+            />
+          </Tooltip>
+        </Group>
+
+        {/* Shift filter — Early / Mid / Late */}
+        <Group gap={6} wrap="nowrap">
+          <ThemeIcon
+            variant="light"
+            color="gray"
+            radius="md"
+            size="sm"
+            aria-label="Shift filter"
+          >
+            <IconClock size={12} />
+          </ThemeIcon>
+          <Tooltip
+            label="Filter all KPIs by shift. Overlap hours (11 AM, 7 PM, 3 AM) are included in both adjacent shifts."
+            withinPortal
+            multiline
+            w={260}
+          >
+            <Select
+              size="xs"
+              w={190}
+              value={shiftFilter}
+              onChange={(v) => onShiftFilterChange((v ?? "all") as ShiftFilter)}
+              data={[
+                { value: "all", label: SHIFT_LABELS.all },
+                { value: "early", label: SHIFT_LABELS.early },
+                { value: "mid", label: SHIFT_LABELS.mid },
+                { value: "late", label: SHIFT_LABELS.late },
+              ]}
+              allowDeselect={false}
+              comboboxProps={{ withinPortal: true }}
+              styles={{
+                input: { fontSize: 11, fontWeight: 600 },
+              }}
             />
           </Tooltip>
         </Group>
@@ -600,7 +695,11 @@ function TicketsKpiCard({
                 <Tooltip
                   label={
                     <>
-                      <div>Tickets acked: {r.acked.toLocaleString()}</div>
+                      <div>
+                        Tickets acked: {r.acked.toLocaleString()}
+                        {grandAcked > 0 &&
+                          ` (${((r.acked / grandAcked) * 100).toFixed(1)}% of team)`}
+                      </div>
                       <div>
                         Avg ack time:{" "}
                         {r.avgAck != null ? formatMinutes(r.avgAck) : "—"}
@@ -629,6 +728,13 @@ function TicketsKpiCard({
                     <Progress value={bar} color="blue" size="md" radius="sm" />
                   </Box>
                 </Tooltip>
+                <Box style={{ width: 48, flexShrink: 0, textAlign: "right" }}>
+                  <Text size="xs" ff="monospace" fw={700} c="blue.3">
+                    {grandAcked > 0
+                      ? `${Math.round((r.acked / grandAcked) * 100)}%`
+                      : "—"}
+                  </Text>
+                </Box>
                 <Box style={{ width: 78, flexShrink: 0, textAlign: "right" }}>
                   <Text size="xs" ff="monospace" fw={600}>
                     {r.acked.toLocaleString()}
@@ -1040,7 +1146,11 @@ function CallsKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                 <Tooltip
                   label={
                     <>
-                      <div>Answered: {r.answered}</div>
+                      <div>
+                        Answered: {r.answered}
+                        {grandAnswered > 0 &&
+                          ` (${((r.answered / grandAnswered) * 100).toFixed(1)}% of team)`}
+                      </div>
                       <div>Refused: {r.refused}</div>
                       <div>Other missed: {r.missed}</div>
                       <div>
@@ -1064,6 +1174,13 @@ function CallsKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                     />
                   </Box>
                 </Tooltip>
+                <Box style={{ width: 48, flexShrink: 0, textAlign: "right" }}>
+                  <Text size="xs" ff="monospace" fw={700} c="green.3">
+                    {grandAnswered > 0
+                      ? `${Math.round((r.answered / grandAnswered) * 100)}%`
+                      : "—"}
+                  </Text>
+                </Box>
                 <Box style={{ width: 88, flexShrink: 0, textAlign: "right" }}>
                   <Text size="xs" ff="monospace" fw={600} c="green.4">
                     {r.answered.toLocaleString()}
@@ -1186,7 +1303,11 @@ function TasksKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                 <Tooltip
                   label={
                     <>
-                      <div>Tasks worked: {r.tasks.toLocaleString()}</div>
+                      <div>
+                        Tasks worked: {r.tasks.toLocaleString()}
+                        {grandTasks > 0 &&
+                          ` (${((r.tasks / grandTasks) * 100).toFixed(1)}% of team)`}
+                      </div>
                       <div>
                         SLA-Met:{" "}
                         {r.slaPct != null
@@ -1206,6 +1327,13 @@ function TasksKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                     />
                   </Box>
                 </Tooltip>
+                <Box style={{ width: 48, flexShrink: 0, textAlign: "right" }}>
+                  <Text size="xs" ff="monospace" fw={700} c="orange.3">
+                    {grandTasks > 0
+                      ? `${Math.round((r.tasks / grandTasks) * 100)}%`
+                      : "—"}
+                  </Text>
+                </Box>
                 <Box style={{ width: 88, flexShrink: 0, textAlign: "right" }}>
                   <Text size="xs" ff="monospace" fw={600} c="orange.4">
                     {r.tasks.toLocaleString()}

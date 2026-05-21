@@ -69,6 +69,8 @@ function filterQuery(filter?: Filter, extra?: Record<string, string>): string {
 interface TableClient<T> {
   list(opts?: ListOptions): Promise<T[]>;
   insert(values: Partial<T> | Partial<T>[]): Promise<T[]>;
+  /** Bulk insert without returning rows (much faster for large batches). */
+  insertBulk(values: Partial<T>[]): Promise<{ count: number }>;
   updateById(id: number, patch: Partial<T>): Promise<T>;
   deleteById(id: number): Promise<void>;
   deleteWhere(filter: Filter): Promise<void>;
@@ -82,6 +84,8 @@ function tableClient<T>(name: string): TableClient<T> {
       api.post<T[]>(`/api/${name}`, {
         values: Array.isArray(values) ? values : [values],
       }),
+    insertBulk: (values) =>
+      api.post<{ count: number }>(`/api/${name}?minimal=true`, { values }),
     updateById: (id, patch) => api.patch<T>(`/api/${name}/${id}`, patch),
     deleteById: (id) =>
       api.delete<{ ok: true }>(`/api/${name}/${id}`).then(() => undefined),

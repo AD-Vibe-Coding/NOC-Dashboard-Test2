@@ -2,6 +2,10 @@
 // never talks to Supabase directly; it always goes through these routes,
 // which use the service-role client server-side.
 
+/** Statuses the edge proxy returns on transient failures. */
+const RETRYABLE = new Set([502, 503, 504]);
+const MAX_RETRIES = 3;
+
 async function request<T>(
   method: string,
   url: string,
@@ -13,7 +17,24 @@ async function request<T>(
   };
   if (body !== undefined) init.body = JSON.stringify(body);
 
-  const res = await fetch(url, init);
+  let lastRes: Response | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Exponential backoff: 1s, 2s, 4s
+      await new Promise((r) => setTimeout(r, 1000 * Math.pow(2, attempt - 1)));
+    }
+    try {
+      lastRes = await fetch(url, init);
+      // Only retry on transient proxy errors
+      if (RETRYABLE.has(lastRes.status) && attempt < MAX_RETRIES) continue;
+      break;
+    } catch (err) {
+      // Network error — retry if we have attempts left
+      if (attempt >= MAX_RETRIES) throw err;
+    }
+  }
+
+  const res = lastRes!;
   const text = await res.text();
   let payload: unknown = null;
   if (text) {

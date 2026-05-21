@@ -19,6 +19,7 @@ import {
   Group,
   ScrollArea,
   SegmentedControl,
+  Select,
   Stack,
   Switch,
   Table,
@@ -32,6 +33,8 @@ import {
   IconChevronDown,
   IconChevronUp,
   IconClipboardList,
+  IconCalendar,
+  IconClock,
   IconFilter,
   IconMinus,
   IconPhoneCall,
@@ -40,9 +43,13 @@ import {
 } from "@tabler/icons-react";
 import {
   aggregateMetrics,
+  isMaintenanceTicket,
   listAvailablePeriods,
+  SHIFT_LABELS,
+  type DayFilter,
   type PerformanceMetric,
   type Queue,
+  type ShiftFilter,
 } from "./data";
 import { LOCKED_TEAM_NAMES } from "./team";
 
@@ -330,6 +337,8 @@ export function PerformanceTrends({ metrics, scopedMember }: Props) {
   // Maintenance-notification toggle — same default as Overview (ON).
   // Tickets-only; call KPIs are never affected by this flag.
   const [excludeMaintenance, setExcludeMaintenance] = useState(true);
+  const [dayFilter, setDayFilter] = useState<DayFilter>("all");
+  const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
 
   // Pre-filter the metric stream to just the scoped member's rows if
   // one is selected. Doing this BEFORE the per-month aggregation means
@@ -370,10 +379,12 @@ export function PerformanceTrends({ metrics, scopedMember }: Props) {
         queue: queueFilter,
         period: { type: "month", value: month },
         excludeMaintenance,
+        dayFilter,
+        shiftFilter,
       });
     }
     return out;
-  }, [scopedMetrics, aggregateNames, months, queueFilter, excludeMaintenance]);
+  }, [scopedMetrics, aggregateNames, months, queueFilter, excludeMaintenance, dayFilter, shiftFilter]);
 
   // Pre-compute every KPI for every month so the render loop is just
   // table cells. Keeps the JSX tidy and the math centralised.
@@ -515,8 +526,69 @@ export function PerformanceTrends({ metrics, scopedMember }: Props) {
                 onChange={(e) =>
                   setExcludeMaintenance(e.currentTarget.checked)
                 }
-                label="Exclude maintenance"
+                label={`Exclude maintenance${(() => {
+                  const n = scopedMetrics.filter(isMaintenanceTicket).length;
+                  return n > 0 ? ` (${n})` : "";
+                })()}`}
                 styles={{ label: { fontSize: 11, fontWeight: 600 } }}
+              />
+            </Tooltip>
+          </Group>
+
+          {/* Weekday / Weekend toggle */}
+          <Group gap={6} wrap="nowrap">
+            <ThemeIcon variant="light" color="gray" radius="md" size="sm">
+              <IconCalendar size={12} />
+            </ThemeIcon>
+            <Tooltip
+              label="Filter all trend KPIs (tickets, calls, tasks) to show only weekday or weekend data."
+              withinPortal
+              multiline
+              w={260}
+            >
+              <SegmentedControl
+                size="xs"
+                value={dayFilter}
+                onChange={(v) => setDayFilter(v as DayFilter)}
+                data={[
+                  { label: "All days", value: "all" },
+                  { label: "Weekday", value: "weekday" },
+                  { label: "Weekend", value: "weekend" },
+                ]}
+                styles={{
+                  label: { fontSize: 11, fontWeight: 600, padding: "2px 8px" },
+                }}
+              />
+            </Tooltip>
+          </Group>
+
+          {/* Shift filter — Early / Mid / Late */}
+          <Group gap={6} wrap="nowrap">
+            <ThemeIcon variant="light" color="gray" radius="md" size="sm">
+              <IconClock size={12} />
+            </ThemeIcon>
+            <Tooltip
+              label="Filter all trend KPIs by shift. Overlap hours (11 AM, 7 PM, 3 AM) are included in both adjacent shifts."
+              withinPortal
+              multiline
+              w={260}
+            >
+              <Select
+                size="xs"
+                w={190}
+                value={shiftFilter}
+                onChange={(v) => setShiftFilter((v ?? "all") as ShiftFilter)}
+                data={[
+                  { value: "all", label: SHIFT_LABELS.all },
+                  { value: "early", label: SHIFT_LABELS.early },
+                  { value: "mid", label: SHIFT_LABELS.mid },
+                  { value: "late", label: SHIFT_LABELS.late },
+                ]}
+                allowDeselect={false}
+                comboboxProps={{ withinPortal: true }}
+                styles={{
+                  input: { fontSize: 11, fontWeight: 600 },
+                }}
               />
             </Tooltip>
           </Group>
