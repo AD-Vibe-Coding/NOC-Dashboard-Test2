@@ -28,6 +28,7 @@ const ALLOWED_TABLES = new Set([
   "performance_metrics",
   "team_members",
   "manager_updates",
+  "metric_disputes",
 ]);
 
 // Strip auto-managed columns from POST/PATCH payloads so callers can't
@@ -203,9 +204,11 @@ function parseQueue(val) {
 function hydrateMetricRow(row, importSourceMap) {
   const { raw_json, ...rest } = row;
   // If ALL derived fields already present, just strip raw_json.
-  // IMPORTANT: must check ALL hydrated fields including hour, is_maintenance, is_weekend.
+  // IMPORTANT: must check ALL hydrated fields — when we add new ones the
+  // cache must be forced to re-parse. Check the newest fields last.
   if (rest.source_type && rest.period_month && rest.ack_minutes !== undefined
-      && rest.hour !== undefined && rest.is_maintenance !== undefined && rest.is_weekend !== undefined) {
+      && rest.hour !== undefined && rest.is_maintenance !== undefined
+      && rest.is_weekend !== undefined && rest.ref_number !== undefined) {
     return rest;
   }
 
@@ -278,11 +281,23 @@ function hydrateMetricRow(row, importSourceMap) {
     is_maintenance: isMaintenance,
     is_weekend: isWeekend,
     hour: hour,
+    // Identifier / context fields extracted from raw_json so the
+    // frontend can show them in the Raw Data table without needing
+    // to transmit the full raw_json blob.
+    ref_number: null,
+    customer_name: null,
+    subject_text: null,
+    caller_info: null,
     raw_json: "", // keep field present but empty
   };
 
   // Source-specific KPI extraction — mirrors import.ts extractSummary()
   if (sourceType === "tickets") {
+    // Identifier fields
+    out.ref_number = raw.trouble_id ?? raw.Trouble_ID ?? null;
+    out.customer_name = raw.customer ?? raw.Customer ?? null;
+    out.subject_text = raw.subject ?? raw.Subject ?? null;
+
     if (out.ack_minutes == null) {
       out.ack_minutes = parseAsMinutes(raw.first_touch) ?? null;
     }
@@ -305,6 +320,14 @@ function hydrateMetricRow(row, importSourceMap) {
       out.period_end = String(raw.closed_date);
     }
   } else if (sourceType === "calls") {
+    // Identifier fields — calls don't have a "from number" column;
+    // closest identifiers are To Name / To Email / Operator Name.
+    out.caller_info = raw["To Name"] || raw.to_name || null;
+    const email = raw["To Email"] || raw.to_email || null;
+    if (email && out.caller_info) out.caller_info += ` (${email})`;
+    else if (email) out.caller_info = email;
+    out.customer_name = raw["Operator Name"] || raw.operator_name || null;
+
     if (out.handle_seconds == null) {
       out.handle_seconds = parseDurationSeconds(raw.Duration || raw.duration) ?? null;
     }
@@ -327,6 +350,11 @@ function hydrateMetricRow(row, importSourceMap) {
       out.period_start = String(raw["Start Time"]);
     }
   } else if (sourceType === "tasks") {
+    // Identifier fields
+    out.ref_number = raw.Task ?? raw.task ?? null;
+    out.customer_name = raw.Customer ?? raw.customer ?? null;
+    out.subject_text = raw.Subject ?? raw.subject ?? null;
+
     if (out.success_count == null) out.success_count = 1;
   }
 
@@ -443,7 +471,7 @@ function setMetricsCache(data) {
   _metricsCache = { data, ts: Date.now() };
 }
 
-function invalidateMetricsCache() {
+export function invalidateMetricsCache() {
   _metricsCache = null;
 }
 

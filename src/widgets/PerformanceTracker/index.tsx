@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { installPerformanceDebugConsole } from "./debugConsole";
 import {
   ActionIcon,
@@ -25,6 +25,7 @@ import {
   IconChartHistogram,
   IconHistory,
   IconLayoutDashboard,
+  IconGavel,
   IconLock,
   IconReportAnalytics,
   IconTrash,
@@ -36,6 +37,7 @@ import { WidgetFrame } from "../WidgetFrame";
 import { ImportFlow } from "./ImportFlow";
 import { PerformanceDashboard } from "./Dashboard";
 import { PerformanceTrends } from "./Trends";
+import { DisputesPanel } from "./DisputesPanel";
 import {
   clearAllPerformanceData,
   deleteImport,
@@ -81,6 +83,24 @@ export function PerformanceTrackerWidget() {
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const { metrics, imports, loading, refresh } = usePerformanceData();
+
+  // Track pending dispute count for the tab badge
+  const [pendingDisputeCount, setPendingDisputeCount] = useState(0);
+  const [disputeRefreshKey, setDisputeRefreshKey] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/metric_disputes")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: Array<{ status: string }>) => {
+        setPendingDisputeCount(data.filter((d) => d.status === "pending").length);
+      })
+      .catch(() => {});
+  }, [disputeRefreshKey]);
+
+  const handleDisputeChange = useCallback(() => {
+    setDisputeRefreshKey((k) => k + 1);
+    refresh(); // also refresh metrics in case a dispute was approved
+  }, [refresh]);
 
   // One-time install of the `window.perf` debug helpers. Lets the user
   // inspect imported data from DevTools — e.g. `await perf.help()`,
@@ -370,6 +390,22 @@ export function PerformanceTrackerWidget() {
                 </Badge>
               </Tabs.Tab>
             )}
+            <Tabs.Tab
+              value="disputes"
+              leftSection={<IconGavel size={14} />}
+            >
+              Disputes
+              {pendingDisputeCount > 0 && (
+                <Badge
+                  size="xs"
+                  variant="filled"
+                  color="yellow"
+                  ml={6}
+                >
+                  {pendingDisputeCount}
+                </Badge>
+              )}
+            </Tabs.Tab>
           </Tabs.List>
 
           <Tabs.Panel value="overview" pt="md">
@@ -378,6 +414,8 @@ export function PerformanceTrackerWidget() {
               scopedMember={scopedMember}
               onRederive={isManager ? handleRederivePeriods : undefined}
               isRederiving={isRederiving}
+              currentUserName={canonicalSelf ?? undefined}
+              onDisputeChange={handleDisputeChange}
             />
           </Tabs.Panel>
 
@@ -412,6 +450,20 @@ export function PerformanceTrackerWidget() {
               />
             </Tabs.Panel>
           )}
+
+          <Tabs.Panel value="disputes" pt="md">
+            {isManager ? (
+              <DisputesPanel
+                reviewerName={canonicalSelf ?? identity?.name ?? "Manager"}
+                onMetricsChanged={handleDisputeChange}
+              />
+            ) : (
+              <DisputesPanel
+                reviewerName=""
+                onMetricsChanged={handleDisputeChange}
+              />
+            )}
+          </Tabs.Panel>
         </Tabs>
         </>
       )}

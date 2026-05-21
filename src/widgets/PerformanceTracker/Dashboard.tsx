@@ -31,6 +31,7 @@ import {
   IconClock,
   IconFilter,
   IconInfoCircle,
+  IconTable,
   IconTool,
   IconPhone,
   IconPhoneIncoming,
@@ -65,6 +66,8 @@ import {
   type SourceBucket,
 } from "./data";
 import { type SourceType } from "./import";
+import { RawDataModal, type DisputeInfo } from "./RawDataModal";
+import { DisputeForm } from "./DisputeForm";
 
 interface Props {
   metrics: PerformanceMetric[];
@@ -74,6 +77,10 @@ interface Props {
   onRederive?: () => void;
   /** True while onRederive is in flight. */
   isRederiving?: boolean;
+  /** The logged-in user's canonical name. Needed for dispute submission. */
+  currentUserName?: string;
+  /** Called after a dispute is submitted or approved so metrics can be refreshed. */
+  onDisputeChange?: () => void;
 }
 
 // =============================================================================
@@ -85,7 +92,45 @@ export function PerformanceDashboard({
   scopedMember,
   onRederive,
   isRederiving,
+  currentUserName,
+  onDisputeChange,
 }: Props) {
+  // ---- Dispute state ----
+  const [disputeMetric, setDisputeMetric] = useState<PerformanceMetric | null>(null);
+  const [disputeField, setDisputeField] = useState<"ack_minutes" | "carrier_ticket_minutes" | null>(null);
+  const [disputeMap, setDisputeMap] = useState<Map<number, DisputeInfo[]>>(new Map());
+  const [disputeRefresh, setDisputeRefresh] = useState(0);
+
+  // Load disputes for badge display
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/metric_disputes")
+      .then((r) => r.ok ? r.json() : [])
+      .then((data: Array<{ id: number; metric_id: number; field_name: string; status: string; proposed_value: number; review_note: string | null }>) => {
+        if (cancelled) return;
+        const map = new Map<number, DisputeInfo[]>();
+        for (const d of data) {
+          const arr = map.get(d.metric_id) ?? [];
+          arr.push({
+            id: d.id,
+            field_name: d.field_name,
+            status: d.status,
+            proposed_value: d.proposed_value,
+            review_note: d.review_note,
+          });
+          map.set(d.metric_id, arr);
+        }
+        setDisputeMap(map);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [disputeRefresh]);
+
+  function handleDisputeSubmitted() {
+    setDisputeRefresh((k) => k + 1);
+    onDisputeChange?.();
+  }
+
   // ---- Filter state ----
   const [queueFilter, setQueueFilter] = useState<Queue | "all">("all");
   const [periodMode, setPeriodMode] = useState<"all" | "month" | "quarter">(
@@ -98,6 +143,7 @@ export function PerformanceDashboard({
   const [excludeMaintenance, setExcludeMaintenance] = useState(true);
   const [dayFilter, setDayFilter] = useState<DayFilter>("all");
   const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
+  const [rawDataMember, setRawDataMember] = useState<string | null>(null);
 
   const periods = useMemo(() => listAvailablePeriods(metrics), [metrics]);
 
@@ -220,6 +266,7 @@ export function PerformanceDashboard({
           activePeriodMonth={
             periodMode === "month" ? effectivePeriodValue : null
           }
+          onViewRawData={() => setRawDataMember(scopedMember)}
         />
       ) : (
         <TeamOverview
@@ -227,8 +274,36 @@ export function PerformanceDashboard({
           activePeriodMonth={
             periodMode === "month" ? effectivePeriodValue : null
           }
+          onViewRawData={setRawDataMember}
         />
       )}
+
+      <RawDataModal
+        memberName={rawDataMember}
+        metrics={metrics}
+        filterOptions={options}
+        onClose={() => setRawDataMember(null)}
+        onDispute={
+          currentUserName
+            ? (m, f) => {
+                setDisputeMetric(m);
+                setDisputeField(f);
+              }
+            : undefined
+        }
+        disputesByMetricId={disputeMap}
+      />
+
+      <DisputeForm
+        metric={disputeMetric}
+        field={disputeField}
+        submitterName={currentUserName ?? ""}
+        onClose={() => {
+          setDisputeMetric(null);
+          setDisputeField(null);
+        }}
+        onSubmitted={handleDisputeSubmitted}
+      />
     </Stack>
   );
 }
@@ -474,9 +549,11 @@ function formatMonthLabel(yyyyMm: string): string {
 function TeamOverview({
   summaries,
   activePeriodMonth,
+  onViewRawData,
 }: {
   summaries: MemberSummary[];
   activePeriodMonth: string | null;
+  onViewRawData: (name: string) => void;
 }) {
   // Track which source types have any data — only render their cards
   const hasTickets = summaries.some((s) => (s.byType.tickets?.rowCount ?? 0) > 0);
@@ -507,17 +584,18 @@ function TeamOverview({
             <TicketsKpiCard
               summaries={summaries}
               activePeriodMonth={activePeriodMonth}
+              onViewRawData={onViewRawData}
             />
           </Grid.Col>
         )}
         {hasCalls && (
           <Grid.Col span={{ base: 12, lg: 12 }}>
-            <CallsKpiCard summaries={summaries} />
+            <CallsKpiCard summaries={summaries} onViewRawData={onViewRawData} />
           </Grid.Col>
         )}
         {hasTasks && (
           <Grid.Col span={{ base: 12, lg: 12 }}>
-            <TasksKpiCard summaries={summaries} />
+            <TasksKpiCard summaries={summaries} onViewRawData={onViewRawData} />
           </Grid.Col>
         )}
         {/* Generic legacy cards for queue/audit until they get
@@ -543,9 +621,11 @@ function TeamOverview({
 function TicketsKpiCard({
   summaries,
   activePeriodMonth,
+  onViewRawData,
 }: {
   summaries: MemberSummary[];
   activePeriodMonth: string | null;
+  onViewRawData: (name: string) => void;
 }) {
   const [diagMember, setDiagMember] = useState<string | null>(null);
 
@@ -743,6 +823,17 @@ function TicketsKpiCard({
                     {r.avgAck != null ? formatMinutes(r.avgAck) : "—"}
                   </Text>
                 </Box>
+                <Tooltip label="View raw ticket rows" withinPortal>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    onClick={() => onViewRawData(r.name)}
+                    aria-label="Raw data"
+                  >
+                    <IconTable size={14} />
+                  </ActionIcon>
+                </Tooltip>
                 <Tooltip
                   label="Inspect — see which months this member's tickets are in"
                   withinPortal
@@ -1033,7 +1124,7 @@ function TicketDiagnosticsModal({
 // Per-member rows: answered + refused
 // =============================================================================
 
-function CallsKpiCard({ summaries }: { summaries: MemberSummary[] }) {
+function CallsKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]; onViewRawData: (name: string) => void }) {
   const rows = summaries
     .map((s) => {
       const b = s.byType.calls;
@@ -1193,6 +1284,17 @@ function CallsKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                     {r.refused} refused
                   </Text>
                 </Box>
+                <Tooltip label="View raw call rows" withinPortal>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    onClick={() => onViewRawData(r.name)}
+                    aria-label="Raw data"
+                  >
+                    <IconTable size={14} />
+                  </ActionIcon>
+                </Tooltip>
               </Group>
             );
           })}
@@ -1208,7 +1310,7 @@ function CallsKpiCard({ summaries }: { summaries: MemberSummary[] }) {
 // Per-member rows: tasks + SLA-Met %
 // =============================================================================
 
-function TasksKpiCard({ summaries }: { summaries: MemberSummary[] }) {
+function TasksKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]; onViewRawData: (name: string) => void }) {
   const rows = summaries
     .map((s) => {
       const b = s.byType.tasks;
@@ -1342,6 +1444,17 @@ function TasksKpiCard({ summaries }: { summaries: MemberSummary[] }) {
                     {r.slaPct != null ? `${Math.round(r.slaPct)}% SLA` : "—"}
                   </Text>
                 </Box>
+                <Tooltip label="View raw task rows" withinPortal>
+                  <ActionIcon
+                    size="sm"
+                    variant="subtle"
+                    color="gray"
+                    onClick={() => onViewRawData(r.name)}
+                    aria-label="Raw data"
+                  >
+                    <IconTable size={14} />
+                  </ActionIcon>
+                </Tooltip>
               </Group>
             );
           })}
@@ -1561,10 +1674,12 @@ function MemberDetailView({
   member,
   summary,
   activePeriodMonth,
+  onViewRawData,
 }: {
   member: string;
   summary: MemberSummary | null;
   activePeriodMonth: string | null;
+  onViewRawData: () => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
   const tier = tierFor(member);
@@ -1623,22 +1738,35 @@ function MemberDetailView({
               </Group>
             </Box>
           </Group>
-          {(tickets?.rowCount ?? 0) > 0 && (
-            <Tooltip
-              label="Inspect ticket rows — see which months they're in"
-              withinPortal
-            >
+          <Group gap="xs">
+            <Tooltip label="View raw data rows" withinPortal>
               <ActionIcon
                 size="md"
                 variant="light"
-                color="blue"
-                onClick={() => setDiagOpen(true)}
-                aria-label="Inspect tickets"
+                color="gray"
+                onClick={onViewRawData}
+                aria-label="View raw data"
               >
-                <IconSearch size={16} />
+                <IconTable size={16} />
               </ActionIcon>
             </Tooltip>
-          )}
+            {(tickets?.rowCount ?? 0) > 0 && (
+              <Tooltip
+                label="Inspect ticket rows — see which months they're in"
+                withinPortal
+              >
+                <ActionIcon
+                  size="md"
+                  variant="light"
+                  color="blue"
+                  onClick={() => setDiagOpen(true)}
+                  aria-label="Inspect tickets"
+                >
+                  <IconSearch size={16} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+          </Group>
         </Group>
       </Card>
 

@@ -171,3 +171,24 @@ export const escalation_drafts = pgTable("escalation_drafts", {
   carrier_id: text("carrier_id"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+// =============================================================================
+// Metric Disputes — techs can challenge KPI values affected by outages
+// =============================================================================
+
+export const metric_disputes = pgTable("metric_disputes", {
+  id: serial("id").primaryKey(),
+  metric_id: integer("metric_id").notNull(),           // FK → performance_metrics.id
+  ticket_ref: text("ticket_ref"),                      // trouble_id for quick reference
+  submitted_by: text("submitted_by").notNull(),        // tech's canonical name
+  field_name: text("field_name").notNull(),            // "ack_minutes" | "carrier_ticket_minutes"
+  original_value: real("original_value").notNull(),    // the current (bad) value
+  proposed_value: real("proposed_value").notNull(),     // what it should be
+  reason: text("reason").notNull(),                    // freeform explanation
+  evidence_note: text("evidence_note"),                // optional: screenshot ref, Slack thread
+  status: text("status").notNull(),                    // "pending" | "approved" | "rejected"
+  reviewed_by: text("reviewed_by"),                    // manager's name
+  review_note: text("review_note"),                    // manager's response
+  reviewed_at: text("reviewed_at"),                    // ISO timestamp of review
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
