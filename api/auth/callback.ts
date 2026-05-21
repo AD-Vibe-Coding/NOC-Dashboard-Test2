@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
-import { defaultRoleFor } from "../_lib/roles.js";
+import { defaultRoleFor, lookupByEmail } from "../_lib/roles.js";
 
 /**
  * GET /api/auth/callback?code=XXX&state=YYY
@@ -112,9 +112,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // Map Google name to dashboard role
-  const name = String(userInfo.name ?? email.split("@")[0]);
-  const role = defaultRoleFor(name);
+  // Map email → roster identity (preferred), fall back to Google profile name
+  const emailLookup = lookupByEmail(email);
+  const name = emailLookup?.name ?? String(userInfo.name ?? email.split("@")[0]);
+  const role = emailLookup?.role ?? defaultRoleFor(name);
   const picture = String(userInfo.picture ?? "");
 
   // Create session JWT (24h)

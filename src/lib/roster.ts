@@ -17,6 +17,7 @@ export const NOC_ROSTER: string[] = [
   "Kenya Gentry",
   "Lokesh Naik Banavath",
   "Mahalakshmi Samiti",
+  "Matt Marquez",
   "Mohammed Ashraf",
   "Mohammed Zubairuddin",
   "Otukho Olembo",

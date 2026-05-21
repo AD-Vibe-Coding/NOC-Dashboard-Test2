@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
-import { defaultRoleFor } from "../_lib/roles.js";
+import { defaultRoleFor, ROSTER_BY_EMAIL } from "../_lib/roles.js";
 
 /**
  * POST /api/auth/dev-login — Development-only name picker sign-in.
@@ -27,7 +27,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const role = defaultRoleFor(name);
-  const email = `${name.toLowerCase().replace(/\s+/g, ".")}@appdirect.com`;
+
+  // Find the canonical email for this person from the roster, or generate one
+  let email = `${name.toLowerCase().replace(/\s+/g, ".")}@appdirect.com`;
+  for (const [e, entry] of Object.entries(ROSTER_BY_EMAIL)) {
+    if (entry.name === name) {
+      email = e;
+      break;
+    }
+  }
 
   const token = signJwt({ email, name, role, picture: null }, 86400);
 

@@ -77,6 +77,7 @@ export const ROLE_BY_NAME: Record<string, Role> = {
   // ---- Managers ----
   "Anirudh Kukudala": "manager",
   "Perry Cox": "manager",
+  "Matt Marquez": "manager",
 
   // ---- Tier 3 ----
   "Otukho Olembo": "tier3",
@@ -98,8 +99,6 @@ export const ROLE_BY_NAME: Record<string, Role> = {
   "Mahalakshmi Samiti": "tier1",
 
   // ---- Tier 1 (Mobility) ----
-  // Mobility queue, same access as NOC Tier 1 for now. When Mobility gets
-  // distinct features in the future, introduce a new role or feature flag.
   "Akash Hanvate": "tier1",
 
   // ---- Legacy name-variant migrations (don't show in roster autocomplete,
@@ -109,6 +108,48 @@ export const ROLE_BY_NAME: Record<string, Role> = {
   "Zubair Mohammed": "tier2",
   "Samiti Mahalakshmi": "tier1",
   "Abishek Benarji": "tier2",
+};
+
+/**
+ * Email → roster name mapping.
+ *
+ * When someone signs in via Google SSO, their Google profile name may not
+ * exactly match the roster name (e.g. "A. Kukudala" vs "Anirudh Kukudala").
+ * This map uses the email (which never changes) to reliably resolve the
+ * canonical roster name + role.
+ *
+ * Keys are lowercased emails. If you need to add a new team member, add
+ * their email here AND their name in ROLE_BY_NAME above.
+ *
+ * IMPORTANT: Also update the server-side copy in api/_lib/roles.js
+ */
+export const ROSTER_BY_EMAIL: Record<string, { name: string; role: Role }> = {
+  // ---- Managers ----
+  "anirudh.kukudala@appdirect.com": { name: "Anirudh Kukudala", role: "manager" },
+  "perry.cox@appdirect.com":        { name: "Perry Cox",        role: "manager" },
+  "matt.marquez@appdirect.com":     { name: "Matt Marquez",     role: "manager" },
+
+  // ---- Tier 3 ----
+  "otukho.olembo@appdirect.com":    { name: "Otukho Olembo",    role: "tier3" },
+
+  // ---- Tier 2 ----
+  "zubair.mohd@appdirect.com":             { name: "Mohammed Zubairuddin", role: "tier2" },
+  "karthik.radhakrishnan@appdirect.com":   { name: "Karthik Radhakrishnan", role: "tier2" },
+  "abishek.benarji@appdirect.com":         { name: "Abhishek Benarji",     role: "tier2" },
+
+  // ---- Tier 1 (NOC) ----
+  "pranav.dandibhotla@appdirect.com":  { name: "Pranav Dandibhotla",  role: "tier1" },
+  "ashraf.mohammed@appdirect.com":     { name: "Mohammed Ashraf",     role: "tier1" },
+  "akram.mohammed@appdirect.com":      { name: "Akram Ahmed",         role: "tier1" },
+  "kenya.gentry@appdirect.com":        { name: "Kenya Gentry",        role: "tier1" },
+  "hamza.umme@appdirect.com":          { name: "Hamza Rahmani",       role: "tier1" },
+  "sriram.parisa@appdirect.com":       { name: "Sriram Parisa",       role: "tier1" },
+  "karthik.damagalla@appdirect.com":   { name: "Karthik Damagalla",   role: "tier1" },
+  "lokesh.banavath@appdirect.com":     { name: "Lokesh Naik Banavath", role: "tier1" },
+  "samiti.mahalakshmi@appdirect.com":  { name: "Mahalakshmi Samiti",  role: "tier1" },
+
+  // ---- Tier 1 (Mobility) ----
+  "akash.hanvate@appdirect.com":       { name: "Akash Hanvate",       role: "tier1" },
 };
 
 export const DEFAULT_ROLE: Role = "tier1";

@@ -30,6 +30,7 @@ export const LOCKED_TEAM: TeamMember[] = [
   // ---- Managers ----
   { name: "Anirudh Kukudala", tier: "manager", team: "noc" },
   { name: "Perry Cox", tier: "manager", team: "noc" },
+  { name: "Matt Marquez", tier: "manager", team: "noc" },
   // ---- Tier 3 ----
   { name: "Otukho Olembo", tier: "tier3", team: "noc" },
   // ---- Tier 2 ----

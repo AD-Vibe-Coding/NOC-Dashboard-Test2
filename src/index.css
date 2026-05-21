@@ -269,6 +269,27 @@ body {
   color: var(--accent-color);
 }
 
+/* ---- Tech dashboard nav buttons -------------------------------------- */
+.tech-nav-button {
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    border-color 150ms ease;
+}
+[data-mantine-color-scheme="light"] .tech-nav-button:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 12px rgba(0, 0, 0, 0.06),
+    0 1px 3px rgba(0, 0, 0, 0.04);
+}
+[data-mantine-color-scheme="dark"] .tech-nav-button:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.3),
+    0 1px 4px rgba(0, 0, 0, 0.2);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
 /* ---- Sidebar tool item hover ----------------------------------------- */
 .sidebar-item {
   transition:

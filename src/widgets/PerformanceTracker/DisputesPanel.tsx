@@ -7,12 +7,15 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  Anchor,
   Badge,
   Box,
   Button,
   Card,
   Group,
+  Image,
   Loader,
+  Modal,
   ScrollArea,
   Stack,
   Text,
@@ -23,9 +26,12 @@ import {
 import {
   IconCheck,
   IconClock,
+  IconFile,
   IconGavel,
   IconX,
 } from "@tabler/icons-react";
+import { downloadBlob } from "../../lib/download";
+import { type Attachment } from "./DisputeForm";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -41,6 +47,7 @@ interface Dispute {
   proposed_value: number;
   reason: string;
   evidence_note: string | null;
+  attachments_json: string | null;
   status: string;
   reviewed_by: string | null;
   review_note: string | null;
@@ -53,6 +60,10 @@ interface Props {
   reviewerName: string;
   /** Called after an approval so the parent can refresh metrics. */
   onMetricsChanged: () => void;
+  /** Whether the current user is a manager (can approve/reject). */
+  isManager?: boolean;
+  /** If non-manager, the current user's name (to filter to their own disputes). */
+  currentUserName?: string;
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -87,7 +98,7 @@ function relativeTime(iso: string): string {
 // Component
 // ---------------------------------------------------------------------------
 
-export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
+export function DisputesPanel({ reviewerName, onMetricsChanged, isManager, currentUserName }: Props) {
   const [disputes, setDisputes] = useState<Dispute[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -109,8 +120,13 @@ export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
     load();
   }, [load]);
 
-  const pending = disputes.filter((d) => d.status === "pending");
-  const reviewed = disputes.filter((d) => d.status !== "pending");
+  // Non-managers only see their own disputes
+  const visible = (!isManager && currentUserName)
+    ? disputes.filter((d) => d.submitted_by === currentUserName)
+    : disputes;
+
+  const pending = visible.filter((d) => d.status === "pending");
+  const reviewed = visible.filter((d) => d.status !== "pending");
 
   if (loading) {
     return (
@@ -130,14 +146,15 @@ export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
     );
   }
 
-  if (disputes.length === 0) {
+  if (visible.length === 0) {
     return (
       <Card withBorder radius="md" p="xl">
         <Stack align="center" gap="sm">
           <IconGavel size={36} color="var(--mantine-color-dimmed)" />
           <Text size="sm" c="dimmed" ta="center">
-            No disputes yet. Techs can submit disputes from the Raw Data viewer
-            when tool outages inflate their ack or carrier times.
+            {isManager
+              ? "No disputes yet. Techs can submit disputes from the Raw Data viewer when tool outages inflate their ack or carrier times."
+              : "You haven't submitted any disputes yet. Open the Raw Data viewer from the Overview tab, click the ⚡ icon next to an inflated ack or carrier time, and submit a dispute."}
           </Text>
         </Stack>
       </Card>
@@ -164,6 +181,7 @@ export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
                 key={d.id}
                 dispute={d}
                 reviewerName={reviewerName}
+                canReview={!!isManager}
                 onReviewed={() => {
                   load();
                   onMetricsChanged();
@@ -190,7 +208,7 @@ export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
             <ScrollArea.Autosize mah={400}>
               <Stack gap="xs">
                 {reviewed.map((d) => (
-                  <DisputeCard key={d.id} dispute={d} reviewerName={reviewerName} onReviewed={load} />
+                  <DisputeCard key={d.id} dispute={d} reviewerName={reviewerName} canReview={false} onReviewed={load} />
                 ))}
               </Stack>
             </ScrollArea.Autosize>
@@ -208,10 +226,12 @@ export function DisputesPanel({ reviewerName, onMetricsChanged }: Props) {
 function DisputeCard({
   dispute,
   reviewerName,
+  canReview,
   onReviewed,
 }: {
   dispute: Dispute;
   reviewerName: string;
+  canReview: boolean;
   onReviewed: () => void;
 }) {
   const [reviewNote, setReviewNote] = useState("");
@@ -297,10 +317,13 @@ function DisputeCard({
 
         {dispute.evidence_note && (
           <Box>
-            <Text size="xs" c="dimmed" fw={600}>Evidence:</Text>
-            <Text size="sm" c="dimmed">{dispute.evidence_note}</Text>
+            <Text size="xs" c="dimmed" fw={600}>Evidence / Notes:</Text>
+            <Text size="sm">{dispute.evidence_note}</Text>
           </Box>
         )}
+
+        {/* Attachments */}
+        <AttachmentGallery attachmentsJson={dispute.attachments_json} />
 
         {/* Reviewed info */}
         {!isPending && dispute.reviewed_by && (
@@ -321,8 +344,8 @@ function DisputeCard({
           </Box>
         )}
 
-        {/* Action buttons (pending only) */}
-        {isPending && (
+        {/* Action buttons (pending + manager only) */}
+        {isPending && canReview && (
           <Stack gap="xs" mt="xs">
             <Textarea
               placeholder="Response to the tech (optional)"
@@ -356,7 +379,134 @@ function DisputeCard({
             </Group>
           </Stack>
         )}
+        {isPending && !canReview && (
+          <Badge size="sm" variant="light" color="yellow" mt="xs">
+            Waiting for manager review
+          </Badge>
+        )}
       </Stack>
     </Card>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Attachment gallery — renders images as clickable thumbnails, other files
+// as download links.
+// ---------------------------------------------------------------------------
+
+function AttachmentGallery({
+  attachmentsJson,
+}: {
+  attachmentsJson: string | null;
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  if (!attachmentsJson) return null;
+
+  let attachments: Attachment[];
+  try {
+    attachments = JSON.parse(attachmentsJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(attachments) || attachments.length === 0) return null;
+
+  function handleDownload(att: Attachment) {
+    // Convert data URL back to a Blob for download
+    const arr = att.dataUrl.split(",");
+    const mime = arr[0]?.match(/:(.*?);/)?.[1] || att.type;
+    const bstr = atob(arr[1] || "");
+    const u8 = new Uint8Array(bstr.length);
+    for (let i = 0; i < bstr.length; i++) u8[i] = bstr.charCodeAt(i);
+    const blob = new Blob([u8], { type: mime });
+    downloadBlob(blob, att.name);
+  }
+
+  const images = attachments.filter((a) => a.type.startsWith("image/"));
+  const files = attachments.filter((a) => !a.type.startsWith("image/"));
+
+  return (
+    <>
+      <Box>
+        <Text size="xs" c="dimmed" fw={600} mb={4}>
+          Attachments ({attachments.length}):
+        </Text>
+
+        {/* Image thumbnails */}
+        {images.length > 0 && (
+          <Group gap="xs" mb={files.length > 0 ? "xs" : 0}>
+            {images.map((att, idx) => (
+              <Box
+                key={idx}
+                style={{
+                  cursor: "pointer",
+                  borderRadius: 6,
+                  overflow: "hidden",
+                  border: "1px solid var(--mantine-color-dark-4)",
+                }}
+                onClick={() => setPreviewUrl(att.dataUrl)}
+              >
+                <Image
+                  src={att.dataUrl}
+                  alt={att.name}
+                  w={72}
+                  h={72}
+                  fit="cover"
+                />
+              </Box>
+            ))}
+          </Group>
+        )}
+
+        {/* Non-image files */}
+        {files.length > 0 && (
+          <Stack gap={4}>
+            {files.map((att, idx) => (
+              <Group key={idx} gap="xs" wrap="nowrap">
+                <IconFile size={14} color="var(--mantine-color-dimmed)" />
+                <Anchor
+                  size="xs"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    handleDownload(att);
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
+                  {att.name}
+                </Anchor>
+                <Text size="xs" c="dimmed">
+                  ({fmtFileSize(att.size)})
+                </Text>
+              </Group>
+            ))}
+          </Stack>
+        )}
+      </Box>
+
+      {/* Full-size image preview modal */}
+      <Modal
+        opened={previewUrl != null}
+        onClose={() => setPreviewUrl(null)}
+        size="xl"
+        title="Attachment Preview"
+        centered
+      >
+        {previewUrl && (
+          <Image
+            src={previewUrl}
+            alt="Preview"
+            fit="contain"
+            mah="70vh"
+            radius="sm"
+          />
+        )}
+      </Modal>
+    </>
+  );
+}
+
+function fmtFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

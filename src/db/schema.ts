@@ -185,7 +185,8 @@ export const metric_disputes = pgTable("metric_disputes", {
   original_value: real("original_value").notNull(),    // the current (bad) value
   proposed_value: real("proposed_value").notNull(),     // what it should be
   reason: text("reason").notNull(),                    // freeform explanation
-  evidence_note: text("evidence_note"),                // optional: screenshot ref, Slack thread
+  evidence_note: text("evidence_note"),                // Slack thread, notes, etc.
+  attachments_json: text("attachments_json"),          // JSON array of {name, type, size, dataUrl}
   status: text("status").notNull(),                    // "pending" | "approved" | "rejected"
   reviewed_by: text("reviewed_by"),                    // manager's name
   review_note: text("review_note"),                    // manager's response

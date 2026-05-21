@@ -210,7 +210,7 @@ export function PerformanceTrackerWidget() {
 
   return (
     <WidgetFrame
-      title="Team Performance"
+      title={isManager ? "Team Performance" : `${canonicalSelf ?? identity?.name ?? "My"} Metrics`}
       subtitle={
         isManager
           ? "Team-wide metrics + per-member drill-down · Excel import"
@@ -452,17 +452,12 @@ export function PerformanceTrackerWidget() {
           )}
 
           <Tabs.Panel value="disputes" pt="md">
-            {isManager ? (
-              <DisputesPanel
-                reviewerName={canonicalSelf ?? identity?.name ?? "Manager"}
-                onMetricsChanged={handleDisputeChange}
-              />
-            ) : (
-              <DisputesPanel
-                reviewerName=""
-                onMetricsChanged={handleDisputeChange}
-              />
-            )}
+            <DisputesPanel
+              reviewerName={isManager ? (canonicalSelf ?? identity?.name ?? "Manager") : ""}
+              onMetricsChanged={handleDisputeChange}
+              isManager={isManager}
+              currentUserName={canonicalSelf ?? undefined}
+            />
           </Tabs.Panel>
         </Tabs>
         </>

@@ -44,7 +44,7 @@ import {
 import { WIDGETS } from "./widgets/registry";
 import type { WidgetDefinition } from "./widgets/types";
 import { SIZE_TO_SPAN } from "./widgets/types";
-import { IdentityBadge, IdentityWelcomeCard } from "./widgets/IdentityBadge";
+import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { useIdentity } from "./lib/identity";
@@ -54,6 +54,8 @@ import {
   ROLE_LABELS,
   ROLE_SHORT_LABELS,
 } from "./lib/roles";
+import TechDashboard from "./TechDashboard";
+import SignInPage from "./SignInPage";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -121,6 +123,18 @@ export default function App() {
     );
   }
 
+  // ---- Route based on auth state ----
+  // Not signed in → clean sign-in page (no widgets, no sidebar)
+  if (!identity) {
+    return <SignInPage />;
+  }
+
+  // Techs (Tier 1/2/3) → streamlined personal dashboard
+  if (identity.role !== "manager") {
+    return <TechDashboard />;
+  }
+
+  // Managers → full admin dashboard below
   function expand(id: string) {
     window.location.hash = `#/${id}`;
     closeNav();
@@ -220,7 +234,7 @@ export default function App() {
                       underline="never"
                       style={{ fontSize: 16, letterSpacing: "-0.01em" }}
                     >
-                      vCom NOC Operations Dashboard
+                      {identity ? "NOC Manager Dashboard" : "vCom NOC Operations Dashboard"}
                     </Anchor>
                     {expanded && (
                       <Text
@@ -253,9 +267,9 @@ export default function App() {
                 >
                   {expanded
                     ? expanded.description
-                    : `${featuredWidgets.length} on your shift · ${sidebarWidgets.length} tool${
-                        sidebarWidgets.length === 1 ? "" : "s"
-                      }`}
+                    : identity
+                      ? `Team oversight · ${sidebarWidgets.length + featuredWidgets.length} tools`
+                      : "Sign in to access the dashboard"}
                 </Text>
               </Box>
             </Group>
@@ -421,7 +435,6 @@ export default function App() {
             <ExpandedView WidgetFull={expanded.Full} />
           ) : (
             <>
-              <IdentityWelcomeCard />
               <NewsTicker />
               <FeaturedGrid widgets={featuredWidgets} onExpand={expand} />
             </>
@@ -482,7 +495,7 @@ function FeaturedGrid({
               tt="uppercase"
               style={{ letterSpacing: "0.12em" }}
             >
-              Your shift
+              Team overview
             </Text>
             <Text
               size="xl"
