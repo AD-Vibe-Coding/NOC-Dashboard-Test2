@@ -1,0 +1,30 @@
+{
+  "requests": [
+    {
+      "id": "w0oqe5",
+      "employee_name": "Test User",
+      "start_date": "2026-05-22",
+      "end_date": "2026-05-22",
+      "reason": "perm-denied probe",
+      "status": "denied",
+      "submitted_at": "2026-05-15T10:24:54.744Z",
+      "reviewed_by": "Anirudh Kukudala",
+      "reviewed_at": "2026-05-20T09:45:20.511Z",
+      "decision_note": null,
+      "slack_message_ts": null
+    },
+    {
+      "id": "ziafk6",
+      "employee_name": "Hamza Rahmani",
+      "start_date": "2026-05-18",
+      "end_date": "2026-05-18",
+      "reason": "Test",
+      "status": "approved",
+      "submitted_at": "2026-05-18T10:43:19.119Z",
+      "reviewed_by": "Anirudh Kukudala",
+      "reviewed_at": "2026-05-18T10:45:04.536Z",
+      "decision_note": null,
+      "slack_message_ts": "1779100999.067069"
+    }
+  ]
+}

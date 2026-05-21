@@ -1,0 +1,125 @@
+// Database client — Supabase-backed, server-mediated.
+//
+// The frontend never talks to Supabase directly. Every call here goes
+// through a same-origin /api/<table> route (see api/_lib/crud.js + the
+// per-table route files), which uses the service-role admin client on
+// the server.
+//
+// This module exposes:
+//   - `schema`   — the Drizzle table definitions (kept so that widgets
+//                  can still derive row types via `typeof schema.X.$inferSelect`)
+//   - `db`       — a per-table client with list / insert / update / delete
+//                  methods that delegate to the API routes
+//   - `dbReady`  — backward-compat: legacy widgets awaited this before the
+//                  first query. With Supabase there's no IndexedDB bootstrap,
+//                  so it resolves immediately.
+import * as schemaModule from "./schema";
+import { api } from "../lib/api";
+
+export const schema = schemaModule;
+
+// Legacy widgets call `await dbReady;` at startup. Resolve immediately —
+// Supabase tables are provisioned via the "Push to Supabase" button.
+export const dbReady: Promise<void> = Promise.resolve();
+
+// ---------------------------------------------------------------------------
+// Per-table client
+// ---------------------------------------------------------------------------
+
+type Primitive = string | number | boolean | null;
+type Filter = Record<string, Primitive>;
+
+export interface ListOptions {
+  filter?: Filter;
+  orderBy?: { column: string; ascending?: boolean };
+  limit?: number;
+}
+
+function buildQuery(opts?: ListOptions): string {
+  if (!opts) return "";
+  const params = new URLSearchParams();
+  if (opts.filter) {
+    for (const [k, v] of Object.entries(opts.filter)) {
+      params.set(`filter.${k}`, v === null ? "null" : String(v));
+    }
+  }
+  if (opts.orderBy) {
+    params.set("orderBy", opts.orderBy.column);
+    params.set("orderDir", opts.orderBy.ascending === false ? "desc" : "asc");
+  }
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+function filterQuery(filter?: Filter, extra?: Record<string, string>): string {
+  const params = new URLSearchParams();
+  if (filter) {
+    for (const [k, v] of Object.entries(filter)) {
+      params.set(`filter.${k}`, v === null ? "null" : String(v));
+    }
+  }
+  if (extra) {
+    for (const [k, v] of Object.entries(extra)) params.set(k, v);
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+interface TableClient<T> {
+  list(opts?: ListOptions): Promise<T[]>;
+  insert(values: Partial<T> | Partial<T>[]): Promise<T[]>;
+  /** Bulk insert without returning rows (much faster for large batches). */
+  insertBulk(values: Partial<T>[]): Promise<{ count: number }>;
+  updateById(id: number, patch: Partial<T>): Promise<T>;
+  deleteById(id: number): Promise<void>;
+  deleteWhere(filter: Filter): Promise<void>;
+  deleteAll(): Promise<void>;
+}
+
+function tableClient<T>(name: string): TableClient<T> {
+  return {
+    list: (opts) => api.get<T[]>(`/api/${name}${buildQuery(opts)}`),
+    insert: (values) =>
+      api.post<T[]>(`/api/${name}`, {
+        values: Array.isArray(values) ? values : [values],
+      }),
+    insertBulk: (values) =>
+      api.post<{ count: number }>(`/api/${name}?minimal=true`, { values }),
+    updateById: (id, patch) => api.patch<T>(`/api/${name}/${id}`, patch),
+    deleteById: (id) =>
+      api.delete<{ ok: true }>(`/api/${name}/${id}`).then(() => undefined),
+    deleteWhere: (filter) =>
+      api
+        .delete<{ ok: true }>(`/api/${name}${filterQuery(filter)}`)
+        .then(() => undefined),
+    deleteAll: () =>
+      api
+        .delete<{ ok: true }>(`/api/${name}?all=true`)
+        .then(() => undefined),
+  };
+}
+
+// Row-type aliases — derived from the Drizzle schema so widgets keep
+// type safety without importing drizzle-orm directly.
+type BreakRow = typeof schema.breaks.$inferSelect;
+type TicketSummaryRow = typeof schema.ticket_summaries.$inferSelect;
+type EscalationDraftRow = typeof schema.escalation_drafts.$inferSelect;
+type ShiftHandoverRow = typeof schema.shift_handovers.$inferSelect;
+type PolishedEmailRow = typeof schema.polished_emails.$inferSelect;
+type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
+type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
+type TeamMemberRow = typeof schema.team_members.$inferSelect;
+type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
+
+export const db = {
+  breaks: tableClient<BreakRow>("breaks"),
+  ticket_summaries: tableClient<TicketSummaryRow>("ticket_summaries"),
+  escalation_drafts: tableClient<EscalationDraftRow>("escalation_drafts"),
+  shift_handovers: tableClient<ShiftHandoverRow>("shift_handovers"),
+  polished_emails: tableClient<PolishedEmailRow>("polished_emails"),
+  performance_imports: tableClient<PerformanceImportRow>("performance_imports"),
+  performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
+  team_members: tableClient<TeamMemberRow>("team_members"),
+  manager_updates: tableClient<ManagerUpdateRow>("manager_updates"),
+};
