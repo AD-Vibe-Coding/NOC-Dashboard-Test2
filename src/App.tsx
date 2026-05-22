@@ -42,6 +42,7 @@ import {
   IconSun,
 } from "@tabler/icons-react";
 import { WIDGETS } from "./widgets/registry";
+import { trackWidgetOpen } from "./lib/track";
 import type { WidgetDefinition } from "./widgets/types";
 import { SIZE_TO_SPAN } from "./widgets/types";
 import { IdentityBadge } from "./widgets/IdentityBadge";
@@ -136,6 +137,8 @@ export default function App() {
 
   // Managers → full admin dashboard below
   function expand(id: string) {
+    const w = WIDGETS.find((x) => x.id === id);
+    if (w) trackWidgetOpen(id, w.title);
     window.location.hash = `#/${id}`;
     closeNav();
   }

@@ -53,6 +53,7 @@ import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { useIdentity } from "./lib/identity";
 import { canAccess, ROLE_COLORS, ROLE_LABELS } from "./lib/roles";
+import { trackWidgetOpen } from "./lib/track";
 import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
 
 // AppDirect brand colors
@@ -251,6 +252,8 @@ export default function TechDashboard() {
   }, [identity]);
 
   function expand(id: string) {
+    const w = WIDGETS.find((x) => x.id === id);
+    if (w) trackWidgetOpen(id, w.title);
     window.location.hash = `#/${id}`;
   }
   function collapse() {

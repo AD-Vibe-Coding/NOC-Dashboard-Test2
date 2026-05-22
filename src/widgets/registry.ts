@@ -3,6 +3,7 @@ import {
   IconActivityHeartbeat,
   IconAddressBook,
   IconChartArea,
+  IconChartBar,
   IconClipboardText,
   IconCoffee,
   IconDeviceMobileMessage,
@@ -45,6 +46,10 @@ import {
   AccessControlWidget,
   AccessControlTile,
 } from "./AccessControl";
+import {
+  AppUsageWidget,
+  AppUsageTile,
+} from "./AppUsage";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -204,6 +209,17 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: AccessControlTile,
     Full: AccessControlWidget,
+  },
+  {
+    id: "app-usage",
+    title: "App Usage",
+    description: "Per-person widget usage, daily active users, top tools",
+    icon: IconChartBar,
+    iconColor: "teal",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: AppUsageTile,
+    Full: AppUsageWidget,
   },
   {
     id: "mobility-troubleshooter",

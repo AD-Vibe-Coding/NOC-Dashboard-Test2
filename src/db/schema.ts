@@ -202,6 +202,22 @@ export const user_sessions = pgTable("user_sessions", {
 });
 
 // =============================================================================
+// App Events — per-user widget usage tracking for the manager usage dashboard.
+// One lightweight row per widget open / tool use. Kept lean intentionally —
+// only what's needed to answer "who used what, when".
+// =============================================================================
+
+export const app_events = pgTable("app_events", {
+  id: serial("id").primaryKey(),
+  user_name: text("user_name").notNull(),        // canonical roster name
+  user_role: text("user_role"),                  // tier1 | tier2 | tier3 | manager
+  event_type: text("event_type").notNull(),       // "widget_open" | "sign_in" | "page_view"
+  widget_id: text("widget_id"),                  // widget id (e.g. "zoom-queue") or null
+  widget_title: text("widget_title"),            // human-readable widget name
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
 // Metric Disputes — techs can challenge KPI values affected by outages
 // =============================================================================
 
