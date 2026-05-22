@@ -136,22 +136,10 @@ export function WfhWidget() {
         reason: reason.trim(),
       });
       const req = result.request;
-      const channels: string[] = [];
-      if (result.slack_posted) channels.push("Slack");
-      if (result.email_sent) {
-        channels.push(`email to ${result.approver_email}`);
-      } else if (
-        result.email_error &&
-        !/AI_API_KEY/.test(result.email_error)
-      ) {
-        channels.push("email failed (see server log)");
-      } else {
-        channels.push("email pending (AI agent not configured)");
-      }
       showToast({
         color: "green",
-        title: `Submitted — ${approverName} notified`,
-        body: `${formatDateRange(req.start_date, req.end_date)} · ${channels.join(" · ")}`,
+        title: "Request submitted",
+        body: `${formatDateRange(req.start_date, req.end_date)} · Awaiting approval from ${approverName}`,
       });
       setStartDate(null);
       setEndDate(null);

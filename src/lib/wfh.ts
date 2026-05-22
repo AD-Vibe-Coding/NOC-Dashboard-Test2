@@ -15,7 +15,6 @@ export interface WfhRequest {
   reviewed_by: string | null;
   reviewed_at: string | null; // ISO timestamp
   decision_note: string | null;
-  slack_message_ts: string | null;
 }
 
 export interface WfhListResponse {
@@ -42,10 +41,8 @@ export interface WfhSubmitInput {
 
 export interface WfhSubmitResult {
   request: WfhRequest;
-  slack_posted: boolean;
+  days: number;
   email_sent: boolean;
-  email_error: string | null;
-  approver_email: string;
 }
 
 export async function submitWfhRequest(input: WfhSubmitInput): Promise<WfhSubmitResult> {
