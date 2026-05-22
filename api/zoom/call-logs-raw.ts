@@ -112,7 +112,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const queues: any[] = await paginate(token, "/phone/call_queues", "call_queues");
     const userMap = new Map<string, string>(); // userId → displayName
     for (const q of queues.slice(0, 5)) {
-      const members: any[] = await paginate(token, `/phone/call_queues/${q.id}/members`, "members");
+      const members: any[] = await paginate(token, `/phone/call_queues/${q.id}/members`, "call_queue_members");
       for (const m of members) {
         if (m.id) userMap.set(m.id, m.display_name ?? m.name ?? m.id);
       }
