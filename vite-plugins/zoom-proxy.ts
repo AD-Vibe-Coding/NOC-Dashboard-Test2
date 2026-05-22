@@ -549,14 +549,20 @@ export function zoomProxyPlugin(): Plugin {
                 let missed = 0;
                 let totalSec = 0;
                 for (const c of logs) {
+                  // Queue filter — only count calls via Network/Mobility Tech Support
+                  const qname = String(c.call_queue_name ?? c.queue_name ?? c.operator_name ?? "").toLowerCase();
+                  if (!qname.includes("network tech support") && !qname.includes("mobility tech support")) continue;
                   const direction = (c.direction ?? "").toLowerCase();
                   if (direction !== "inbound") continue;
-                  const status = (c.call_result ?? c.result ?? "").toLowerCase();
-                  if (status === "missed" || status === "no_answer" || status === "no answer") {
-                    missed++;
-                  } else {
+                  const raw = (c.call_result ?? c.result ?? "").toLowerCase().replace(/_/g, " ");
+                  // Classify using the same broad ruleset as the Excel importer
+                  const isRefused = /\bno\s*answer\b/.test(raw) || /\banswered\s*by\s*other\b/.test(raw) || raw.includes("refused");
+                  const isAnswered = !isRefused && (/\banswered\b/.test(raw) || /\bconnected\b/.test(raw) || /\bcompleted\b/.test(raw));
+                  if (isAnswered) {
                     answered++;
                     totalSec += parseInt(c.duration ?? 0, 10) || 0;
+                  } else {
+                    missed++;
                   }
                 }
                 by_user[info.name] = {

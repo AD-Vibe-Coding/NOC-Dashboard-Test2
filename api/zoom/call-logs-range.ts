@@ -81,15 +81,44 @@ function emptyMonth(): MonthStats {
 }
 
 /**
+ * Whether a call log entry was routed through one of the two NOC queues.
+ * Mirrors the Excel "Operator Name" filter exactly:
+ *   "Network Tech Support"   → NOC queue
+ *   "Mobility Tech Support"  → Mobility queue
+ *
+ * The Zoom API surfaces this as `call_queue_name` on each log entry.
+ * If the field is absent or empty the call came in directly (extension
+ * dial, transfer, internal) and should be excluded — just like the
+ * Excel report which only contains queue-routed calls.
+ */
+function isQueueCall(c: any): boolean {
+  const name = String(c.call_queue_name ?? c.queue_name ?? c.operator_name ?? "").trim();
+  if (!name) return false;
+  const n = name.toLowerCase();
+  return n.includes("network tech support") || n.includes("mobility tech support");
+}
+
+/**
  * Classify a Zoom Phone call_log result string.
- *   answered → the agent picked it up
- *   refused  → call_refused / rejected / answered by other
- *   missed   → voicemail / no_answer / missed / abandoned / busy / etc.
+ * Matches the same set of strings as the Excel importer (import.ts classifyCallResult).
+ *   answered → agent picked up (answered / connected / completed / picked up / handled)
+ *   refused  → rang but answered by someone else (no answer (answered by other))
+ *   missed   → not answered by anyone (missed / voicemail / abandoned / busy / etc.)
  */
 function classify(result: string): "answered" | "refused" | "missed" {
-  const r = result.toLowerCase();
-  if (r === "answered" || r === "call_answered") return "answered";
-  if (r === "call_refused" || r === "rejected" || r.includes("refused") || r.includes("by_other") || r.includes("by other")) return "refused";
+  const r = result.toLowerCase().replace(/_/g, " ");
+  // "Refused" / "answered by other" — check BEFORE generic "answered" since
+  // "No Answer (Answered by Other)" contains the word "answered"
+  if (/\bno\s*answer\b/.test(r) || /\banswered\s*by\s*other\b/.test(r) ||
+      r.includes("refused") || r.includes("by other") || r.includes("by_other")) {
+    return "refused";
+  }
+  // Answered — all the strings Zoom uses for a successfully handled call
+  if (/\banswered\b/.test(r) || /\bconnected\b/.test(r) || /\bcompleted\b/.test(r) ||
+      /\bpicked\s*up\b/.test(r) || /\bhandled\b/.test(r)) {
+    return "answered";
+  }
+  // Everything else: missed / voicemail / abandoned / busy / no_answer / etc.
   return "missed";
 }
 
@@ -231,6 +260,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               const logs: any[] = j.call_logs ?? [];
 
               for (const c of logs) {
+                // Only count calls routed through Network Tech Support
+                // or Mobility Tech Support — matching the Excel "Operator Name"
+                // filter exactly. Direct calls, transfers, and internal calls
+                // have no call_queue_name and must be excluded.
+                if (!isQueueCall(c)) continue;
                 if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
                 const result = classify(c.result ?? c.call_result ?? "");
                 const dur    = parseInt(c.duration  ?? "0", 10) || 0;
