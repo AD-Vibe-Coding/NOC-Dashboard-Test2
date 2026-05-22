@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
 import {
-  ActionIcon,
   Alert,
-  Autocomplete,
   Badge,
   Box,
   Button,
@@ -22,7 +20,7 @@ import {
   IconBrandSlack,
   IconCoffee,
   IconHistory,
-  IconPencil,
+  IconLock,
   IconPlayerPlay,
   IconPlayerStop,
   IconUser,
@@ -36,7 +34,6 @@ import {
   postSlackMessage,
 } from "../../lib/slack";
 import { useIdentity } from "../../lib/identity";
-import { NOC_ROSTER } from "../../lib/roster";
 import {
   formatDateTime,
   formatElapsedIso,
@@ -67,12 +64,10 @@ const BREAK_TYPES = [
 export function BreakTrackerWidget() {
   const { ready, active, history, tick, refresh } = useBreakData();
 
-  // Identity — stored per-browser. The form pre-fills from it. The user can
-  // also temporarily override the name in the input without changing identity.
-  const { identity, clearIdentity } = useIdentity();
+  // Identity — always use the signed-in user's name. No overrides allowed.
+  const { identity } = useIdentity();
 
-  const [nameOverride, setNameOverride] = useState("");
-  const effectiveName = (nameOverride || identity?.name || "").trim();
+  const effectiveName = (identity?.name || "").trim();
 
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
@@ -145,7 +140,6 @@ export function BreakTrackerWidget() {
       slack_message_ts: slackTs,
       slack_posted: slackPosted,
     });
-    setNameOverride("");
     setPosting(false);
     refresh();
   }
@@ -351,59 +345,41 @@ export function BreakTrackerWidget() {
           }}
         >
           <Stack gap="sm">
-            <Group justify="space-between" wrap="nowrap" gap="xs">
-              <Group gap="xs">
-                <ThemeIcon variant="light" radius="md" color="orange" size="sm">
-                  <IconPlayerPlay size={12} />
-                </ThemeIcon>
-                <Text fw={600} size="sm">
-                  Start a Break
-                </Text>
-              </Group>
-              {identity?.name && (
-                <Group gap={4} wrap="nowrap">
-                  <Badge
-                    size="sm"
-                    variant="light"
-                    color="orange"
-                    leftSection={<IconUser size={10} />}
-                  >
-                    {identity.name}
-                  </Badge>
-                  <Tooltip label="Change identity">
-                    <ActionIcon
-                      size="sm"
-                      variant="subtle"
-                      onClick={() => clearIdentity()}
-                      aria-label="Change identity"
-                    >
-                      <IconPencil size={12} />
-                    </ActionIcon>
-                  </Tooltip>
-                </Group>
-              )}
+            <Group gap="xs">
+              <ThemeIcon variant="light" radius="md" color="orange" size="sm">
+                <IconPlayerPlay size={12} />
+              </ThemeIcon>
+              <Text fw={600} size="sm">
+                Start a Break
+              </Text>
             </Group>
             <Grid gutter="sm" align="flex-end">
               <Grid.Col span={{ base: 12, sm: 6 }}>
-                <Autocomplete
-                  label={
-                    identity?.name
-                      ? `Posting as (default: ${identity.name})`
-                      : "Your name"
-                  }
-                  placeholder={
-                    identity?.name
-                      ? `Leave blank to post as ${identity.name}`
-                      : "Pick your name"
-                  }
-                  data={NOC_ROSTER}
-                  value={nameOverride}
-                  onChange={setNameOverride}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") startBreak();
-                  }}
-                  size="sm"
-                />
+                {/* Read-only name — always the signed-in user, no overrides */}
+                <Box>
+                  <Text size="xs" fw={500} c="dimmed" mb={4}>Posting as</Text>
+                  <Group
+                    gap="xs"
+                    p="xs"
+                    style={{
+                      border: "1px solid var(--mantine-color-dark-4)",
+                      borderRadius: 8,
+                      background: "var(--mantine-color-dark-7)",
+                    }}
+                  >
+                    <ThemeIcon size="xs" color="orange" variant="light" radius="xl">
+                      <IconUser size={10} />
+                    </ThemeIcon>
+                    <Text size="sm" fw={600} style={{ flex: 1 }}>
+                      {effectiveName || "Sign in first"}
+                    </Text>
+                    <Tooltip label="Locked — breaks are always posted as you" withArrow>
+                      <ThemeIcon size="xs" color="gray" variant="transparent">
+                        <IconLock size={11} />
+                      </ThemeIcon>
+                    </Tooltip>
+                  </Group>
+                </Box>
               </Grid.Col>
               <Grid.Col span={{ base: 12, sm: 4 }}>
                 <Select
