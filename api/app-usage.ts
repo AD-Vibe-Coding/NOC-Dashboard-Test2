@@ -232,6 +232,21 @@ export default async function handler(req: any, res: any) {
     });
   }
 
-  res.setHeader("Allow", "GET, POST");
+  // ── DELETE — wipe today's events (manager only) ───────────────────────────
+  if (req.method === "DELETE") {
+    if (!requireManager(req, res)) return;
+    try {
+      const { error } = await supabaseAdmin
+        .from("app_events")
+        .delete()
+        .gte("created_at", startOf(0));
+      if (error) return res.status(500).json({ error: error.message });
+    } catch (err) {
+      return res.status(500).json({ error: err instanceof Error ? err.message : "Server error" });
+    }
+    return res.status(200).json({ ok: true, message: "Today's usage data cleared." });
+  }
+
+  res.setHeader("Allow", "GET, POST, DELETE");
   return res.status(405).json({ error: "Method not allowed." });
 }

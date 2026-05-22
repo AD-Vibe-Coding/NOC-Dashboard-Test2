@@ -31,6 +31,7 @@ import {
   IconBrandGoogle,
   IconRefresh,
   IconSearch,
+  IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
@@ -127,9 +128,27 @@ export function AppUsageWidget() {
   const [data, setData] = useState<UsageData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resetting, setResetting] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState(false);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<"week" | "today" | "days" | "name">("week");
+
+  async function resetToday() {
+    setResetting(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/app-usage", { method: "DELETE" });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? "Reset failed");
+      setResetConfirm(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Reset failed");
+    } finally {
+      setResetting(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -199,10 +218,54 @@ export function AppUsageWidget() {
             { label: "Widget opens (30d)",value: data?.summary.total_events, color: "grape"     },
           ].map(({ label, value, color }) => (
             <Card key={label} withBorder radius="md" p="md">
-              {loading ? <Skeleton height={28} radius="sm" /> : (
-                <Text fw={700} size="xl" c={color} ff="monospace">{value ?? 0}</Text>
-              )}
-              <Text size="xs" c="dimmed" mt={2}>{label}</Text>
+              <Group justify="space-between" wrap="nowrap" align="flex-start" gap={4}>
+                <Box>
+                  {loading ? <Skeleton height={28} radius="sm" width={40} /> : (
+                    <Text fw={700} size="xl" c={color} ff="monospace">{value ?? 0}</Text>
+                  )}
+                  <Text size="xs" c="dimmed" mt={2}>{label}</Text>
+                </Box>
+                {label === "Active today" && (
+                  resetConfirm ? (
+                    <Group gap={4} wrap="nowrap">
+                      <Tooltip label="Confirm: delete today's events">
+                        <ActionIcon
+                          size="sm"
+                          color="red"
+                          variant="filled"
+                          loading={resetting}
+                          onClick={resetToday}
+                          aria-label="Confirm reset"
+                        >
+                          <IconTrash size={12} />
+                        </ActionIcon>
+                      </Tooltip>
+                      <Tooltip label="Cancel">
+                        <ActionIcon
+                          size="sm"
+                          variant="subtle"
+                          onClick={() => setResetConfirm(false)}
+                          aria-label="Cancel reset"
+                        >
+                          <IconX size={12} />
+                        </ActionIcon>
+                      </Tooltip>
+                    </Group>
+                  ) : (
+                    <Tooltip label="Reset today's active users count">
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="gray"
+                        onClick={() => setResetConfirm(true)}
+                        aria-label="Reset today's usage"
+                      >
+                        <IconRefresh size={12} />
+                      </ActionIcon>
+                    </Tooltip>
+                  )
+                )}
+              </Group>
             </Card>
           ))}
         </SimpleGrid>
