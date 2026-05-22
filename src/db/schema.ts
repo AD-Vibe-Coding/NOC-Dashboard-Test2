@@ -202,6 +202,26 @@ export const user_sessions = pgTable("user_sessions", {
 });
 
 // =============================================================================
+// WFH Requests — work-from-home approval flow
+// =============================================================================
+
+export const wfh_requests = pgTable("wfh_requests", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  employee_email: text("employee_email"),
+  start_date: text("start_date").notNull(),         // YYYY-MM-DD
+  end_date: text("end_date").notNull(),              // YYYY-MM-DD
+  reason: text("reason").notNull(),
+  status: text("status").notNull(),                 // "pending" | "approved" | "denied"
+  submitted_at: text("submitted_at").notNull(),      // ISO timestamp
+  reviewed_by: text("reviewed_by"),
+  reviewed_at: text("reviewed_at"),                 // ISO timestamp
+  decision_note: text("decision_note"),
+  slack_message_ts: text("slack_message_ts"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
 // App Events — per-user widget usage tracking for the manager usage dashboard.
 // One lightweight row per widget open / tool use. Kept lean intentionally —
 // only what's needed to answer "who used what, when".

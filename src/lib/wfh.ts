@@ -27,11 +27,10 @@ export interface WfhListResponse {
 
 import { fetchJson } from "./fetch-resilient";
 
-export async function fetchWfhRequests(viewer?: string): Promise<WfhListResponse> {
-  const url = viewer
-    ? `/api/wfh/requests?as=${encodeURIComponent(viewer)}`
-    : "/api/wfh/requests";
-  return fetchJson<WfhListResponse>(url);
+// viewer param kept for backward compat but no longer sent —
+// the server derives identity from the session cookie.
+export async function fetchWfhRequests(_viewer?: string): Promise<WfhListResponse> {
+  return fetchJson<WfhListResponse>("/api/wfh/requests");
 }
 
 export interface WfhSubmitInput {
