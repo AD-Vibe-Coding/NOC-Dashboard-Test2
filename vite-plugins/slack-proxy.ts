@@ -494,12 +494,15 @@ export function slackProxyPlugin(): Plugin {
             return;
           }
 
-          // Always prefix the username into the body so the post is
-          // identifiable even when chat:write.customize isn't granted.
-          const effectiveText = username ? `${username}: ${text}` : text;
+          // When chat:write.customize is granted, use the raw text — Slack
+          // shows the username field as the sender so no prefix is needed.
+          // Only fall back to prefixing the text if the scope is denied.
+          const fallbackText = username ? `${username}: ${text}` : text;
 
           async function postOnce(opts: { withCustomize: boolean }): Promise<any> {
-            const payload: any = { channel: channelId, text: effectiveText };
+            // Use clean text with customize, prefixed text without (fallback)
+            const msgText = opts.withCustomize ? text : fallbackText;
+            const payload: any = { channel: channelId, text: msgText };
             if (thread_ts) payload.thread_ts = thread_ts;
             if (opts.withCustomize) {
               if (username) payload.username = username;
@@ -517,11 +520,12 @@ export function slackProxyPlugin(): Plugin {
           }
 
           try {
-            let j: any = await postOnce({ withCustomize: !!(username || icon_emoji) });
+            const wantCustomize = !!(username || icon_emoji);
+            let j: any = await postOnce({ withCustomize: wantCustomize });
             let customizeDenied = false;
             if (
               !j.ok &&
-              (username || icon_emoji) &&
+              wantCustomize &&
               (j.error === "not_allowed_token_type" ||
                 j.error === "invalid_arg_name" ||
                 j.error === "missing_scope" ||
@@ -546,10 +550,10 @@ export function slackProxyPlugin(): Plugin {
                 demo: false,
                 ts: j.ts,
                 channel: channelName,
-                text: effectiveText,
+                text: customizeDenied ? fallbackText : text,
                 thread_ts: thread_ts ?? null,
                 warning: customizeDenied
-                  ? "Bot lacks `chat:write.customize` — posted with name prefixed in body. Add the scope and reinstall to display per-user senders."
+                  ? "Bot lacks `chat:write.customize` — posted with name prefixed in body."
                   : undefined,
               }),
             );
