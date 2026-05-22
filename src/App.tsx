@@ -48,6 +48,7 @@ import { SIZE_TO_SPAN } from "./widgets/types";
 import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
+import { NotificationBell } from "./widgets/NotificationBell";
 import { useIdentity } from "./lib/identity";
 import {
   canAccess,
@@ -302,6 +303,7 @@ export default function App() {
                   {isDark ? <IconSun size={18} /> : <IconMoon size={18} />}
                 </ActionIcon>
               </Tooltip>
+              <NotificationBell onNavigate={expand} />
               <IdentityBadge />
               <Text
                 size="xs"
