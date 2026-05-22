@@ -12,6 +12,7 @@ import {
   IconHome,
   IconMail,
   IconMailForward,
+  IconPhone,
   IconReportAnalytics,
   IconSearch,
   IconShield,
@@ -50,6 +51,10 @@ import {
   AppUsageWidget,
   AppUsageTile,
 } from "./AppUsage";
+import {
+  ZoomCallMetricsWidget,
+  ZoomCallMetricsTile,
+} from "./ZoomCallMetrics";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -220,6 +225,17 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: AppUsageTile,
     Full: AppUsageWidget,
+  },
+  {
+    id: "zoom-call-metrics",
+    title: "Zoom Call Metrics (Test)",
+    description: "Jan–Apr 2026 inbound call data pulled live from Zoom Phone API",
+    icon: IconPhone,
+    iconColor: "green",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: ZoomCallMetricsTile,
+    Full: ZoomCallMetricsWidget,
   },
   {
     id: "mobility-troubleshooter",
