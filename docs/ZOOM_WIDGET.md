@@ -76,40 +76,54 @@ No user login, no redirect, no callback URL needed.
 
 ---
 
-## Required OAuth Scopes
+## OAuth Scopes
 
-Add these scopes in **Zoom Marketplace → your app → Scopes**.
+All scopes are configured in **Zoom Marketplace → your app → Scopes**.
 
-### Core scopes (required for live mode to work at all)
-
-| Scope | Category | Purpose |
-|---|---|---|
-| `phone:read:list_call_queues:admin` | Zoom Phone | Lists all call queues in the account. Used to discover queue IDs and names so the widget can display the correct queue and resolve `ZOOM_QUEUE_ID` by name. |
-| `phone:read:list_call_queue_members:admin` | Zoom Phone | Fetches the member roster for each queue. Returns each agent's name, user ID, and the `receive_call` flag which is the primary ready/not-ready signal. |
-
-These two scopes are the **minimum** needed for the widget to run in live mode.
+> **Current status:** The five Phone scopes below are confirmed active in the Zoom app.
+> The one remaining recommended scope (`user:read:presence_status:admin`) is a **Core** scope —
+> it lives under the **User** category in Zoom Marketplace, not the Phone category,
+> which is why it isn't shown in the Phone section. See the setup note below.
 
 ---
 
-### Optional scopes (enrich status detail)
+### ✅ Active — Phone scopes (all confirmed added)
 
-| Scope | Category | Purpose | What you gain |
-|---|---|---|---|
-| `user:read:presence_status:admin` | Core Zoom | Reads each agent's real-time Zoom presence (Available, In a meeting, On the phone, Do Not Disturb, etc.). | Allows the widget to show `on_call` status for agents actively on a call, rather than only `ready` / `not_ready` from the queue opt-in flag. Also surfaces `wrap_up` after a call ends. |
-| `phone:read:list_users:admin` | Zoom Phone | Lists all Zoom Phone users in the account. | Lets the widget enumerate agents who are licensed for Zoom Phone but not yet assigned to a queue — useful for headcount visibility. |
-| `phone:read:list_call_logs:admin` | Zoom Phone | Reads historical call logs for the account or individual users. | Enables future features: average handle time, calls per hour, missed call tracking. Not currently used in the widget but included in the Zoom app setup for forward compatibility. |
+| Scope | Zoom label | Purpose |
+|---|---|---|
+| `phone:read:list_call_queues:admin` | View call queues | Lists all call queues in the account. Used to discover queue IDs and names so the widget can display the correct queue and resolve `ZOOM_QUEUE_ID` by name. Without this scope the widget cannot identify any queue and falls back to snapshot mode. |
+| `phone:read:list_call_queue_members:admin` | View call queue members | Fetches the full agent roster for each queue. Returns each agent's name, user ID, and the `receive_call` flag — the primary ready/not-ready signal the widget uses to show who is opted in or out of the queue. |
+| `phone:read:user:admin` | View a phone user | Reads an individual Zoom Phone user's profile and current phone settings (assigned numbers, caller ID, etc.). Used for per-user status lookups and to resolve display names when a user ID is returned without a name. |
+| `phone:read:list_users:admin` | View phone users | Lists every user who holds a Zoom Phone licence in the account. Lets the widget enumerate agents who are licensed for Zoom Phone but not yet assigned to a queue — useful for headcount visibility and future on-call scheduling features. |
+| `phone:read:list_call_logs:admin` | View call logs | Reads historical inbound and outbound call logs for the account or individual users. Enables future features: average handle time, calls per hour, missed call rate, and daily call volume charts. Currently reserved for forward compatibility. |
 
 ---
 
-### Scope summary table
+### ⚡ Recommended — Core scope (not yet added)
 
-| Scope | Required | Used for |
+| Scope | Category | Zoom label | Purpose | Impact if missing |
+|---|---|---|---|---|
+| `user:read:presence_status:admin` | User (Core Zoom — not Phone) | Read presence statuses of users | Reads each agent's real-time Zoom presence: Available, In a meeting, On the phone, Do Not Disturb, Away, etc. | Without this scope the widget **cannot detect who is actively on a call**. Every opted-in agent shows as "Ready" even while talking. Active-call elapsed timers and the `on_call` / `wrap_up` statuses are unavailable. |
+
+**How to add it:**
+
+1. In your Zoom app → **Scopes** tab → **Add Scopes**
+2. Search for `user:read:presence_status:admin` — it appears under the **User** category (not Phone)
+3. Add it, then click **Activate your app** to apply
+4. No credential rotation needed — the server picks it up automatically on the next token refresh
+
+---
+
+### Complete scope reference
+
+| Scope | Status | Widget feature unlocked |
 |---|---|---|
-| `phone:read:list_call_queues:admin` | ✅ Yes | Discover queues, resolve `ZOOM_QUEUE_ID` |
-| `phone:read:list_call_queue_members:admin` | ✅ Yes | Agent roster + `receive_call` ready/not-ready signal |
-| `user:read:presence_status:admin` | ⚡ Recommended | Detect active calls (`on_call`), wrap-up state |
-| `phone:read:list_users:admin` | 🔲 Optional | Full phone-user enumeration |
-| `phone:read:list_call_logs:admin` | 🔲 Optional | Historical call data (future feature) |
+| `phone:read:list_call_queues:admin` | ✅ Active | Queue discovery, queue name in header |
+| `phone:read:list_call_queue_members:admin` | ✅ Active | Agent roster, ready / not-ready status |
+| `phone:read:user:admin` | ✅ Active | Per-user profile lookup, display name resolution |
+| `phone:read:list_users:admin` | ✅ Active | Full phone-user enumeration, headcount visibility |
+| `phone:read:list_call_logs:admin` | ✅ Active | Historical call data (reserved for future analytics) |
+| `user:read:presence_status:admin` | ⚡ Recommended — not yet added | Live `on_call` detection, elapsed call timers, wrap-up state |
 
 ---
 
@@ -163,13 +177,21 @@ ZOOM_QUEUE_ID=
 
 ### 2. Add Scopes
 
-1. Inside the app, go to the **Scopes** tab.
-2. Click **Add Scopes** and search for each scope listed in the Required section above.
-3. Add at minimum:
-   - `phone:read:list_call_queues:admin`
-   - `phone:read:list_call_queue_members:admin`
-4. Optionally add `user:read:presence_status:admin` for active-call detection.
-5. Click **Continue** → **Activate your app**.
+The five Phone scopes are already active. The only remaining scope to add is:
+
+1. Inside the app, go to the **Scopes** tab → **Add Scopes**
+2. Search for `user:read:presence_status:admin` (it's under the **User** category, not Phone)
+3. Add it and click **Activate your app**
+
+**Already added ✅**
+- `phone:read:list_call_queues:admin`
+- `phone:read:list_call_queue_members:admin`
+- `phone:read:user:admin`
+- `phone:read:list_users:admin`
+- `phone:read:list_call_logs:admin`
+
+**Still needed ⚡**
+- `user:read:presence_status:admin` — required for live on-call detection and elapsed timers
 
 ### 3. Copy Credentials
 
@@ -266,8 +288,8 @@ Same shape but `"source": "snapshot"` and `"warning"` contains an explanation
 |---|---|---|
 | Widget stuck on 🟡 snapshot | Credentials missing or wrong | Double-check `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET` in `.env` and restart the server |
 | Warning: "No Zoom Phone call queues found" | App not activated, or account doesn't have Zoom Phone | Activate the app in Zoom Marketplace; confirm the account has Zoom Phone licensed |
-| Everyone shows as "Ready" — no "On Call" | `user:read:presence_status:admin` scope missing | Add the scope in Zoom Marketplace and reactivate the app |
-| 403 errors in server console for presence | Scope added but app not reactivated | Click **Activate your app** again in Zoom Marketplace after adding scopes |
+| Everyone shows as "Ready" — no "On Call" | `user:read:presence_status:admin` not yet added | Add the scope under the **User** category in Zoom Marketplace (not Phone), then reactivate the app |
+| 403 errors in server console for presence calls | Scope added but app not reactivated | Click **Activate your app** again in Zoom Marketplace after adding scopes |
 | Wrong queue shown | Multiple queues match `ZOOM_QUEUE_ID` | Use the exact queue UUID instead of a name fragment |
 | Token refresh errors | Client Secret rotated in Zoom | Update `ZOOM_CLIENT_SECRET` in `.env` and restart |
 
