@@ -211,8 +211,8 @@ export const metric_disputes = pgTable("metric_disputes", {
   ticket_ref: text("ticket_ref"),                      // trouble_id for quick reference
   submitted_by: text("submitted_by").notNull(),        // tech's canonical name
   field_name: text("field_name").notNull(),            // "ack_minutes" | "carrier_ticket_minutes"
-  original_value: real("original_value").notNull(),    // the current (bad) value
-  proposed_value: real("proposed_value").notNull(),     // what it should be
+  original_value: real("original_value"),              // the current (bad) value
+  proposed_value: real("proposed_value"),              // what it should be
   reason: text("reason").notNull(),                    // freeform explanation
   evidence_note: text("evidence_note"),                // Slack thread, notes, etc.
   attachments_json: text("attachments_json"),          // JSON array of {name, type, size, dataUrl}
