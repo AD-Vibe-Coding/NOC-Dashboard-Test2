@@ -1,19 +1,8 @@
 /**
  * GET /api/zoom/compare
  *
- * Returns a side-by-side comparison of inbound call data from:
- *   A) Zoom Phone API  (live, filtered to Network/Mobility Tech Support queues)
- *   B) Supabase         (Excel-imported performance_metrics where source_type='calls')
- *
- * Aggregated per agent per month for Jan–Apr 2026.
- *
- * Response:
- * {
- *   source_api: "live" | "snapshot",
- *   months: string[],
- *   rows: CompareRow[],
- *   totals: { api: MonthTotals, excel: MonthTotals }
- * }
+ * Side-by-side comparison: Zoom Phone queue call logs vs Excel-imported performance_metrics.
+ * Uses queue call logs (not per-user) so all agents' data is returned.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
@@ -21,7 +10,6 @@ import { supabaseAdmin } from "../_lib/supabase-admin.js";
 const MONTHS = ["2026-01", "2026-02", "2026-03", "2026-04"];
 const TARGET_QUEUES = ["network tech support", "mobility tech support"];
 
-// ── Auth (same as other zoom endpoints) ───────────────────────────────────────
 let _token: { value: string; expiresAt: number } | null = null;
 async function getToken(id: string, cid: string, sec: string): Promise<string> {
   if (_token && _token.expiresAt > Date.now() + 60_000) return _token.value;
@@ -41,8 +29,8 @@ async function paginate(token: string, path: string, key: string): Promise<any[]
   let next = "";
   for (let i = 0; i < 10; i++) {
     const sep = path.includes("?") ? "&" : "?";
-    const url = `${path}${sep}page_size=100${next ? `&next_page_token=${encodeURIComponent(next)}` : ""}`;
-    const r = await fetch(`https://api.zoom.us/v2${url}`, { headers: { Authorization: `Bearer ${token}` } });
+    const url = `https://api.zoom.us/v2${path}${sep}page_size=100${next ? `&next_page_token=${encodeURIComponent(next)}` : ""}`;
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!r.ok) break;
     const j: any = await r.json();
     all.push(...(Array.isArray(j?.[key]) ? j[key] : []));
@@ -52,91 +40,67 @@ async function paginate(token: string, path: string, key: string): Promise<any[]
   return all;
 }
 
-function classifyResult(raw: string): "answered" | "refused" | "missed" {
+function isTargetQueue(name: string): boolean {
+  const n = name.toLowerCase();
+  return TARGET_QUEUES.some((q) => n.includes(q));
+}
+
+function classifyResult(raw: string): "answered" | "other" {
   const s = raw.toLowerCase().replace(/_/g, " ");
-  if (/\bno\s*answer\b/.test(s) || /\banswered\s*by\s*other\b/.test(s) || s.includes("refused")) return "refused";
   if (/\banswered\b/.test(s) || /\bconnected\b/.test(s) || /\bcompleted\b/.test(s) || /\bpicked\s*up\b/.test(s)) return "answered";
-  return "missed";
+  return "other";
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface MonthStat { answered: number; refused: number; missed: number; }
-
-interface CompareRow {
-  agent: string;
-  by_month: Record<string, {
-    api:   MonthStat | null;
-    excel: MonthStat | null;
-    delta_answered: number | null;   // api.answered - excel.answered
-  }>;
-  total: {
-    api_answered:   number;
-    excel_answered: number;
-    delta:          number;
-  };
-}
-
-// ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
+  if (req.method !== "GET") { res.setHeader("Allow", "GET"); return res.status(405).json({ error: "Method not allowed" }); }
 
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+  const accountId    = String(process.env.ZOOM_ACCOUNT_ID    ?? "").trim();
+  const clientId     = String(process.env.ZOOM_CLIENT_ID     ?? "").trim();
+  const clientSecret = String(process.env.ZOOM_CLIENT_SECRET ?? "").trim();
 
-  // ── 1. Fetch Excel (Supabase) data ────────────────────────────────────────
-  // Get all performance_metrics rows with source_type='calls' for Jan-Apr 2026
-  type DBRow = { member_name: string; period_month: string | null; success_count: number | null; raw_json?: string; };
-  let dbRows: DBRow[] = [];
+  // ── Excel side (Supabase) ────────────────────────────────────────────────────
+  const excelByAgentMonth: Record<string, Record<string, number>> = {};
+  let excelWarning: string | null = null;
   try {
     const { data, error } = await supabaseAdmin
       .from("performance_metrics")
       .select("member_name, period_month, success_count")
       .eq("source_type", "calls")
-      .in("period_month", MONTHS);
-    if (!error) dbRows = (data as DBRow[]) ?? [];
-  } catch { /* non-fatal */ }
+      .in("period_month", MONTHS)
+      .gte("period_start", "2026-01-01")
+      .lte("period_start", "2026-04-30");
 
-  // Aggregate Excel data: excelMap[agentName][month] = { answered, refused, missed }
-  const excelMap = new Map<string, Record<string, MonthStat>>();
-  for (const row of dbRows) {
-    const agent = row.member_name ?? "";
-    const month = row.period_month ?? "";
-    if (!agent || !MONTHS.includes(month)) continue;
-    if (!excelMap.has(agent)) excelMap.set(agent, {});
-    const byMonth = excelMap.get(agent)!;
-    if (!byMonth[month]) byMonth[month] = { answered: 0, refused: 0, missed: 0 };
-    // success_count=1 means answered, success_count=0 means not answered
-    if (row.success_count === 1) byMonth[month].answered++;
-    else if (row.success_count === 0) byMonth[month].missed++; // simplified — refused not separated in DB
+    if (error) throw new Error(error.message);
+    for (const row of data ?? []) {
+      const name  = String(row.member_name ?? "");
+      const month = String(row.period_month ?? "");
+      const isAns = Number(row.success_count) === 1;
+      if (!name || !month || !isAns) continue;
+      if (!excelByAgentMonth[name]) excelByAgentMonth[name] = {};
+      excelByAgentMonth[name][month] = (excelByAgentMonth[name][month] ?? 0) + 1;
+    }
+  } catch (e) {
+    excelWarning = `Excel data unavailable: ${e instanceof Error ? e.message : String(e)}`;
   }
 
-  // ── 2. Fetch Zoom API data ────────────────────────────────────────────────
-  const accountId    = String(process.env.ZOOM_ACCOUNT_ID    ?? "").trim();
-  const clientId     = String(process.env.ZOOM_CLIENT_ID     ?? "").trim();
-  const clientSecret = String(process.env.ZOOM_CLIENT_SECRET ?? "").trim();
-
-  // apiMap[agentName][month] = MonthStat
-  const apiMap = new Map<string, Record<string, MonthStat>>();
-  let apiSource: "live" | "unavailable" = "unavailable";
-  let apiWarning: string | null = null;
+  // ── Zoom API side (queue call logs) ─────────────────────────────────────────
+  const zoomByAgentMonth: Record<string, Record<string, number>> = {};
+  let zoomSource: "live" | "snapshot" = "snapshot";
+  let zoomWarning: string | null = null;
+  let queuesFound: string[] = [];
 
   if (accountId && clientId && clientSecret) {
     try {
       const token = await getToken(accountId, clientId, clientSecret);
-      const queues: any[] = await paginate(token, "/phone/call_queues", "call_queues");
-      const userMap = new Map<string, string>();
-      for (const q of queues.slice(0, 5)) {
-        const members: any[] = await paginate(token, `/phone/call_queues/${q.id}/members`, "call_queue_members");
-        for (const m of members) {
-          if (m.id) userMap.set(m.id, m.display_name ?? m.name ?? m.id);
-        }
-      }
+      const allQueues: any[] = await paginate(token, "/phone/call_queues", "call_queues");
+      const targetQueues = allQueues.filter((q) => isTargetQueue(String(q.name ?? "")));
+      queuesFound = targetQueues.map((q) => q.name);
 
-      await Promise.all(
-        Array.from(userMap.entries()).slice(0, 30).map(async ([uid, agentName]) => {
+      if (targetQueues.length > 0) {
+        const seenCallIds = new Set<string>();
+        for (const queue of targetQueues) {
           for (const monthKey of MONTHS) {
             const [year, mon] = monthKey.split("-").map(Number);
             const fromDate = `${monthKey}-01`;
@@ -144,99 +108,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const toDate   = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
 
             let next = "";
-            for (let page = 0; page < 10; page++) {
-              const u = new URL(`https://api.zoom.us/v2/phone/users/${uid}/call_logs`);
+            for (let page = 0; page < 20; page++) {
+              const u = new URL(`https://api.zoom.us/v2/phone/call_queues/${queue.id}/call_logs`);
               u.searchParams.set("from", fromDate);
               u.searchParams.set("to",   toDate);
-              u.searchParams.set("type",      "all");
               u.searchParams.set("page_size", "300");
               if (next) u.searchParams.set("next_page_token", next);
-
               const r = await fetch(u.toString(), { headers: { Authorization: `Bearer ${token}` } });
               if (!r.ok) break;
               const j: any = await r.json();
-              const logs: any[] = j.call_logs ?? [];
-
-              if (!apiMap.has(agentName)) apiMap.set(agentName, {});
-              const byMonth = apiMap.get(agentName)!;
-              if (!byMonth[monthKey]) byMonth[monthKey] = { answered: 0, refused: 0, missed: 0 };
+              const logs: any[] = j.call_logs ?? j.calls ?? [];
 
               for (const c of logs) {
-                if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
-                const queueName = String(c.call_queue_name ?? c.queue_name ?? c.operator_name ?? "").toLowerCase();
-                if (!TARGET_QUEUES.some((q) => queueName.includes(q))) continue;
-                const result = classifyResult(String(c.result ?? c.call_result ?? ""));
-                byMonth[monthKey][result]++;
+                const callId = String(c.call_id ?? c.id ?? "");
+                if (callId && seenCallIds.has(callId)) continue;
+                if (callId) seenCallIds.add(callId);
+
+                if (classifyResult(String(c.result ?? c.call_result ?? "")) !== "answered") continue;
+                const agentName = c.answered_by?.name ?? c.answered_by?.display_name ?? c.callee_name ?? null;
+                if (!agentName) continue;
+
+                // Derive month from start_time
+                const st = String(c.start_time ?? "");
+                const mKey = st.slice(0, 7); // "2026-01"
+                if (!MONTHS.includes(mKey)) continue;
+
+                if (!zoomByAgentMonth[agentName]) zoomByAgentMonth[agentName] = {};
+                zoomByAgentMonth[agentName][mKey] = (zoomByAgentMonth[agentName][mKey] ?? 0) + 1;
               }
 
               next = String(j.next_page_token ?? "");
               if (!next) break;
             }
           }
-        }),
-      );
-
-      apiSource = "live";
-    } catch (err) {
-      apiWarning = err instanceof Error ? err.message.slice(0, 200) : String(err);
+        }
+        zoomSource = "live";
+      } else {
+        zoomWarning = `No matching queues found. Available: ${allQueues.map((q) => q.name).join(", ") || "(none)"}`;
+      }
+    } catch (e) {
+      zoomWarning = `Zoom API error: ${e instanceof Error ? e.message.slice(0, 120) : String(e)}`;
     }
   } else {
-    apiWarning = "Zoom credentials not configured.";
+    zoomWarning = "Zoom credentials not configured.";
   }
 
-  // ── 3. Build comparison rows ──────────────────────────────────────────────
-  // Union of all agent names from both sources
-  const allAgents = new Set([...excelMap.keys(), ...apiMap.keys()]);
+  // ── Build comparison rows ────────────────────────────────────────────────────
+  const allAgents = new Set([...Object.keys(zoomByAgentMonth), ...Object.keys(excelByAgentMonth)]);
 
-  const rows: CompareRow[] = Array.from(allAgents).map((agent) => {
-    const apiByMonth   = apiMap.get(agent)   ?? {};
-    const excelByMonth = excelMap.get(agent) ?? {};
-
-    const byMonth: CompareRow["by_month"] = {};
-    let totalApiAnswered = 0;
-    let totalExcelAnswered = 0;
-
+  const rows = Array.from(allAgents).map((agent) => {
+    const byMonth: Record<string, { api: number; excel: number; delta: number }> = {};
+    let totalApi = 0, totalExcel = 0;
     for (const m of MONTHS) {
-      const api   = apiByMonth[m]   ?? null;
-      const excel = excelByMonth[m] ?? null;
-      const delta = (api && excel)
-        ? api.answered - excel.answered
-        : api   ? api.answered
-        : excel ? -excel.answered
-        : null;
-      byMonth[m] = { api, excel, delta_answered: delta };
-      totalApiAnswered   += api?.answered   ?? 0;
-      totalExcelAnswered += excel?.answered ?? 0;
+      const api   = zoomByAgentMonth[agent]?.[m] ?? 0;
+      const excel = excelByAgentMonth[agent]?.[m] ?? 0;
+      byMonth[m] = { api, excel, delta: api - excel };
+      totalApi   += api;
+      totalExcel += excel;
     }
-
-    return {
-      agent,
-      by_month: byMonth,
-      total: {
-        api_answered:   totalApiAnswered,
-        excel_answered: totalExcelAnswered,
-        delta:          totalApiAnswered - totalExcelAnswered,
-      },
-    };
-  });
-
-  // Sort by total API answered descending
-  rows.sort((a, b) => b.total.api_answered - a.total.api_answered);
+    return { agent, by_month: byMonth, total_api: totalApi, total_excel: totalExcel, total_delta: totalApi - totalExcel };
+  }).sort((a, b) => b.total_excel - a.total_excel || b.total_api - a.total_api);
 
   // Grand totals
-  const grandApiAnswered   = rows.reduce((s, r) => s + r.total.api_answered,   0);
-  const grandExcelAnswered = rows.reduce((s, r) => s + r.total.excel_answered, 0);
+  const grandTotals = MONTHS.reduce((acc, m) => {
+    acc[m] = {
+      api:   rows.reduce((s, r) => s + r.by_month[m].api,   0),
+      excel: rows.reduce((s, r) => s + r.by_month[m].excel, 0),
+      delta: 0,
+    };
+    acc[m].delta = acc[m].api - acc[m].excel;
+    return acc;
+  }, {} as Record<string, { api: number; excel: number; delta: number }>);
 
   return res.status(200).json({
-    source_api: apiSource,
-    api_warning: apiWarning,
+    source_api: zoomSource,
     months: MONTHS,
-    excel_rows_loaded: dbRows.length,
     rows,
-    grand_total: {
-      api_answered:   grandApiAnswered,
-      excel_answered: grandExcelAnswered,
-      delta:          grandApiAnswered - grandExcelAnswered,
-    },
+    grand_totals: grandTotals,
+    queues_found: queuesFound,
+    zoom_warning: zoomWarning,
+    excel_warning: excelWarning,
   });
 }
