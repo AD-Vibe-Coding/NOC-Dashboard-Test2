@@ -1,8 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/ai/chat.ts": {
-      "maxDuration": 60
-    }
+    "api/ai/chat.ts":              { "maxDuration": 60 },
+    "api/confluence/extract-images.ts": { "maxDuration": 60 },
+    "api/zoom/queue.ts":           { "maxDuration": 30 },
+    "api/access-control.ts":       { "maxDuration": 10 },
+    "api/auth/callback.ts":        { "maxDuration": 15 },
+    "api/auth/dev-login.ts":       { "maxDuration": 10 }
   }
 }
+
