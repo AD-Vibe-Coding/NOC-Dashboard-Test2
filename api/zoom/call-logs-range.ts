@@ -93,25 +93,38 @@ function classifyResult(raw: string): "answered" | "refused" | "missed" {
   return "missed";
 }
 
-/** Fetch all pages of queue call logs for a given month. */
-async function fetchQueueLogs(token: string, queueId: string, fromDate: string, toDate: string): Promise<any[]> {
+/**
+ * Fetch all inbound call logs for the account for a given date range.
+ * Requires: phone:read:call_log:admin scope (NOT phone:read:list_call_logs:admin).
+ * Returns { logs, scopeError } — scopeError is set if the scope is missing.
+ */
+async function fetchAccountCallLogs(
+  token: string, fromDate: string, toDate: string,
+): Promise<{ logs: any[]; scopeError: string | null }> {
   const all: any[] = [];
   let next = "";
-  for (let page = 0; page < 20; page++) {
-    const u = new URL(`https://api.zoom.us/v2/phone/call_queues/${queueId}/call_logs`);
+  for (let page = 0; page < 30; page++) {
+    const u = new URL("https://api.zoom.us/v2/phone/call_logs");
     u.searchParams.set("from", fromDate);
     u.searchParams.set("to",   toDate);
+    u.searchParams.set("type", "all");
     u.searchParams.set("page_size", "300");
     if (next) u.searchParams.set("next_page_token", next);
     const r = await fetch(u.toString(), { headers: { Authorization: `Bearer ${token}` } });
+    if (r.status === 403 || r.status === 400) {
+      const j: any = await r.json().catch(() => ({}));
+      const msg = String(j.message ?? j.code ?? `HTTP ${r.status}`);
+      return { logs: [], scopeError: msg.includes("phone:read:call_log:admin")
+        ? `Missing scope: add "phone:read:call_log:admin" in Zoom Marketplace → your app → Scopes → (User category), then reinstall.`
+        : `Zoom API error: ${msg}` };
+    }
     if (!r.ok) break;
     const j: any = await r.json();
-    const logs: any[] = j.call_logs ?? j.calls ?? [];
-    all.push(...logs);
+    all.push(...(Array.isArray(j?.call_logs) ? j.call_logs : []));
     next = String(j.next_page_token ?? "");
     if (!next) break;
   }
-  return all;
+  return { logs: all, scopeError: null };
 }
 
 // ── Snapshot ──────────────────────────────────────────────────────────────────
@@ -197,88 +210,79 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       );
     }
 
-    // 2. For each target queue × month, fetch queue call logs
-    // Results: per-agent answered counts + team-level totals
+    // 2. Fetch ALL account call logs month by month, filter to target queues
     const agentMap = new Map<string, { name: string; by_month: Record<string, MonthStats> }>();
     const teamByMonth: Record<string, MonthStats> = {};
     for (const m of MONTHS) teamByMonth[m] = emptyMonth();
+    const seenCallIds = new Set<string>();
+    const targetQueueNames = targetQueues.map((q) => String(q.name ?? "").toLowerCase());
 
-    const seenCallIds = new Set<string>(); // deduplicate if a call appears in multiple queues
+    for (const monthKey of MONTHS) {
+      const [year, mon] = monthKey.split("-").map(Number);
+      const fromDate = `${monthKey}-01`;
+      const lastDay  = new Date(Date.UTC(year, mon, 0)).getDate();
+      const toDate   = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
 
-    for (const queue of targetQueues) {
-      for (const monthKey of MONTHS) {
-        const [year, mon] = monthKey.split("-").map(Number);
-        const fromDate = `${monthKey}-01`;
-        const lastDay  = new Date(Date.UTC(year, mon, 0)).getDate();
-        const toDate   = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
+      const { logs, scopeError } = await fetchAccountCallLogs(token, fromDate, toDate);
 
-        let logs: any[];
-        try {
-          logs = await fetchQueueLogs(token, queue.id, fromDate, toDate);
-        } catch {
-          continue; // skip this queue/month on error
+      if (scopeError) {
+        return res.status(200).json(snap(scopeError));
+      }
+
+      for (const c of logs) {
+        // Filter to target queues
+        const qName = String(c.call_queue_name ?? c.queue_name ?? "").toLowerCase();
+        if (!targetQueueNames.some((tq) => qName.includes(tq) || tq.includes(qName.split(" ")[0]))) continue;
+
+        // Only inbound
+        if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
+
+        const callId = String(c.call_id ?? c.id ?? "");
+        if (callId && seenCallIds.has(callId)) continue;
+        if (callId) seenCallIds.add(callId);
+
+        const resultRaw = String(c.result ?? c.call_result ?? "");
+        const outcome   = classifyResult(resultRaw);
+        const dur       = parseInt(String(c.duration ?? "0"), 10) || 0;
+        const wait      = parseInt(String(c.wait_time ?? c.waiting_time ?? "0"), 10) || 0;
+
+        const team = teamByMonth[monthKey];
+        if (outcome === "answered") {
+          team.answered++;
+          team.handle_seconds_sum += dur;
+          team.handle_count++;
+          if (wait > 0) { team.wait_seconds_sum += wait; team.wait_count++; }
+        } else if (outcome === "refused") {
+          team.refused++;
+        } else {
+          team.missed++;
         }
 
-        for (const c of logs) {
-          // Deduplicate by call_id
-          const callId = String(c.call_id ?? c.id ?? "");
-          if (callId && seenCallIds.has(callId)) continue;
-          if (callId) seenCallIds.add(callId);
-
-          const resultRaw = String(c.result ?? c.call_result ?? "");
-          const outcome   = classifyResult(resultRaw);
-          const dur       = parseInt(String(c.duration ?? "0"), 10) || 0;
-          const wait      = parseInt(String(c.wait_time ?? c.waiting_time ?? "0"), 10) || 0;
-
-          // Team totals
-          const team = teamByMonth[monthKey];
-          if (outcome === "answered") {
-            team.answered++;
-            team.handle_seconds_sum += dur;
-            team.handle_count++;
-            if (wait > 0) { team.wait_seconds_sum += wait; team.wait_count++; }
-          } else if (outcome === "refused") {
-            team.refused++;
-          } else {
-            team.missed++;
-          }
-
-          // Per-agent attribution for answered calls (only answered calls have answered_by)
-          if (outcome === "answered") {
-            const agentName =
-              c.answered_by?.name ??
-              c.answered_by?.display_name ??
-              c.callee_name ??
-              null;
-            if (agentName) {
-              if (!agentMap.has(agentName)) {
-                agentMap.set(agentName, {
-                  name: agentName,
-                  by_month: Object.fromEntries(MONTHS.map((m) => [m, emptyMonth()])),
-                });
-              }
-              const agent = agentMap.get(agentName)!;
-              const ab = agent.by_month[monthKey];
-              ab.answered++;
-              ab.handle_seconds_sum += dur;
-              ab.handle_count++;
-              if (wait > 0) { ab.wait_seconds_sum += wait; ab.wait_count++; }
+        if (outcome === "answered") {
+          const agentName = c.answered_by?.name ?? c.answered_by?.display_name ?? c.callee_name ?? c.user_name ?? null;
+          if (agentName) {
+            if (!agentMap.has(agentName)) {
+              agentMap.set(agentName, { name: agentName, by_month: Object.fromEntries(MONTHS.map((m) => [m, emptyMonth()])) });
             }
+            const ab = agentMap.get(agentName)!.by_month[monthKey];
+            ab.answered++;
+            ab.handle_seconds_sum += dur;
+            ab.handle_count++;
+            if (wait > 0) { ab.wait_seconds_sum += wait; ab.wait_count++; }
           }
         }
       }
     }
 
-    const agents = Array.from(agentMap.values()).sort((a, b) => {
-      const ta = MONTHS.reduce((s, m) => s + a.by_month[m].answered, 0);
-      const tb = MONTHS.reduce((s, m) => s + b.by_month[m].answered, 0);
-      return tb - ta;
-    });
+    const agents = Array.from(agentMap.values()).sort((a, b) =>
+      MONTHS.reduce((s, m) => s + b.by_month[m].answered, 0) -
+      MONTHS.reduce((s, m) => s + a.by_month[m].answered, 0)
+    );
 
     const totalAnswered = MONTHS.reduce((s, m) => s + teamByMonth[m].answered, 0);
     if (totalAnswered === 0) {
       return res.status(200).json(
-        snap("Live Zoom queue call logs returned 0 answered calls for Jan–Apr 2026. Verify phone:read:list_call_logs:admin scope and date range."),
+        snap("Live API returned 0 answered calls. The account-level call logs endpoint requires the scope 'phone:read:call_log:admin' — add it in Zoom Marketplace and reinstall."),
       );
     }
 

@@ -117,22 +117,45 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const records: RawRecord[] = [];
     const seenCallIds = new Set<string>();
 
-    for (const queue of targetQueues) {
+    // Use account-level call logs endpoint — requires phone:read:call_log:admin scope
+    // This returns ALL calls across all agents, then we filter by queue name client-side
+    {
       let next = "";
-      for (let page = 0; page < 20; page++) {
+      for (let page = 0; page < 30; page++) {
         if (records.length >= 5000) break;
-        const u = new URL(`https://api.zoom.us/v2/phone/call_queues/${queue.id}/call_logs`);
+        const u = new URL(`https://api.zoom.us/v2/phone/call_logs`);
         u.searchParams.set("from", fromDate);
         u.searchParams.set("to",   toDate);
+        u.searchParams.set("type",      "all");
         u.searchParams.set("page_size", "300");
         if (next) u.searchParams.set("next_page_token", next);
 
         const r = await fetch(u.toString(), { headers: { Authorization: `Bearer ${token}` } });
-        if (!r.ok) break;
+        if (!r.ok) {
+          const errBody = await r.text().catch(() => "");
+          let errJson: any = {};
+          try { errJson = JSON.parse(errBody); } catch {}
+          return res.status(200).json({
+            source: "error", month: monthParam, records: [],
+            totals: { fetched: 0, answered: 0, refused: 0, missed: 0 },
+            queues_found: targetQueues.map((q) => q.name),
+            warning: r.status === 403
+              ? `Missing scope: add "phone:read:call_log:admin" in Zoom Marketplace → your app → Scopes, then reinstall. (HTTP ${r.status}: ${errJson.message ?? errBody.slice(0,100)})`
+              : `Zoom API error ${r.status}: ${errJson.message ?? errBody.slice(0, 100)}`,
+          });
+        }
         const j: any = await r.json();
         const logs: any[] = j.call_logs ?? j.calls ?? [];
+        const allQueues = targetQueues; // just for reference in loop below
 
         for (const c of logs) {
+          // Filter to target queues by call_queue_name
+          const queueName = String(c.call_queue_name ?? c.queue_name ?? "");
+          if (!isTargetQueue(queueName)) continue;
+
+          // Only inbound
+          if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
+
           const callId = String(c.call_id ?? c.id ?? "");
           if (callId && seenCallIds.has(callId)) continue;
           if (callId) seenCallIds.add(callId);
@@ -143,15 +166,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             c.answered_by?.name ??
             c.answered_by?.display_name ??
             c.callee_name ??
+            c.user_name ??
             "";
 
-          // Apply agent filter on answered_by_name
+          // Apply agent filter
           if (agentFilter && !answeredByName.toLowerCase().includes(agentFilter)) continue;
 
           records.push({
             idx:              0,
             start_time:       String(c.start_time ?? c.date_time ?? ""),
-            queue_name:       String(queue.name ?? ""),
+            queue_name:       queueName || String(allQueues[0]?.name ?? ""),
             call_result_raw:  resultRaw || "(blank)",
             classified_as,
             answered_by_name: answeredByName || "— not answered",
@@ -186,6 +210,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       totals,
       queues_found: targetQueues.map((q) => q.name),
       capped: records.length >= 5000,
+
     });
 
   } catch (err) {
