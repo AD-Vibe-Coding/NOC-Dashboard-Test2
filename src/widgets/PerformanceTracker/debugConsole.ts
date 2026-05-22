@@ -107,10 +107,11 @@ async function summary(memberName: string) {
   const byMonth = new Map<string, number>();
   const bySourceMonth = new Map<string, number>();
   for (const r of rows) {
-    bySource.set(r.source_type, (bySource.get(r.source_type) ?? 0) + 1);
+    const sourceKey = r.source_type ?? "(null)";
+    bySource.set(sourceKey, (bySource.get(sourceKey) ?? 0) + 1);
     const monthKey = r.period_month ?? "(null)";
     byMonth.set(monthKey, (byMonth.get(monthKey) ?? 0) + 1);
-    const composite = `${r.source_type} / ${monthKey}`;
+    const composite = `${sourceKey} / ${monthKey}`;
     bySourceMonth.set(composite, (bySourceMonth.get(composite) ?? 0) + 1);
   }
   return {

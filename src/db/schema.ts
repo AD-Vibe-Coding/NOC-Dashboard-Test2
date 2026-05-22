@@ -86,7 +86,7 @@ export const performance_imports = pgTable("performance_imports", {
   id: serial("id").primaryKey(),
   file_name: text("file_name").notNull(),
   imported_by: text("imported_by"),
-  source_type: text("source_type").notNull(),   // tickets|calls|tasks|queue|audit
+  source_type: text("source_type"),              // tickets|calls|tasks|queue|audit
   sheet_name: text("sheet_name"),
   row_count: integer("row_count").notNull(),
   matched_count: integer("matched_count").notNull(),
@@ -102,7 +102,7 @@ export const performance_metrics = pgTable("performance_metrics", {
   id: serial("id").primaryKey(),
   import_id: integer("import_id").notNull(),
   member_name: text("member_name").notNull(), // canonical
-  source_type: text("source_type").notNull(),
+  source_type: text("source_type"),
   // ---- Generic per-row summary (preserved for backward compat + simple sums) ----
   total_count: integer("total_count"),
   success_count: integer("success_count"),
