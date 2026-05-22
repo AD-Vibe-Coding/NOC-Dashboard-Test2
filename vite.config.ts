@@ -10,6 +10,7 @@ import { logicMonitorProxyPlugin } from "./vite-plugins/logicmonitor-proxy";
 import { appbuilderApiDevServer } from "./vite-plugins/appbuilder-api-dev-server";
 
 export default defineConfig({
+  optimizeDeps: { exclude: ["@electric-sql/pglite"] },
   plugins: [
     react(),
     // appbuilderApiDevServer MUST come before the other proxy plugins so
@@ -35,5 +36,15 @@ export default defineConfig({
     strictPort: true,
     // allowedHosts must be true: sandboxes are accessed via dynamic Vercel-assigned hostnames
     allowedHosts: true,
+    hmr: {
+      // The sandbox is accessed via a reverse-proxy at the external hostname.
+      // Without this, Vite tells the browser to connect the HMR WebSocket to
+      // localhost:5173 which is unreachable from the browser side.
+      // Setting clientPort:443 + protocol:wss makes the browser connect the
+      // WebSocket to wss://<same-host-as-the-page>/ which the proxy forwards
+      // to Vite's local WS server correctly.
+      clientPort: 443,
+      protocol: "wss",
+    },
   },
 });
