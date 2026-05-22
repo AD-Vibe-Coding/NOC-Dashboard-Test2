@@ -47,13 +47,42 @@ async function paginate(token: string, path: string, key: string): Promise<any[]
   return all;
 }
 
-function isTargetQueue(name: string): boolean {
+/**
+ * Zoom Phone field mapping — matches Excel export column names exactly:
+ *   "Operator Name" → operator_name  (NOC vs Mobility queue filter)
+ *   "To Name"       → to_name        (agent who received the call)
+ *   "Event"         → event          (primary answered classification)
+ */
+function isTargetOperator(name: string): boolean {
   const n = name.toLowerCase();
   return TARGET_QUEUES.some((q) => n.includes(q));
 }
 
-function classifyResult(raw: string): "answered" | "refused" | "missed" {
-  const s = raw.toLowerCase().replace(/_/g, " ");
+function getOperatorName(c: any): string {
+  return String(c.operator_name ?? c.call_queue_name ?? c.queue_name ?? "");
+}
+
+function getToName(c: any): string {
+  return String(
+    c.to_name ??
+    c.callee_name ??
+    c.answered_by?.name ??
+    c.answered_by?.display_name ??
+    c.user_name ??
+    "",
+  );
+}
+
+function classifyEvent(event: string, resultFallback: string): "answered" | "refused" | "missed" {
+  // Primary: event field (matches Excel "Event" column)
+  if (event) {
+    const e = event.toLowerCase().trim();
+    if (e === "answered") return "answered";
+    if (e === "missed" || e === "no answer" || e === "voicemail") return "missed";
+    if (e === "refused" || e === "no answer (answered by other)") return "refused";
+  }
+  // Fallback: result string classification
+  const s = resultFallback.toLowerCase().replace(/_/g, " ");
   if (/\bno\s*answer\b/.test(s) || /\banswered\s*by\s*other\b/.test(s) || s.includes("refused")) return "refused";
   if (/\banswered\b/.test(s) || /\bconnected\b/.test(s) || /\bcompleted\b/.test(s) || /\bpicked\s*up\b/.test(s)) return "answered";
   return "missed";
@@ -140,7 +169,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             totals: { fetched: 0, answered: 0, refused: 0, missed: 0 },
             queues_found: targetQueues.map((q) => q.name),
             warning: r.status === 403
-              ? `Missing scope: add "phone:read:call_log:admin" in Zoom Marketplace → your app → Scopes, then reinstall. (HTTP ${r.status}: ${errJson.message ?? errBody.slice(0,100)})`
+              ? `PLAN_RESTRICTION: The Zoom Phone plan on this account does not allow API access to call logs. The scope "phone:read:call_log:admin" is present in the token but the API still returns 403. This typically requires a Zoom Phone Pro or higher plan, or enabling call log API access in Zoom Admin → Account Management → Account Settings → Phone. (HTTP 403: ${errJson.message ?? "You do not have permission."})`
               : `Zoom API error ${r.status}: ${errJson.message ?? errBody.slice(0, 100)}`,
           });
         }
@@ -149,36 +178,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const allQueues = targetQueues; // just for reference in loop below
 
         for (const c of logs) {
-          // Filter to target queues by call_queue_name
-          const queueName = String(c.call_queue_name ?? c.queue_name ?? "");
-          if (!isTargetQueue(queueName)) continue;
+          // ── "Operator Name" filter — NOC vs Mobility (matches Excel column)
+          const operatorName = getOperatorName(c);
+          if (!isTargetOperator(operatorName)) continue;
 
-          // Only inbound
+          // Only inbound calls
           if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
 
+          // Deduplicate
           const callId = String(c.call_id ?? c.id ?? "");
           if (callId && seenCallIds.has(callId)) continue;
           if (callId) seenCallIds.add(callId);
 
-          const resultRaw      = String(c.result ?? c.call_result ?? "");
-          const classified_as  = classifyResult(resultRaw);
-          const answeredByName =
-            c.answered_by?.name ??
-            c.answered_by?.display_name ??
-            c.callee_name ??
-            c.user_name ??
-            "";
+          // ── "Event" + "To Name" (matches Excel columns)
+          const event         = String(c.event ?? "");
+          const resultRaw     = String(c.result ?? c.call_result ?? "");
+          const classified_as = classifyEvent(event, resultRaw);
 
-          // Apply agent filter
-          if (agentFilter && !answeredByName.toLowerCase().includes(agentFilter)) continue;
+          // ── "To Name" — agent who received the call (matches Excel column)
+          const toName = getToName(c);
+
+          // Apply agent filter on To Name
+          if (agentFilter && !toName.toLowerCase().includes(agentFilter)) continue;
 
           records.push({
             idx:              0,
             start_time:       String(c.start_time ?? c.date_time ?? ""),
-            queue_name:       queueName || String(allQueues[0]?.name ?? ""),
-            call_result_raw:  resultRaw || "(blank)",
+            queue_name:       operatorName,
+            call_result_raw:  event ? `${event}${resultRaw ? ` / ${resultRaw}` : ""}` : resultRaw || "(blank)",
             classified_as,
-            answered_by_name: answeredByName || "— not answered",
+            answered_by_name: toName || "— not answered",
             duration_seconds: parseInt(String(c.duration ?? "0"), 10) || 0,
             wait_seconds:     parseInt(String(c.wait_time ?? c.waiting_time ?? "0"), 10) || 0,
           });

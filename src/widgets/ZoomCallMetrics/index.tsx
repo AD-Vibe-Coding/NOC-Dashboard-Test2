@@ -265,6 +265,20 @@ function OverviewTab({ data }: { data: ApiResponse }) {
 
   return (
     <Stack gap="lg" pt="md">
+      {data.source === "snapshot" && (
+        <Alert icon={<IconAlertTriangle size={16} />} color="orange" radius="md" title="Showing Representative Snapshot Data">
+          <Text size="xs">
+            Zoom Phone call log API access is restricted on this account plan — the data below is
+            a <Text component="span" fw={700}>realistic but hardcoded</Text> representation of the team's performance.
+            Switch to the <Text component="span" fw={700}>Raw Records</Text> tab for details on how to enable live data.
+          </Text>
+        </Alert>
+      )}
+      {data.warning && data.source === "live" && (
+        <Alert icon={<IconAlertTriangle size={16} />} color="yellow" radius="md">
+          <Text size="xs">{data.warning}</Text>
+        </Alert>
+      )}
       <SegmentedControl
         value={period}
         onChange={(v) => { setPeriod(v); setExpanded(null); }}
@@ -441,7 +455,7 @@ function RawRecordsTab() {
             size="sm"
           />
           <TextInput
-            label="Filter by answered by"
+            label="Filter by To Name (agent)"
             placeholder="e.g. Sriram"
             leftSection={<IconSearch size={14} />}
             value={agentFilter}
@@ -467,7 +481,34 @@ function RawRecordsTab() {
         </Alert>
       )}
 
-      {rawData && (
+      {rawData?.source === "error" && rawData.warning && (
+        <Alert
+          icon={<IconAlertTriangle size={16} />}
+          color={rawData.warning.startsWith("PLAN_RESTRICTION") ? "orange" : "red"}
+          radius="md"
+          title={rawData.warning.startsWith("PLAN_RESTRICTION") ? "Zoom Phone Plan Restriction" : "API Error"}
+        >
+          {rawData.warning.startsWith("PLAN_RESTRICTION") ? (
+            <Stack gap="xs">
+              <Text size="xs">
+                The <Text component="span" fw={700} ff="monospace">phone:read:call_log:admin</Text> scope is active in your token, but
+                Zoom is still returning 403. This is a <Text component="span" fw={700}>plan-level restriction</Text> — call log API access
+                requires a higher Zoom Phone tier.
+              </Text>
+              <Text size="xs" fw={600}>To fix, try one of the following:</Text>
+              <Text size="xs" component="ol" pl="md" style={{ margin: 0 }}>
+                <li>In <Text component="span" fw={600}>Zoom Admin Portal</Text> → Account Management → Account Settings → Phone → enable "Call Log" or "Call Log API Access"</li>
+                <li>Confirm your Zoom Phone plan includes call log API access (requires Pro or higher, or the Power Pack add-on)</li>
+                <li>Contact Zoom Support and ask them to enable <Text component="span" ff="monospace">GET /phone/call_logs</Text> for your account</li>
+              </Text>
+            </Stack>
+          ) : (
+            <Text size="xs">{rawData.warning}</Text>
+          )}
+        </Alert>
+      )}
+
+      {rawData?.source !== "error" && rawData && (
         <>
           {/* Summary stats */}
           <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs">
@@ -519,9 +560,9 @@ function RawRecordsTab() {
                     <Table.Th style={{ width: 40 }}>#</Table.Th>
                     <Table.Th>Start Time</Table.Th>
                     <Table.Th>Queue</Table.Th>
-                    <Table.Th>Call Result (raw)</Table.Th>
+                    <Table.Th>Event / Result (raw)</Table.Th>
                     <Table.Th>Classified As</Table.Th>
-                    <Table.Th>Answered By</Table.Th>
+                    <Table.Th>To Name (Agent)</Table.Th>
                     <Table.Th>Duration</Table.Th>
                     <Table.Th>Wait</Table.Th>
                   </Table.Tr>

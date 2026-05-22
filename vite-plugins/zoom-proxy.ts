@@ -549,15 +549,19 @@ export function zoomProxyPlugin(): Plugin {
                 let missed = 0;
                 let totalSec = 0;
                 for (const c of logs) {
-                  // Queue filter — only count calls via Network/Mobility Tech Support
-                  const qname = String(c.call_queue_name ?? c.queue_name ?? c.operator_name ?? "").toLowerCase();
-                  if (!qname.includes("network tech support") && !qname.includes("mobility tech support")) continue;
-                  const direction = (c.direction ?? "").toLowerCase();
-                  if (direction !== "inbound") continue;
-                  const raw = (c.call_result ?? c.result ?? "").toLowerCase().replace(/_/g, " ");
-                  // Classify using the same broad ruleset as the Excel importer
-                  const isRefused = /\bno\s*answer\b/.test(raw) || /\banswered\s*by\s*other\b/.test(raw) || raw.includes("refused");
-                  const isAnswered = !isRefused && (/\banswered\b/.test(raw) || /\bconnected\b/.test(raw) || /\bcompleted\b/.test(raw));
+                  // "Operator Name" filter — NOC vs Mobility (matches Excel column)
+                  const opName = String(c.operator_name ?? c.call_queue_name ?? c.queue_name ?? "").toLowerCase();
+                  if (!opName.includes("network tech support") && !opName.includes("mobility tech support")) continue;
+                  // Inbound only
+                  if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
+                  // "Event" field — primary classification (matches Excel "Event" column)
+                  // "To Name" — agent attribution (matches Excel "To Name" column)
+                  const event = String(c.event ?? "").toLowerCase().trim();
+                  const raw   = (c.result ?? c.call_result ?? "").toLowerCase().replace(/_/g, " ");
+                  const isAnswered = event
+                    ? event === "answered"
+                    : !(/\bno\s*answer\b/.test(raw) || /\banswered\s*by\s*other\b/.test(raw) || raw.includes("refused")) &&
+                      (/\banswered\b/.test(raw) || /\bconnected\b/.test(raw) || /\bcompleted\b/.test(raw));
                   if (isAnswered) {
                     answered++;
                     totalSec += parseInt(c.duration ?? 0, 10) || 0;

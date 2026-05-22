@@ -66,10 +66,7 @@ async function paginate(token: string, path: string, key: string): Promise<any[]
   return all;
 }
 
-function isTargetQueue(name: string): boolean {
-  const n = name.toLowerCase();
-  return TARGET_QUEUES.some((q) => n.includes(q));
-}
+
 
 // ── MonthStats ────────────────────────────────────────────────────────────────
 interface MonthStats {
@@ -85,12 +82,57 @@ function emptyMonth(): MonthStats {
   return { answered: 0, refused: 0, missed: 0, handle_seconds_sum: 0, handle_count: 0, wait_seconds_sum: 0, wait_count: 0 };
 }
 
-/** Classify the result string from a queue call log entry. */
-function classifyResult(raw: string): "answered" | "refused" | "missed" {
-  const s = raw.toLowerCase().replace(/_/g, " ");
+/**
+ * Classify a Zoom Phone call log record using the same logic as the Excel export:
+ *   - Answered : event === "Answered"   (primary — exact match, matches Excel "Event" column)
+ *   - Queue    : operator_name          (matches Excel "Operator Name" column)
+ *   - Agent    : to_name                (matches Excel "To Name" column)
+ *
+ * Falls back to result/call_result string matching when event field is absent.
+ */
+function classifyEvent(event: string, resultFallback: string): "answered" | "refused" | "missed" {
+  // Primary: use event field (matches Excel "Event" column exactly)
+  if (event) {
+    const e = event.toLowerCase().trim();
+    if (e === "answered") return "answered";
+    if (e === "missed" || e === "no answer" || e === "voicemail") return "missed";
+    if (e === "refused" || e === "no answer (answered by other)") return "refused";
+  }
+  // Fallback: classify by result string (matches Excel "Call Result" column)
+  const s = resultFallback.toLowerCase().replace(/_/g, " ");
   if (/\bno\s*answer\b/.test(s) || /\banswered\s*by\s*other\b/.test(s) || s.includes("refused")) return "refused";
   if (/\banswered\b/.test(s) || /\bconnected\b/.test(s) || /\bcompleted\b/.test(s) || /\bpicked\s*up\b/.test(s)) return "answered";
   return "missed";
+}
+
+/**
+ * Extract the operator/queue name from a call log record.
+ * Matches Excel "Operator Name" column.
+ * Zoom API field: operator_name (primary), falls back to call_queue_name / queue_name.
+ */
+function getOperatorName(c: any): string {
+  return String(c.operator_name ?? c.call_queue_name ?? c.queue_name ?? "");
+}
+
+/**
+ * Extract the agent name (who received the call) from a call log record.
+ * Matches Excel "To Name" column.
+ * Zoom API field: to_name (primary), falls back to callee_name / answered_by.name / user_name.
+ */
+function getToName(c: any): string {
+  return String(
+    c.to_name ??
+    c.callee_name ??
+    c.answered_by?.name ??
+    c.answered_by?.display_name ??
+    c.user_name ??
+    "",
+  );
+}
+
+function isTargetOperator(operatorName: string): boolean {
+  const n = operatorName.toLowerCase();
+  return TARGET_QUEUES.some((q) => n.includes(q));
 }
 
 /**
@@ -202,7 +244,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // 1. List all queues, filter to target queues
     const allQueues: any[] = await paginate(token, "/phone/call_queues", "call_queues");
-    const targetQueues = allQueues.filter((q) => isTargetQueue(String(q.name ?? "")));
+    const targetQueues = allQueues.filter((q) => isTargetOperator(String(q.name ?? "")));
 
     if (targetQueues.length === 0) {
       return res.status(200).json(
@@ -215,7 +257,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const teamByMonth: Record<string, MonthStats> = {};
     for (const m of MONTHS) teamByMonth[m] = emptyMonth();
     const seenCallIds = new Set<string>();
-    const targetQueueNames = targetQueues.map((q) => String(q.name ?? "").toLowerCase());
 
     for (const monthKey of MONTHS) {
       const [year, mon] = monthKey.split("-").map(Number);
@@ -224,28 +265,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const toDate   = `${monthKey}-${String(lastDay).padStart(2, "0")}`;
 
       const { logs, scopeError } = await fetchAccountCallLogs(token, fromDate, toDate);
-
-      if (scopeError) {
-        return res.status(200).json(snap(scopeError));
-      }
+      if (scopeError) return res.status(200).json(snap(scopeError));
 
       for (const c of logs) {
-        // Filter to target queues
-        const qName = String(c.call_queue_name ?? c.queue_name ?? "").toLowerCase();
-        if (!targetQueueNames.some((tq) => qName.includes(tq) || tq.includes(qName.split(" ")[0]))) continue;
+        // ── "Operator Name" filter — NOC vs Mobility (matches Excel column)
+        const operatorName = getOperatorName(c);
+        if (!isTargetOperator(operatorName)) continue;
 
-        // Only inbound
+        // Only inbound calls
         if ((c.direction ?? "").toLowerCase() !== "inbound") continue;
 
+        // Deduplicate by call_id
         const callId = String(c.call_id ?? c.id ?? "");
         if (callId && seenCallIds.has(callId)) continue;
         if (callId) seenCallIds.add(callId);
 
-        const resultRaw = String(c.result ?? c.call_result ?? "");
-        const outcome   = classifyResult(resultRaw);
-        const dur       = parseInt(String(c.duration ?? "0"), 10) || 0;
-        const wait      = parseInt(String(c.wait_time ?? c.waiting_time ?? "0"), 10) || 0;
+        // ── "Event" field — primary answered classification (matches Excel column)
+        const event      = String(c.event ?? "");
+        const resultRaw  = String(c.result ?? c.call_result ?? "");
+        const outcome    = classifyEvent(event, resultRaw);
+        const dur        = parseInt(String(c.duration  ?? "0"), 10) || 0;
+        const wait       = parseInt(String(c.wait_time ?? c.waiting_time ?? "0"), 10) || 0;
 
+        // Team totals
         const team = teamByMonth[monthKey];
         if (outcome === "answered") {
           team.answered++;
@@ -258,8 +300,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           team.missed++;
         }
 
+        // ── "To Name" — agent attribution for answered calls (matches Excel column)
         if (outcome === "answered") {
-          const agentName = c.answered_by?.name ?? c.answered_by?.display_name ?? c.callee_name ?? c.user_name ?? null;
+          const agentName = getToName(c);
           if (agentName) {
             if (!agentMap.has(agentName)) {
               agentMap.set(agentName, { name: agentName, by_month: Object.fromEntries(MONTHS.map((m) => [m, emptyMonth()])) });
