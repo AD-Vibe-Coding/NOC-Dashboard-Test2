@@ -88,10 +88,10 @@ export function BreakTrackerWidget() {
 
     setPosting(true);
 
-    // Slack text is just the break label ("Lunch", "Bio", "BRB - Coffee").
-    // The bot post uses `username` so the sender appears as the actual
-    // person, keeping the message body short and clean.
-    const slackText = formatBreakStartMessage(breakType);
+    // Always include the person's name in the message body so it's
+    // identifiable even if chat:write.customize is unavailable or blocked.
+    // Format: "*Sriram Parisa* — Lunch"
+    const slackText = `*${trimmed}* — ${formatBreakStartMessage(breakType)}`;
 
     let slackTs: string | null = null;
     let slackPosted = false;
@@ -157,7 +157,9 @@ export function BreakTrackerWidget() {
       b.slack_message_ts && !b.slack_message_ts.startsWith("demo-")
         ? b.slack_message_ts
         : null;
-    const slackText = "Back";
+    const slackText = threadTs
+      ? "Back"  // reply in-thread: context is already on the parent message
+      : `*${b.employee_name}* — Back`;  // standalone: include name for clarity
     try {
       const result = await postSlackMessage(slackText, {
         thread_ts: threadTs,
