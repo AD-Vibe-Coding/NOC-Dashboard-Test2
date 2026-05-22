@@ -3,15 +3,13 @@
  *
  * Live Zoom Phone queue availability using Server-to-Server OAuth.
  *
- * Confirmed working endpoints (with current scopes):
- *   ✅ GET /phone/call_queues                    — list queues
- *   ✅ GET /phone/call_queues/{id}/members        — member roster + receive_call status
- *   ❌ GET /phone/users                          — requires phone:read:list_users:admin (403)
- *   ❌ GET /users/{id}/presence_status           — requires user:read:presence_status:admin (not available)
- *
- * Status mapping from receive_call field:
- *   receive_call: true  → "ready"     (opted in to receive queue calls)
- *   receive_call: false → "not_ready" (opted out / on break / DND)
+ * Status mapping:
+ *   presence = "Phone"            → on_call   (requires user:read:presence_status:admin)
+ *   presence = "In_Meeting"/busy  → not_ready
+ *   presence = "Do_Not_Disturb"   → not_ready
+ *   presence = "Available" OR receive_call=true → ready
+ *   receive_call=false (no presence data)       → not_ready
+ *   presence = "Away"             → offline
  */
 
 // In-process token cache
@@ -156,24 +154,76 @@ export default async function handler(req: any, res: any) {
     const roster = Array.from(memberMap.values());
     const now = Date.now();
 
-    // 4. Map receive_call → status
-    //    receive_call: true  = agent opted in → "ready"
-    //    receive_call: false = agent opted out → "not_ready"
-    const agents = roster.map((u) => ({
-      agent_id: u.id,
-      display_name: u.name,
-      status: u.receive_call ? "ready" : "not_ready",
-      sub_status: u.receive_call ? undefined : "Opted out",
-      status_changed_at: now,
-      engagement_started_at: undefined,
-      engagement_channel: undefined,
-      queues: u.queues,
-    }));
+    // 4. Enrich with Zoom presence (requires user:read:presence_status:admin).
+    //    Silently skip per-user on 403 — scope is optional but highly recommended.
+    const presenceMap = new Map<string, string>(); // userId → presence status string
+    let presenceAvailable = false;
 
-    // Sort: ready first, then not_ready, alphabetically within each group
+    await Promise.all(
+      roster.map(async (u) => {
+        try {
+          const p = await zoomGet(token, `/users/${u.id}/presence_status`);
+          // p.status examples: "Available", "Away", "Do_Not_Disturb",
+          //   "In_Meeting", "On_Phone", "Phone" (actively on a call)
+          if (p.status && !p.code) {
+            presenceMap.set(u.id, String(p.status).toLowerCase());
+            presenceAvailable = true;
+          }
+        } catch {
+          // 403 = scope not granted yet — skip silently
+        }
+      }),
+    );
+
+    // 5. Build agents with presence-enriched status
+    const agents = roster.map((u) => {
+      const pres = presenceMap.get(u.id);
+      let status: string;
+      let sub_status: string | undefined;
+      let engagement_channel: string | undefined;
+
+      if (pres === "phone" || pres === "on_phone" || pres === "callinout") {
+        // Actively on a phone call
+        status = "on_call";
+        engagement_channel = "voice";
+      } else if (pres === "in_meeting" || pres === "presenting") {
+        status = "not_ready";
+        sub_status = "In meeting";
+      } else if (pres === "do_not_disturb") {
+        status = "not_ready";
+        sub_status = "Do not disturb";
+      } else if (pres === "out_of_office") {
+        status = "offline";
+        sub_status = "Out of office";
+      } else if (pres === "away") {
+        status = "not_ready";
+        sub_status = "Away";
+      } else if (pres === "available" || u.receive_call) {
+        // Presence says available, OR no presence but queue opt-in = true
+        status = "ready";
+      } else {
+        // No presence data AND receive_call=false
+        status = "not_ready";
+        sub_status = "Not in queue";
+      }
+
+      return {
+        agent_id: u.id,
+        display_name: u.name,
+        status,
+        sub_status,
+        status_changed_at: now,
+        engagement_started_at: status === "on_call" ? now : undefined,
+        engagement_channel,
+        queues: u.queues,
+      };
+    });
+
+    // Sort: on_call (first), wrap_up, ready, not_ready, offline — then alpha
+    const ORDER: Record<string, number> = { on_call: 0, wrap_up: 1, ready: 2, not_ready: 3, offline: 4 };
     agents.sort((a, b) => {
-      if (a.status !== b.status) return a.status === "ready" ? -1 : 1;
-      return a.display_name.localeCompare(b.display_name);
+      const o = (ORDER[a.status] ?? 5) - (ORDER[b.status] ?? 5);
+      return o !== 0 ? o : a.display_name.localeCompare(b.display_name);
     });
 
     const totals = {
@@ -184,13 +234,17 @@ export default async function handler(req: any, res: any) {
       offline:   agents.filter((a) => a.status === "offline").length,
     };
 
+    const warning = presenceAvailable
+      ? null
+      : "Add scope user:read:presence_status:admin in Zoom Marketplace to detect active calls. Currently showing queue opt-in status only.";
+
     return res.status(200).json({
       source: "live",
       fetched_at: new Date().toISOString(),
       queue_name: resolvedQueueName,
       agents,
       totals,
-      warning: "Showing queue availability (receive_call). To detect active calls, add scope user:read:presence_status:admin in Zoom Marketplace.",
+      warning,
     });
 
   } catch (err: any) {

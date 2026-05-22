@@ -88,10 +88,9 @@ export function BreakTrackerWidget() {
 
     setPosting(true);
 
-    // Always include the person's name in the message body so it's
-    // identifiable even if chat:write.customize is unavailable or blocked.
-    // Format: "*Sriram Parisa* — Lunch"
-    const slackText = `*${trimmed}* — ${formatBreakStartMessage(breakType)}`;
+    // Bot posts with username override (chat:write.customize) so Slack
+    // already shows the person's name as the sender — keep message clean.
+    const slackText = formatBreakStartMessage(breakType);
 
     let slackTs: string | null = null;
     let slackPosted = false;
@@ -157,9 +156,7 @@ export function BreakTrackerWidget() {
       b.slack_message_ts && !b.slack_message_ts.startsWith("demo-")
         ? b.slack_message_ts
         : null;
-    const slackText = threadTs
-      ? "Back"  // reply in-thread: context is already on the parent message
-      : `*${b.employee_name}* — Back`;  // standalone: include name for clarity
+    const slackText = "Back";
     try {
       const result = await postSlackMessage(slackText, {
         thread_ts: threadTs,
