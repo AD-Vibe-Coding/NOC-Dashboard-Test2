@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
 import { defaultRoleFor, lookupByEmail } from "../_lib/roles.js";
+import { supabaseAdmin } from "../_lib/supabase-admin.js";
 
 /**
  * GET /api/auth/callback?code=XXX&state=YYY
@@ -115,11 +116,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Map email → roster identity (preferred), fall back to Google profile name
   const emailLookup = lookupByEmail(email);
   const name = emailLookup?.name ?? String(userInfo.name ?? email.split("@")[0]);
-  const role = emailLookup?.role ?? defaultRoleFor(name);
+  let role: string = emailLookup?.role ?? defaultRoleFor(name);
   const picture = String(userInfo.picture ?? "");
+
+  // Check for a DB role override set by a manager in the Access Control widget
+  try {
+    const { data } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("name", name)
+      .limit(1)
+      .maybeSingle();
+    if (data?.role) role = data.role;
+  } catch { /* non-fatal — use static role */ }
 
   // Create session JWT (24h)
   const sessionToken = signJwt({ email, name, role, picture }, 86400);
+
+  // Record sign-in for Access Control widget (best-effort — non-blocking)
+  try {
+    await supabaseAdmin.from("user_sessions").delete().eq("name", name);
+    await supabaseAdmin.from("user_sessions").insert({
+      name,
+      email,
+      sign_in_method: "google",
+      picture: picture || null,
+      last_sign_in: new Date().toISOString(),
+    });
+  } catch { /* non-fatal — user_sessions table may not exist yet */ }
 
   // Set session cookie, clear state cookie, redirect home
   res.setHeader("Set-Cookie", [

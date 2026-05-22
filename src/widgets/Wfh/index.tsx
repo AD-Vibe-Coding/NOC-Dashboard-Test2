@@ -633,8 +633,8 @@ function RequestTable({
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {requests.map((r) => (
-            <Table.Tr key={r.id}>
+          {requests.map((r, idx) => (
+            <Table.Tr key={`wfh-request-${r.id}-${idx}`}>
               <Table.Td>
                 <Text fw={500}>{r.employee_name}</Text>
               </Table.Td>

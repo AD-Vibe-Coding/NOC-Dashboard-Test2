@@ -60,14 +60,14 @@ export function ZoomQueueTile({ onExpand }: Props) {
           <>
             <Divider variant="dashed" />
             <Stack gap={4}>
-              {longest.map((a) => {
+              {longest.map((a, idx) => {
                 // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                 tick;
                 const minutes = a.engagement_started_at
                   ? (Date.now() - a.engagement_started_at) / 60000
                   : 0;
                 return (
-                  <Group key={a.agent_id} justify="space-between" wrap="nowrap" gap={6}>
+                  <Group key={`zoom-longest-${a.agent_id}-${a.display_name}-${idx}`} justify="space-between" wrap="nowrap" gap={6}>
                     <Group gap={6} wrap="nowrap" style={{ minWidth: 0 }}>
                       <IconPhone size={12} color="var(--mantine-color-red-5)" />
                       <Text size="sm" truncate fw={500}>

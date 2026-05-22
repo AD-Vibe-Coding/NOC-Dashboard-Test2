@@ -63,12 +63,12 @@ export function BreakTrackerTile({ onExpand }: Props) {
           <>
             <Divider variant="dashed" />
             <Stack gap={4}>
-              {preview.map((b) => {
+              {preview.map((b, idx) => {
                 // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                 tick;
                 return (
                   <Group
-                    key={b.id}
+                    key={`break-preview-${b.id}-${idx}`}
                     justify="space-between"
                     wrap="nowrap"
                     gap={6}

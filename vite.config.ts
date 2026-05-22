@@ -10,7 +10,6 @@ import { logicMonitorProxyPlugin } from "./vite-plugins/logicmonitor-proxy";
 import { appbuilderApiDevServer } from "./vite-plugins/appbuilder-api-dev-server";
 
 export default defineConfig({
-  optimizeDeps: { exclude: ["@electric-sql/pglite"] },
   plugins: [
     react(),
     // appbuilderApiDevServer MUST come before the other proxy plugins so

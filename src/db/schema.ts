@@ -75,7 +75,7 @@ export const polished_emails = pgTable("polished_emails", {
 
 export const team_members = pgTable("team_members", {
   id: serial("id").primaryKey(),
-  // Canonical display name. Unique constraint enforced via CREATE TABLE.
+  // Canonical display name. Unique constraint is applied when the schema is pushed to Supabase.
   name: text("name").notNull(),
   tier: text("tier").notNull(),       // tier1 | tier2 | tier3
   team: text("team").notNull(),       // noc | mobility
@@ -169,6 +169,35 @@ export const escalation_drafts = pgTable("escalation_drafts", {
   cc_emails: text("cc_emails"),
   // Matched carrier ID from the Confluence list (outbound mode)
   carrier_id: text("carrier_id"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// User Roles — manager-controlled role overrides for every team member.
+// Overrides the static ROLE_BY_NAME map at sign-in time.
+// =============================================================================
+
+export const user_roles = pgTable("user_roles", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),        // canonical roster name
+  email: text("email"),                // appdirect.com email (optional, for SSO lookup)
+  role: text("role").notNull(),        // tier1 | tier2 | tier3 | manager
+  updated_by: text("updated_by"),      // manager's name who made the change
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// User Sessions — tracks every sign-in for the Access Control widget.
+// One row per user (upserted on each sign-in — delete+insert pattern).
+// =============================================================================
+
+export const user_sessions = pgTable("user_sessions", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),              // canonical roster name
+  email: text("email"),                      // sign-in email
+  sign_in_method: text("sign_in_method").notNull(), // "google" | "dev"
+  picture: text("picture"),                  // Google profile picture URL
+  last_sign_in: timestamp("last_sign_in").defaultNow().notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

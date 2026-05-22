@@ -694,7 +694,7 @@ export function RawDataModal({
                 {sortedRows.map((m, idx) => {
                   const disputes = disputesByMetricId?.get(m.id) ?? [];
                   return (
-                    <Table.Tr key={m.id ?? idx}>
+                    <Table.Tr key={`metric-${m.id ?? "no-id"}-${m.import_id ?? "no-import"}-${idx}`}>
                       <Table.Td style={{ textAlign: "right", color: "var(--mantine-color-dimmed)" }}>
                         {idx + 1}
                       </Table.Td>

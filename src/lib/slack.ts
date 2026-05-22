@@ -2,7 +2,7 @@
 //
 // The Break Tracker widget posts break-start and break-end messages to
 // #noc-team via the Vite dev proxy at /api/slack/post. There is no longer a
-// read path — the widget tracks active breaks from the local PGlite DB. This
+// read path — the widget tracks active breaks from the Supabase-backed API. This
 // drops the bot's scope requirements down to just `chat:write` (plus the
 // optional `chat:write.customize` to post under each teammate's name).
 

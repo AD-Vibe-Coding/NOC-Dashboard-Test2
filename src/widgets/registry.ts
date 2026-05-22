@@ -13,6 +13,7 @@ import {
   IconMailForward,
   IconReportAnalytics,
   IconSearch,
+  IconShield,
 } from "@tabler/icons-react";
 import { BreakTrackerWidget, BreakTrackerTile } from "./BreakTracker";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
@@ -40,6 +41,10 @@ import {
   SmartSearchWidget,
   SmartSearchTile,
 } from "./SmartSearch";
+import {
+  AccessControlWidget,
+  AccessControlTile,
+} from "./AccessControl";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -188,6 +193,17 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: NocTroubleshooterTile,
     Full: NocTroubleshooterWidget,
+  },
+  {
+    id: "access-control",
+    title: "Access Control",
+    description: "Manage team member roles and dashboard access",
+    icon: IconShield,
+    iconColor: "red",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: AccessControlTile,
+    Full: AccessControlWidget,
   },
   {
     id: "mobility-troubleshooter",

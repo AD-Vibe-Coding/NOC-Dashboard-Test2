@@ -227,8 +227,8 @@ export function LogicMonitorWidget() {
                       if (s !== 0) return s;
                       return a.start_epoch - b.start_epoch;
                     })
-                    .map((a) => (
-                      <Table.Tr key={a.id}>
+                    .map((a, idx) => (
+                      <Table.Tr key={`logic-alert-${a.id}-${a.start_epoch}-${idx}`}>
                         <Table.Td>
                           <Group gap={6} wrap="nowrap">
                             <Badge

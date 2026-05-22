@@ -790,12 +790,12 @@ Now output the polished email starting with "Subject:".`;
               ) : (
                 <ScrollArea h={220} type="auto">
                   <Stack gap={4}>
-                    {emails.map((e) => {
+                    {emails.map((e, idx) => {
                       const meta = AUDIENCE_META[e.audience as Audience] ?? AUDIENCE_META.internal;
                       const Icon = meta.icon;
                       return (
                         <Group
-                          key={e.id}
+                          key={`polished-email-${e.id}-${idx}`}
                           justify="space-between"
                           wrap="nowrap"
                           gap={6}

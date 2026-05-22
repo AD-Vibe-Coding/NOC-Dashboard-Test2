@@ -20,7 +20,7 @@ import { loadEnv } from "vite";
  *   phone:read:user:admin
  *   phone:read:list_call_queues:admin
  *   phone:read:list_call_queue_members:admin
- *   phone:read:list_calls:admin      (or phone:read:list_call_logs:admin)
+ *   phone:read:list_call_logs:admin
  */
 
 // ---- Snapshot data --------------------------------------------------------
@@ -116,30 +116,22 @@ async function getZoomAccessToken(
 
 // ---- Live mode — Zoom Phone API -------------------------------------------
 //
-// We use these endpoints, all under the Zoom Phone product:
-//   GET /phone/call_queues                       — find the NOC queue by name
-//   GET /phone/call_queues/{id}/members          — roster of queue members
-//   GET /phone/users (when no queue scope set)   — fallback roster
-//   GET /phone/calls?call_status=ringing|connected — live calls in progress
-//   GET /users/{userId}/presence_status          — chat-level presence (busy/available)
-
-interface ZoomPhoneUser {
-  id: string;
-  email?: string;
-  name?: string;
-  status?: string; // "activate" / "deactivate"  (account status, NOT call status)
-  extension_number?: string | number;
-}
-
-interface LiveCall {
-  user_id?: string;
-  caller_user_id?: string;
-  callee_user_id?: string;
-  start_time?: string;
-  call_type?: string; // "inbound" / "outbound"
-  call_status?: string; // "ringing" / "connected" / "in_progress"
-  direction?: string;
-}
+// Strategy: enumerate all call queues → collect members from each queue →
+// de-duplicate by user ID → use receive_call as ready/not-ready signal.
+//
+// Endpoints used (all confirmed working with current scopes):
+//   GET /phone/call_queues                       — list all queues ✅
+//   GET /phone/call_queues/{id}/members          — queue member roster ✅
+//
+// Endpoints that need additional scopes (gracefully skipped if 403):
+//   GET /users/{userId}/presence_status          — requires user:read:presence_status:admin
+//
+// Status mapping from available data:
+//   receive_call: true  → "ready"   (opted in, available to receive queue calls)
+//   receive_call: false → "not_ready" (opted out / on break / DND)
+//   presence "available" → upgrades to "ready"
+//   presence "in_meeting" / "busy" → "not_ready"
+//   presence "phone" → "on_call" (best signal for active call without call logs scope)
 
 async function zoomGet(token: string, path: string): Promise<any> {
   const r = await fetch(`https://api.zoom.us/v2${path}`, {
@@ -157,7 +149,6 @@ async function fetchAllPaginated(
   path: string,
   itemsKey: string,
 ): Promise<any[]> {
-  // Zoom paginates with next_page_token. Limit to a few pages to stay snappy.
   const all: any[] = [];
   let nextToken = "";
   for (let i = 0; i < 5; i++) {
@@ -171,137 +162,134 @@ async function fetchAllPaginated(
   return all;
 }
 
+interface QueueMember {
+  id: string;
+  name: string;
+  email?: string;
+  receive_call: boolean;
+  queues: string[];
+}
+
 async function fetchZoomPhoneAgentsLive(
   token: string,
-  queueIdOrName?: string,
-): Promise<{ agents: SnapshotAgent[]; resolvedQueueName: string }> {
-  let queueName = "Zoom Phone Queue";
-  let roster: ZoomPhoneUser[] = [];
+  queueIdFilter?: string,
+): Promise<{ agents: SnapshotAgent[]; resolvedQueueName: string; warning?: string }> {
 
-  if (queueIdOrName) {
-    // Resolve queue: accept either an exact ID or a name fragment
-    let queueId = queueIdOrName;
-    if (!/^[A-Za-z0-9_-]{15,}$/.test(queueIdOrName)) {
-      // Treat as a name fragment — list queues and find it
-      const queues = await fetchAllPaginated(token, "/phone/call_queues", "call_queues");
-      const match = queues.find(
-        (q: any) =>
-          q.id === queueIdOrName ||
-          q.name?.toLowerCase().includes(queueIdOrName.toLowerCase()) ||
-          q.extension_number?.toString() === queueIdOrName,
-      );
-      if (!match) {
-        throw new Error(
-          `Queue "${queueIdOrName}" not found among ${queues.length} call queues. ` +
-            `Set ZOOM_QUEUE_ID to one of: ${queues.slice(0, 5).map((q: any) => q.name).join(", ")}`,
-        );
-      }
-      queueId = match.id;
-      queueName = match.name ?? queueName;
-    } else {
-      // Direct ID — fetch queue meta for the name
-      try {
-        const q = await zoomGet(token, `/phone/call_queues/${queueId}`);
-        queueName = q.name ?? queueName;
-      } catch {
-        /* not fatal */
-      }
-    }
-    const members = await fetchAllPaginated(
-      token,
-      `/phone/call_queues/${queueId}/members`,
-      "call_queue_members",
-    );
-    // Member shape: { user_id, receive_call, ... } — flatten into ZoomPhoneUser
-    roster = members.map((m: any) => ({
-      id: m.user_id ?? m.id,
-      name: m.name ?? m.display_name,
-      email: m.email,
-      extension_number: m.extension_number,
-    }));
-  } else {
-    // No queue scoping — list all phone users (paginated)
-    const users = await fetchAllPaginated(token, "/phone/users", "users");
-    roster = users.map((u: any) => ({
-      id: u.id,
-      name: u.name ?? (`${u.first_name ?? ""} ${u.last_name ?? ""}`.trim() || u.email),
-      email: u.email,
-      status: u.status,
-      extension_number: u.extension_number,
-    }));
+  // 1. Get all call queues
+  const allQueues = await fetchAllPaginated(token, "/phone/call_queues", "call_queues");
+  if (allQueues.length === 0) {
+    throw new Error("No Zoom Phone call queues found in this account.");
   }
 
-  // ---- Real-time call detection ----
-  // The reliable cross-tier signal for "is this user on a call right now" is
-  // /phone/calls?call_status=in_progress. Some accounts also expose
-  // /phone/cep/queues/.../live_calls — we try that first when a queue is set.
-  const inCall = new Map<string, { startedAt: number; channel?: string }>();
-  try {
-    const calls: LiveCall[] = await fetchAllPaginated(
-      token,
-      "/phone/calls?call_status=in_progress",
-      "calls",
+  // 2. Filter to a specific queue if ZOOM_QUEUE_ID is set, otherwise use all
+  let targetQueues = allQueues;
+  if (queueIdFilter) {
+    const match = allQueues.find(
+      (q: any) =>
+        q.id === queueIdFilter ||
+        q.name?.toLowerCase().includes(queueIdFilter.toLowerCase()),
     );
-    for (const c of calls) {
-      const uid = c.user_id ?? c.caller_user_id ?? c.callee_user_id;
-      if (!uid) continue;
-      const startedAt = c.start_time ? Date.parse(c.start_time) : Date.now();
-      inCall.set(uid, { startedAt, channel: "voice" });
+    if (match) {
+      targetQueues = [match];
     }
-  } catch (err) {
-    // Some accounts don't have phone:read:list_calls — fall back gracefully
-    console.warn("[zoom-proxy] /phone/calls unavailable:", err instanceof Error ? err.message : err);
+    // If no match, fall through and use all queues
   }
 
-  // ---- Presence (best-effort; tells us busy/away/dnd vs available) ----
-  const presence = new Map<string, string>();
+  const resolvedQueueName = targetQueues.length === 1
+    ? targetQueues[0].name
+    : "All Queues (" + targetQueues.map((q: any) => q.name).join(", ") + ")";
+
+  // 3. Fetch members from each queue; de-duplicate by user ID
+  const memberMap = new Map<string, QueueMember>();
   await Promise.all(
-    roster.slice(0, 30).map(async (u) => {
-      if (!u.id) return;
-      try {
-        const p = await zoomGet(token, `/users/${u.id}/presence_status`);
-        if (p.status) presence.set(u.id, String(p.status).toLowerCase());
-      } catch {
-        /* presence is optional, ignore */
+    targetQueues.map(async (q: any) => {
+      const members = await fetchAllPaginated(
+        token,
+        `/phone/call_queues/${q.id}/members`,
+        "call_queue_members",
+      );
+      for (const m of members) {
+        const uid = String(m.id ?? m.user_id ?? "");
+        if (!uid) continue;
+        if (memberMap.has(uid)) {
+          // Already seen — merge queue list
+          memberMap.get(uid)!.queues.push(q.name);
+        } else {
+          memberMap.set(uid, {
+            id: uid,
+            name: String(m.name ?? m.display_name ?? m.email ?? "Unknown"),
+            email: m.email ? String(m.email) : undefined,
+            receive_call: !!m.receive_call,
+            queues: [q.name],
+          });
+        }
       }
     }),
   );
 
-  const now = Date.now();
+  const roster = Array.from(memberMap.values());
+
+  // 4. Try to enrich with Zoom presence (requires user:read:presence_status:admin).
+  //    Silently skip per-user if 403 — the scope is optional.
+  const presence = new Map<string, string>();
+  let presenceAvailable = false;
+  await Promise.all(
+    roster.slice(0, 30).map(async (u) => {
+      try {
+        const p = await zoomGet(token, `/users/${u.id}/presence_status`);
+        if (p.status && !p.code) {
+          presence.set(u.id, String(p.status).toLowerCase());
+          presenceAvailable = true;
+        }
+      } catch {
+        /* optional — skip */
+      }
+    }),
+  );
+
+  // 5. Build agent list
   const agents: SnapshotAgent[] = roster.map((u) => {
-    const active = inCall.get(u.id);
     const pres = presence.get(u.id);
-    let status: SnapshotAgent["status"] = "offline";
+    let status: SnapshotAgent["status"];
     let subStatus: string | undefined;
 
-    if (active) {
+    if (pres === "phone") {
+      // Zoom presence "Phone" = actively on a phone call
       status = "on_call";
-    } else if (pres === "available") {
-      status = "ready";
-    } else if (pres === "in_meeting" || pres === "presenting" || pres === "in_calendar_event") {
+    } else if (pres === "in_meeting" || pres === "busy") {
       status = "not_ready";
-      subStatus = pres === "in_meeting" ? "In meeting" : pres === "presenting" ? "Presenting" : "In meeting";
-    } else if (pres === "do_not_disturb" || pres === "out_of_office") {
+      subStatus = "In meeting";
+    } else if (pres === "do_not_disturb") {
       status = "not_ready";
-      subStatus = pres === "do_not_disturb" ? "Do not disturb" : "Out of office";
+      subStatus = "Do not disturb";
+    } else if (pres === "out_of_office") {
+      status = "not_ready";
+      subStatus = "Out of office";
     } else if (pres === "away") {
       status = "not_ready";
       subStatus = "Away";
-    } else if (u.status === "deactivate") {
-      status = "offline";
+    } else if (pres === "available" || u.receive_call) {
+      status = "ready";
+    } else {
+      // receive_call=false and no presence: opted out of queue — treat as not_ready
+      status = "not_ready";
     }
 
     return {
-      name: u.name || u.email || u.id,
+      name: u.name,
       status,
       sub_status: subStatus,
-      status_age_sec: active ? Math.max(0, Math.floor((now - active.startedAt) / 1000)) : 0,
-      engagement_age_sec: active ? Math.max(0, Math.floor((now - active.startedAt) / 1000)) : undefined,
-      channel: active?.channel as any,
+      status_age_sec: 0,
+      engagement_age_sec: undefined,
+      channel: status === "on_call" ? "voice" : undefined,
     };
   });
 
-  return { agents, resolvedQueueName: queueName };
+  const warning = presenceAvailable
+    ? null
+    : "Add scope user:read:presence_status:admin in Zoom Marketplace for on-call detection. Currently showing queue availability only.";
+
+  return { agents, resolvedQueueName, warning };
 }
 
 // ---- Plugin ---------------------------------------------------------------
@@ -340,6 +328,7 @@ export function zoomProxyPlugin(): Plugin {
               const result = await fetchZoomPhoneAgentsLive(token, queueIdOrName);
               agents = result.agents;
               queueName = result.resolvedQueueName || defaultQueueName;
+              warning = result.warning ?? null;
               source = "live";
             } catch (err) {
               warning = `Zoom API call failed, using snapshot: ${err instanceof Error ? err.message : String(err)}`;

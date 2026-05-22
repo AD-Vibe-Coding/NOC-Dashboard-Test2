@@ -1,6 +1,7 @@
 // @appbuilder-supabase-admin-v1 -- auto-injected by deploy pipeline.
 // Do not edit by hand; the pipeline replaces this file on the next deploy.
 
+import "dotenv/config";
 import { createClient } from "@supabase/supabase-js";
 
 // Service-role client. Do NOT import this from anywhere under src/ -- it

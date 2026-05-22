@@ -362,7 +362,7 @@ ${truncated}${truncationNote}`;
                 <Stack gap={0}>
                   {summaries.map((s, idx) => (
                     <Box
-                      key={s.id}
+                      key={`summary-${s.id}-${s.file_name}-${idx}`}
                       style={{
                         borderBottom:
                           idx === summaries.length - 1

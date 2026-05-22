@@ -5,8 +5,9 @@
  * Just the vCom logo, a brief description, and a sign-in button.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  Alert,
   Box,
   Button,
   Card,
@@ -23,8 +24,11 @@ import {
   useComputedColorScheme,
   ActionIcon,
   Tooltip,
+  Divider,
 } from "@mantine/core";
 import {
+  IconAlertCircle,
+  IconBrandGoogle,
   IconLogin,
   IconMoon,
   IconShieldCheck,
@@ -35,6 +39,16 @@ import { BrandLogo } from "./widgets/BrandLogo";
 import { useIdentity } from "./lib/identity";
 import { NOC_ROSTER } from "./lib/roster";
 
+// Map URL auth_error params to human-readable messages
+const AUTH_ERROR_MESSAGES: Record<string, string> = {
+  consent_denied: "Sign-in was cancelled. Please try again.",
+  token_exchange_failed: "Authentication failed. Please try again.",
+  domain_not_allowed: "Only @appdirect.com accounts are allowed.",
+  network_error: "A network error occurred. Please check your connection and try again.",
+  profile_fetch_failed: "Could not load your Google profile. Please try again.",
+  no_email: "Could not retrieve your email from Google. Please try again.",
+};
+
 // AppDirect brand colors
 const APPDIRECT_BRAND_PRIMARY = "#006080";
 const APPDIRECT_BRAND_ACCENT = "#0080a6";
@@ -42,12 +56,30 @@ const APPDIRECT_BRAND_ACCENT = "#0080a6";
 export default function SignInPage() {
   const { ssoEnabled, signIn, devSignIn } = useIdentity();
   const [devModalOpened, setDevModalOpened] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
   });
   const isDark = computedColorScheme === "dark";
   const toggleColorScheme = () => setColorScheme(isDark ? "light" : "dark");
+
+  // Parse auth_error from URL on mount, then strip it from the URL
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const err = params.get("auth_error");
+    const domain = params.get("domain");
+    if (err) {
+      const msg = AUTH_ERROR_MESSAGES[err]
+        ?? (err === "domain_not_allowed" && domain
+          ? `${domain} is not an allowed domain. Use your @appdirect.com account.`
+          : `Sign-in error: ${err}`);
+      setAuthError(msg);
+      // Remove error params from URL so refresh doesn't re-show them
+      const clean = window.location.pathname;
+      window.history.replaceState({}, "", clean);
+    }
+  }, []);
 
   return (
     <Box
@@ -134,6 +166,21 @@ export default function SignInPage() {
               </Text>
             </Stack>
 
+            {/* Auth error alert */}
+            {authError && (
+              <Alert
+                icon={<IconAlertCircle size={16} />}
+                color="red"
+                radius="md"
+                w="100%"
+                maw={380}
+                withCloseButton
+                onClose={() => setAuthError(null)}
+              >
+                {authError}
+              </Alert>
+            )}
+
             {/* Sign-in card */}
             <Card
               withBorder
@@ -150,37 +197,45 @@ export default function SignInPage() {
             >
               <Stack gap="md">
                 {ssoEnabled ? (
-                  <Button
-                    fullWidth
-                    size="md"
-                    color="appdirect"
-                    leftSection={<IconShieldCheck size={18} />}
-                    onClick={signIn}
-                    radius="md"
-                  >
-                    Sign in with Google
-                  </Button>
+                  <>
+                    <Button
+                      fullWidth
+                      size="md"
+                      color="appdirect"
+                      leftSection={<IconBrandGoogle size={18} />}
+                      onClick={signIn}
+                      radius="md"
+                      styles={{ root: { fontWeight: 600 } }}
+                    >
+                      Sign in with Google
+                    </Button>
+                    <Group gap="xs" justify="center">
+                      <ThemeIcon size="xs" variant="transparent" color="dimmed">
+                        <IconShieldCheck size={12} />
+                      </ThemeIcon>
+                      <Text size="xs" c="dimmed">
+                        Restricted to @appdirect.com accounts
+                      </Text>
+                    </Group>
+                  </>
                 ) : (
-                  <Button
-                    fullWidth
-                    size="md"
-                    color="appdirect"
-                    leftSection={<IconLogin size={18} />}
-                    onClick={() => setDevModalOpened(true)}
-                    radius="md"
-                  >
-                    Sign in
-                  </Button>
+                  <>
+                    <Button
+                      fullWidth
+                      size="md"
+                      color="appdirect"
+                      leftSection={<IconLogin size={18} />}
+                      onClick={() => setDevModalOpened(true)}
+                      radius="md"
+                    >
+                      Sign in
+                    </Button>
+                    <Divider label="Development mode" labelPosition="center" />
+                    <Text size="xs" c="dimmed" ta="center">
+                      Google SSO not configured — using name picker.
+                    </Text>
+                  </>
                 )}
-
-                <Group gap="xs" justify="center">
-                  <ThemeIcon size="xs" variant="transparent" color="dimmed">
-                    <IconShieldCheck size={12} />
-                  </ThemeIcon>
-                  <Text size="xs" c="dimmed">
-                    Restricted to @appdirect.com accounts
-                  </Text>
-                </Group>
               </Stack>
             </Card>
 

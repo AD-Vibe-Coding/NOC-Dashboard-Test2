@@ -27,6 +27,7 @@ import {
   ROLES,
   ROLE_COLORS,
   ROLE_DESCRIPTIONS,
+  ROLE_LABELS,
   ROLE_SHORT_LABELS,
   type Role,
 } from "../lib/roles";
@@ -287,35 +288,58 @@ function AccountModal({
           </Group>
         </Box>
 
-        {/* Role selector */}
-        <Box>
-          <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={6}>
-            Change role
-          </Text>
-          <SegmentedControl
-            fullWidth
-            value={role}
-            onChange={(v) => setLocalRole(v as Role)}
-            data={ROLES.map((r) => ({
-              label: ROLE_SHORT_LABELS[r],
-              value: r,
-            }))}
-            size="sm"
-          />
+        {/* Role display — managers can switch for demo; techs see read-only badge */}
+        {identity.role === "manager" ? (
+          <Box>
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={6}>
+              Role override (manager only)
+            </Text>
+            <SegmentedControl
+              fullWidth
+              value={role}
+              onChange={(v) => setLocalRole(v as Role)}
+              data={ROLES.map((r) => ({
+                label: ROLE_SHORT_LABELS[r],
+                value: r,
+              }))}
+              size="sm"
+            />
+            <Box
+              mt={8}
+              p="xs"
+              style={{
+                background: "var(--mantine-color-dark-7)",
+                borderRadius: 6,
+                borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[role]}-6)`,
+              }}
+            >
+              <Text size="xs" c="dimmed">
+                {ROLE_DESCRIPTIONS[role]}
+              </Text>
+            </Box>
+          </Box>
+        ) : (
           <Box
-            mt={8}
             p="xs"
             style={{
               background: "var(--mantine-color-dark-7)",
-              borderRadius: 6,
-              borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[role]}-6)`,
+              borderRadius: 8,
+              borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[identity.role]}-6)`,
             }}
           >
-            <Text size="xs" c="dimmed">
-              {ROLE_DESCRIPTIONS[role]}
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={4}>
+              Access Level
             </Text>
+            <Group gap="xs">
+              <Badge color={ROLE_COLORS[identity.role]} variant="light" size="sm">
+                {ROLE_LABELS[identity.role]}
+              </Badge>
+              <Text size="xs" c="dimmed">
+                {ROLE_DESCRIPTIONS[identity.role]}
+              </Text>
+            </Group>
           </Box>
-        </Box>
+        )}
 
         <Divider />
 
@@ -332,11 +356,13 @@ function AccountModal({
           </Button>
           <Group gap="xs">
             <Button variant="default" size="xs" onClick={onClose}>
-              Cancel
+              Close
             </Button>
-            <Button size="xs" color="appdirect" onClick={save}>
-              Save
-            </Button>
+            {identity.role === "manager" && (
+              <Button size="xs" color="appdirect" onClick={save}>
+                Save
+              </Button>
+            )}
           </Group>
         </Group>
       </Stack>

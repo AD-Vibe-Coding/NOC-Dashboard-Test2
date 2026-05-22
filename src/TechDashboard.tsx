@@ -496,9 +496,17 @@ function TechHome({
             <Title order={2} c="bright" style={{ letterSpacing: "-0.02em" }}>
               {firstName}
             </Title>
+            <Text size="xs" c="dimmed" mt={2}>
+              Personal workspace · team data is manager-only
+            </Text>
           </Box>
           <Group gap="sm">
-            <Badge size="lg" variant="light" color={accentColor} radius="md">
+            <Badge
+              size="lg"
+              variant="filled"
+              color={accentColor}
+              radius="md"
+            >
               {ROLE_LABELS[role]}
             </Badge>
             <Text size="sm" c="dimmed" ff="monospace">

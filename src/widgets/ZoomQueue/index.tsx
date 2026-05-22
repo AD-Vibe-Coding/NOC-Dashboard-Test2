@@ -189,14 +189,14 @@ export function ZoomQueueWidget() {
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {onCall.map((a) => {
+                  {onCall.map((a, idx) => {
                     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                     tick;
                     const ChannelIcon = a.engagement_channel
                       ? CHANNEL_ICONS[a.engagement_channel]
                       : IconPhone;
                     return (
-                      <Table.Tr key={a.agent_id}>
+                      <Table.Tr key={`on-call-${a.agent_id}-${a.display_name}-${idx}`}>
                         <Table.Td>
                           <Text fw={500}>{a.display_name}</Text>
                         </Table.Td>
@@ -363,11 +363,11 @@ function AgentTable({
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
-        {agents.map((a) => {
+        {agents.map((a, idx) => {
           // eslint-disable-next-line @typescript-eslint/no-unused-expressions
           tick;
           return (
-            <Table.Tr key={a.agent_id}>
+            <Table.Tr key={`zoom-agent-${a.agent_id}-${a.display_name}-${idx}`}>
               <Table.Td>
                 <Text fw={500}>{a.display_name}</Text>
               </Table.Td>

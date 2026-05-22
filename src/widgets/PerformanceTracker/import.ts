@@ -9,7 +9,7 @@ import { resolveTeamMember } from "./team";
 //      - User reviews each sheet, optionally adjusts source type / name col.
 //   2. executeImport(file, plan) → ImportResult
 //      - Re-reads the workbook, applies the plan, returns matched + skipped.
-//   3. (caller) persistImport(...) writes ImportResult into PGlite.
+//   3. (caller) persistImport(...) writes ImportResult into Supabase via API routes.
 //
 // The two-step design lets the UI show a confirmation dialog with row counts
 // and previews BEFORE anything hits the DB.

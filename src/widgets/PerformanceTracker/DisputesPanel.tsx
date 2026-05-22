@@ -176,9 +176,9 @@ export function DisputesPanel({ reviewerName, onMetricsChanged, isManager, curre
                 {pending.length}
               </Badge>
             </Group>
-            {pending.map((d) => (
+            {pending.map((d, idx) => (
               <DisputeCard
-                key={d.id}
+                key={`pending-dispute-${d.id}-${idx}`}
                 dispute={d}
                 reviewerName={reviewerName}
                 canReview={!!isManager}
@@ -207,8 +207,8 @@ export function DisputesPanel({ reviewerName, onMetricsChanged, isManager, curre
             </Group>
             <ScrollArea.Autosize mah={400}>
               <Stack gap="xs">
-                {reviewed.map((d) => (
-                  <DisputeCard key={d.id} dispute={d} reviewerName={reviewerName} canReview={false} onReviewed={load} />
+                {reviewed.map((d, idx) => (
+                  <DisputeCard key={`reviewed-dispute-${d.id}-${idx}`} dispute={d} reviewerName={reviewerName} canReview={false} onReviewed={load} />
                 ))}
               </Stack>
             </ScrollArea.Autosize>

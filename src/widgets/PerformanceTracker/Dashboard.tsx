@@ -1060,9 +1060,9 @@ function TicketDiagnosticsModal({
             ) : (
               <ScrollArea h={280}>
                 <Stack gap="xs">
-                  {data.samples.map((s) => (
+                  {data.samples.map((s, idx) => (
                     <Card
-                      key={s.id}
+                      key={`sample-${s.id}-${s.period_month ?? "no-month"}-${s.period_quarter ?? "no-quarter"}-${idx}`}
                       withBorder
                       radius="sm"
                       p="xs"

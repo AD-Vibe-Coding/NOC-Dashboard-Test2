@@ -1005,7 +1005,7 @@ Example:
               <Stack gap={0}>
                 {drafts.map((d, idx) => (
                   <Box
-                    key={d.id}
+                    key={`escalation-draft-${d.id}-${idx}`}
                     style={{
                       borderBottom:
                         idx === drafts.length - 1

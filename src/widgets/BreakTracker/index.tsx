@@ -495,11 +495,11 @@ export function BreakTrackerWidget() {
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {active.map((b) => {
+                  {active.map((b, idx) => {
                     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                     tick;
                     return (
-                      <Table.Tr key={b.id}>
+                      <Table.Tr key={`active-break-${b.id}-${b.employee_name}-${idx}`}>
                         <Table.Td>
                           <Group gap={6} wrap="nowrap">
                             <Text fw={500}>{b.employee_name}</Text>
@@ -591,8 +591,8 @@ export function BreakTrackerWidget() {
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {history.map((b) => (
-                    <Table.Tr key={b.id}>
+                  {history.map((b, idx) => (
+                    <Table.Tr key={`break-history-${b.id}-${b.employee_name}-${idx}`}>
                       <Table.Td>
                         <Text fw={500}>{b.employee_name}</Text>
                       </Table.Td>

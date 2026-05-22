@@ -10,7 +10,7 @@ export type PerformanceImport = typeof schema.performance_imports.$inferSelect;
 // and strips raw_json from the response (~11MB → ~1.4MB).
 
 /**
- * Hook for the Performance Tracker. Loads all imports + metrics from PGlite
+ * Hook for the Performance Tracker. Loads all imports + metrics from Supabase-backed API routes
  * and re-fetches whenever `refreshKey` increments.
  */
 export function usePerformanceData() {

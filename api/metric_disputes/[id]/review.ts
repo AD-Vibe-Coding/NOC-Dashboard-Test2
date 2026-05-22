@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../../_lib/supabase-admin.js";
 import { invalidateMetricsCache } from "../../_lib/crud.js";
+import { requireManager } from "../../_lib/auth-middleware.js";
 
 /**
  * POST /api/metric_disputes/:id/review
@@ -16,6 +17,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
+
+  // Only managers can approve/reject disputes
+  if (!requireManager(req, res)) return;
 
   const id = Number(req.query.id);
   if (!Number.isFinite(id)) {

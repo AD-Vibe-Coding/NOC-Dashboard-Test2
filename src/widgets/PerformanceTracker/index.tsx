@@ -548,8 +548,8 @@ function ImportHistory({
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
-              {imports.map((imp) => (
-                <Table.Tr key={imp.id}>
+              {imports.map((imp, idx) => (
+                <Table.Tr key={`import-${imp.id}-${imp.file_name}-${imp.sheet_name ?? "sheet"}-${idx}`}>
                   <Table.Td>
                     <Text size="xs">
                       {new Date(imp.created_at).toLocaleString(undefined, {

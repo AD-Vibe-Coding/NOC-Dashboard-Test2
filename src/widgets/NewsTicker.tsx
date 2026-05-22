@@ -224,12 +224,12 @@ export function NewsTicker() {
                 paddingLeft: "100%",
               }}
             >
-              {sorted.map((u) => {
+              {sorted.map((u, idx) => {
                 const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
                 const Icon = cfg.icon;
                 return (
                   <Group
-                    key={u.id}
+                    key={`ticker-${u.id}-${idx}`}
                     gap={6}
                     wrap="nowrap"
                     style={{ flexShrink: 0 }}
@@ -257,12 +257,12 @@ export function NewsTicker() {
                 );
               })}
               {/* Duplicate for seamless loop */}
-              {sorted.map((u) => {
+              {sorted.map((u, idx) => {
                 const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
                 const Icon = cfg.icon;
                 return (
                   <Group
-                    key={`dup-${u.id}`}
+                    key={`ticker-dup-${u.id}-${idx}`}
                     gap={6}
                     wrap="nowrap"
                     style={{ flexShrink: 0 }}
@@ -512,11 +512,11 @@ function ManageUpdatesModal({
             No updates to manage.
           </Text>
         )}
-        {updates.map((u) => {
+        {updates.map((u, idx) => {
           const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
           return (
             <Box
-              key={u.id}
+              key={`manager-update-${u.id}-${idx}`}
               p="sm"
               style={{
                 border: "1px solid var(--mantine-color-dark-4)",

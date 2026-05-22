@@ -84,8 +84,8 @@ export function WfhTile({ onExpand }: Props) {
               <>
                 <Divider variant="dashed" />
                 <Stack gap={4}>
-                  {pending.slice(0, 3).map((r) => (
-                    <Group key={r.id} justify="space-between" wrap="nowrap" gap={6}>
+                  {pending.slice(0, 3).map((r, idx) => (
+                    <Group key={`pending-wfh-${r.id}-${idx}`} justify="space-between" wrap="nowrap" gap={6}>
                       <Text size="sm" fw={500} truncate style={{ minWidth: 0 }}>
                         {r.employee_name}
                       </Text>

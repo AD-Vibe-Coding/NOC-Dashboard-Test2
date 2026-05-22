@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
 import { defaultRoleFor, ROSTER_BY_EMAIL } from "../_lib/roles.js";
+import { supabaseAdmin } from "../_lib/supabase-admin.js";
 
 /**
  * POST /api/auth/dev-login — Development-only name picker sign-in.
@@ -26,7 +27,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "Name is required" });
   }
 
-  const role = defaultRoleFor(name);
+  let role = defaultRoleFor(name);
 
   // Find the canonical email for this person from the roster, or generate one
   let email = `${name.toLowerCase().replace(/\s+/g, ".")}@appdirect.com`;
@@ -37,7 +38,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // Check for a DB role override set by a manager
+  try {
+    const { data } = await supabaseAdmin
+      .from("user_roles")
+      .select("role")
+      .eq("name", name)
+      .limit(1)
+      .maybeSingle();
+    if (data?.role) role = data.role;
+  } catch { /* non-fatal */ }
+
   const token = signJwt({ email, name, role, picture: null }, 86400);
+
+  // Record sign-in for Access Control widget (best-effort)
+  try {
+    await supabaseAdmin.from("user_sessions").delete().eq("name", name);
+    await supabaseAdmin.from("user_sessions").insert({
+      name,
+      email,
+      sign_in_method: "dev",
+      last_sign_in: new Date().toISOString(),
+    });
+  } catch { /* non-fatal */ }
 
   res.setHeader(
     "Set-Cookie",
