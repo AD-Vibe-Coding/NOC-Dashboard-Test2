@@ -1,26 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchZoomQueue, type ZoomQueueData } from "../../lib/zoom";
 
-export interface AvailabilityData {
-  date: string;
-  // agent_name → queue_name → hour → receive_call
-  agents: Record<string, Record<string, Record<number, boolean>>>;
-}
-
-const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000; // save snapshot every 5 min
-
 /**
- * Shared data hook for the Zoom Queue widget — used by both the Tile (compact)
- * and Full views. Polls every 15s and ticks every second for live durations.
- * Also saves periodic opt-in snapshots to Supabase for the daily timeline.
+ * Hours in queue per agent per queue for today.
+ * agent_name → queue_name → hours (decimal, e.g. 3.25)
+ * Combines Supabase snapshot history + live session accumulation.
  */
+export type QueueHours = Record<string, Record<string, number>>;
+
+const POLL_INTERVAL_MS    = 15_000;       // 15 s between data refreshes
+const SNAPSHOT_INTERVAL_MS = 5 * 60_000; // save to Supabase every 5 min
+
 export function useZoomQueue() {
-  const [data, setData]               = useState<ZoomQueueData | null>(null);
-  const [availability, setAvailability] = useState<AvailabilityData | null>(null);
-  const [loading, setLoading]         = useState(false);
-  const [error, setError]             = useState<string | null>(null);
-  const [tick, setTick]               = useState(0);
-  const lastSnapshotRef               = useRef<number>(0);
+  const [data, setData]         = useState<ZoomQueueData | null>(null);
+  const [queueHours, setQueueHours] = useState<QueueHours>({});
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState<string | null>(null);
+  const [tick, setTick]         = useState(0);
+
+  // Tracks how many 15-second polls each agent×queue has been opted-in
+  // during this session (resets on page load — Supabase fills historical gaps)
+  const sessionCountRef = useRef<Record<string, Record<string, number>>>({});
+  const lastSnapshotRef = useRef<number>(0);
+  // Hours loaded from Supabase (base)
+  const supabaseHoursRef = useRef<QueueHours>({});
 
   function todayPst(): string {
     return new Intl.DateTimeFormat("en-CA", {
@@ -29,6 +32,46 @@ export function useZoomQueue() {
     }).format(new Date());
   }
 
+  /** Merge Supabase base hours + live session accumulation into queueHours state */
+  function recalcHours() {
+    const base = supabaseHoursRef.current;
+    const counts = sessionCountRef.current;
+    const merged: QueueHours = {};
+
+    // Start with Supabase base
+    for (const [agent, queues] of Object.entries(base)) {
+      merged[agent] = { ...queues };
+    }
+
+    // Add session hours (pollCount × 15s / 3600) on top
+    for (const [agent, queues] of Object.entries(counts)) {
+      if (!merged[agent]) merged[agent] = {};
+      for (const [queue, count] of Object.entries(queues)) {
+        const sessionHrs = Math.round((count * POLL_INTERVAL_MS / 1000 / 3600) * 100) / 100;
+        merged[agent][queue] = Math.round(((merged[agent][queue] ?? 0) + sessionHrs) * 100) / 100;
+      }
+    }
+
+    setQueueHours(merged);
+  }
+
+  /** Accumulate session time from a fresh data poll */
+  function accumulateSession(queueData: ZoomQueueData) {
+    const counts = sessionCountRef.current;
+    for (const agent of queueData.agents) {
+      if (!agent.queue_opt_in) continue;
+      if (!counts[agent.display_name]) counts[agent.display_name] = {};
+      for (const [queue, receive_call] of Object.entries(agent.queue_opt_in)) {
+        if (receive_call) {
+          counts[agent.display_name][queue] = (counts[agent.display_name][queue] ?? 0) + 1;
+        }
+      }
+    }
+    sessionCountRef.current = counts;
+    recalcHours();
+  }
+
+  /** Save a Supabase snapshot (debounced to every 5 min) */
   async function saveSnapshot(queueData: ZoomQueueData) {
     const now = Date.now();
     if (now - lastSnapshotRef.current < SNAPSHOT_INTERVAL_MS) return;
@@ -43,7 +86,6 @@ export function useZoomQueue() {
       }));
 
     if (agents.length === 0) return;
-
     try {
       await fetch("/api/zoom/snapshot", {
         method: "POST",
@@ -55,12 +97,15 @@ export function useZoomQueue() {
     }
   }
 
+  /** Load historical hours from Supabase and merge with session counts */
   async function refreshAvailability() {
     try {
       const r = await fetch(`/api/zoom/availability?date=${todayPst()}`);
-      if (r.ok) {
-        const j: AvailabilityData = await r.json();
-        setAvailability(j);
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.agents) {
+        supabaseHoursRef.current = j.agents as QueueHours;
+        recalcHours();
       }
     } catch (e) {
       console.warn("[ZoomQueue] availability fetch failed:", e);
@@ -73,7 +118,7 @@ export function useZoomQueue() {
     try {
       const r = await fetchZoomQueue();
       setData(r);
-      // Save snapshot (debounced to every 5 min)
+      accumulateSession(r);
       saveSnapshot(r);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -84,15 +129,14 @@ export function useZoomQueue() {
 
   useEffect(() => {
     refresh();
-    const queueId = setInterval(refresh, 15_000);
-    return () => clearInterval(queueId);
+    const id = setInterval(refresh, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
   }, []);
 
-  // Load availability on mount and refresh every 5 min
   useEffect(() => {
     refreshAvailability();
-    const availId = setInterval(refreshAvailability, SNAPSHOT_INTERVAL_MS);
-    return () => clearInterval(availId);
+    const id = setInterval(refreshAvailability, SNAPSHOT_INTERVAL_MS);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
@@ -100,5 +144,5 @@ export function useZoomQueue() {
     return () => clearInterval(id);
   }, []);
 
-  return { data, availability, loading, error, tick, refresh };
+  return { data, queueHours, loading, error, tick, refresh };
 }

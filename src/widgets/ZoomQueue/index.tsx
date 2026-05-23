@@ -38,7 +38,7 @@ import {
 } from "../../lib/zoom";
 import { formatElapsed, formatTime } from "../../lib/format";
 import { WidgetFrame } from "../WidgetFrame";
-import { useZoomQueue, type AvailabilityData } from "./data";
+import { useZoomQueue } from "./data";
 
 export { ZoomQueueTile } from "./Tile";
 
@@ -62,7 +62,7 @@ const QUEUE_SHORT: Record<string, string> = {
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 export function ZoomQueueWidget() {
-  const { data, availability, loading, error, tick, refresh } = useZoomQueue();
+  const { data, queueHours, loading, error, tick, refresh } = useZoomQueue();
 
   const totals = data?.totals;
   const onCall   = (data?.agents ?? []).filter((a) => a.status === "on_call");
@@ -146,117 +146,76 @@ export function ZoomQueueWidget() {
                 </Tabs.List>
 
                 <Tabs.Panel value="on_call" pt="md">
-            {onCall.length === 0 ? (
-              <Empty
-                icon={IconPhoneOff}
-                label="Nobody is on a call right now."
-              />
-            ) : (
-              <Table verticalSpacing="sm" horizontalSpacing="md">
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Agent</Table.Th>
-                    <Table.Th>Channel</Table.Th>
-                    <Table.Th>Call started</Table.Th>
-                    <Table.Th>Talking for</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {onCall.map((a, idx) => {
-                    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-                    tick;
-                    const ChannelIcon = a.engagement_channel
-                      ? CHANNEL_ICONS[a.engagement_channel]
-                      : IconPhone;
-                    return (
-                      <Table.Tr key={`on-call-${a.agent_id}-${a.display_name}-${idx}`}>
-                        <Table.Td>
-                          <Text fw={500}>{a.display_name}</Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Group gap={6} wrap="nowrap">
-                            <ThemeIcon
-                              size="xs"
-                              variant="light"
-                              color="red"
-                              radius="xl"
-                            >
-                              <ChannelIcon size={10} />
-                            </ThemeIcon>
-                            <Text size="sm" c="dimmed">
-                              {a.engagement_channel
-                                ? ZOOM_CHANNEL_LABELS[a.engagement_channel]
-                                : "Voice"}
-                            </Text>
-                          </Group>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text size="sm" c="dimmed">
-                            {a.engagement_started_at
-                              ? formatTime(new Date(a.engagement_started_at))
-                              : "—"}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Text
-                            size="sm"
-                            fw={600}
-                            ff="monospace"
-                            c={
-                              a.engagement_started_at &&
-                              Date.now() - a.engagement_started_at > 15 * 60 * 1000
-                                ? "red"
-                                : undefined
-                            }
-                          >
-                            {a.engagement_started_at
-                              ? formatElapsed(a.engagement_started_at)
-                              : "—"}
-                          </Text>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge
-                            variant="filled"
-                            color="red"
-                            leftSection={<IconCircleDot size={10} />}
-                          >
-                            {ZOOM_STATUS_LABELS[a.status]}
-                          </Badge>
-                        </Table.Td>
-                      </Table.Tr>
-                    );
-                  })}
-                </Table.Tbody>
-              </Table>
-            )}
-          </Tabs.Panel>
+                  {onCall.length === 0 ? (
+                    <Empty icon={IconPhoneOff} label="Nobody is on a call right now." />
+                  ) : (
+                    <Table verticalSpacing="sm" horizontalSpacing="md">
+                      <Table.Thead>
+                        <Table.Tr>
+                          <Table.Th>Agent</Table.Th>
+                          <Table.Th>Channel</Table.Th>
+                          <Table.Th>Call started</Table.Th>
+                          <Table.Th>Talking for</Table.Th>
+                          <Table.Th>Status</Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {onCall.map((a, idx) => {
+                          // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+                          tick;
+                          const ChannelIcon = a.engagement_channel ? CHANNEL_ICONS[a.engagement_channel] : IconPhone;
+                          return (
+                            <Table.Tr key={`on-call-${a.agent_id}-${idx}`}>
+                              <Table.Td><Text fw={500}>{a.display_name}</Text></Table.Td>
+                              <Table.Td>
+                                <Group gap={6} wrap="nowrap">
+                                  <ThemeIcon size="xs" variant="light" color="red" radius="xl">
+                                    <ChannelIcon size={10} />
+                                  </ThemeIcon>
+                                  <Text size="sm" c="dimmed">
+                                    {a.engagement_channel ? ZOOM_CHANNEL_LABELS[a.engagement_channel] : "Voice"}
+                                  </Text>
+                                </Group>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" c="dimmed">
+                                  {a.engagement_started_at ? formatTime(new Date(a.engagement_started_at)) : "—"}
+                                </Text>
+                              </Table.Td>
+                              <Table.Td>
+                                <Text size="sm" fw={600} ff="monospace"
+                                  c={a.engagement_started_at && Date.now() - a.engagement_started_at > 15 * 60 * 1000 ? "red" : undefined}>
+                                  {a.engagement_started_at ? formatElapsed(a.engagement_started_at) : "—"}
+                                </Text>
+                              </Table.Td>
+                              <Table.Td>
+                                <Badge variant="filled" color="red" leftSection={<IconCircleDot size={10} />}>
+                                  {ZOOM_STATUS_LABELS[a.status]}
+                                </Badge>
+                              </Table.Td>
+                            </Table.Tr>
+                          );
+                        })}
+                      </Table.Tbody>
+                    </Table>
+                  )}
+                </Tabs.Panel>
 
-          <Tabs.Panel value="ready" pt="md">
-            {ready.length === 0 ? (
-              <Empty
-                icon={IconUserOff}
-                label="No agents are currently ready."
-              />
-            ) : (
-              <AgentTable agents={ready} tick={tick} />
-            )}
-          </Tabs.Panel>
+                <Tabs.Panel value="ready" pt="md">
+                  {ready.length === 0 ? (
+                    <Empty icon={IconUserOff} label="No agents are currently ready." />
+                  ) : (
+                    <AgentTable agents={ready} tick={tick} />
+                  )}
+                </Tabs.Panel>
 
-          <Tabs.Panel value="not_ready" pt="md">
-            {wrapUp.length + notReady.length === 0 ? (
-              <Empty
-                icon={IconUserCheck}
-                label="No agents are in wrap-up or not-ready."
-              />
-            ) : (
-              <AgentTable
-                agents={[...wrapUp, ...notReady]}
-                tick={tick}
-                showSubStatus
-              />
-            )}
-          </Tabs.Panel>
+                <Tabs.Panel value="not_ready" pt="md">
+                  {wrapUp.length + notReady.length === 0 ? (
+                    <Empty icon={IconUserCheck} label="No agents are in wrap-up or not-ready." />
+                  ) : (
+                    <AgentTable agents={[...wrapUp, ...notReady]} tick={tick} showSubStatus />
+                  )}
+                </Tabs.Panel>
 
                 <Tabs.Panel value="offline" pt="md">
                   {offline.length === 0 ? (
@@ -283,7 +242,7 @@ export function ZoomQueueWidget() {
 
           {/* ── Today's Availability tab ─────────────────────── */}
           <Tabs.Panel value="timeline" pt="md">
-            <TodayTimelineTab agents={data?.agents ?? []} availability={availability} />
+            <TodayHoursTab agents={data?.agents ?? []} queueHours={queueHours} />
           </Tabs.Panel>
         </Tabs>
       </Stack>
@@ -393,178 +352,151 @@ function QueueOptInTab({ agents }: { agents: ZoomAgent[] }) {
 
 // ── Today's Availability tab ──────────────────────────────────────────────────
 
-function TodayTimelineTab({
+// ── Today's Hours tab ─────────────────────────────────────────────────────────
+
+function TodayHoursTab({
   agents,
-  availability,
+  queueHours,
 }: {
   agents: ZoomAgent[];
-  availability: AvailabilityData | null;
+  queueHours: Record<string, Record<string, number>>;
 }) {
-  const now = new Date();
-
-  // Current PST hour
-  const currentHour = parseInt(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/Los_Angeles",
-      hour: "numeric", hour12: false,
-    }).format(now),
-    10,
-  );
-
-  // Show hours from 6am to current hour (or at least 8am)
-  const startHour = 6;
-  const endHour   = Math.max(currentHour, 14);
-  const hours     = Array.from({ length: endHour - startHour + 1 }, (_, i) => startHour + i);
-
-  function fmtHour(h: number): string {
-    if (h === 0 || h === 24) return "12am";
-    if (h === 12) return "12pm";
-    return h < 12 ? `${h}am` : `${h - 12}pm`;
-  }
-
-  // Real agents only
-  const realAgents = agents.filter((a) => !a.display_name.toLowerCase().includes("overflow"));
-
-  // Merge: for current hour use live data; for past hours use DB snapshots
-  // agent_name → queue_name → hour → boolean
-  const merged: Record<string, Record<string, Record<number, boolean | null>>> = {};
-
-  // Seed from availability DB data
-  if (availability?.agents) {
-    for (const [agentName, queues] of Object.entries(availability.agents)) {
-      merged[agentName] = {};
-      for (const [queueName, byHour] of Object.entries(queues)) {
-        merged[agentName][queueName] = {};
-        for (const [hourStr, val] of Object.entries(byHour)) {
-          merged[agentName][queueName][parseInt(hourStr, 10)] = val;
-        }
-      }
-    }
-  }
-
-  // Override current hour with live queue_opt_in data
-  for (const agent of realAgents) {
-    if (!agent.queue_opt_in) continue;
-    if (!merged[agent.display_name]) merged[agent.display_name] = {};
-    for (const [queueName, rcv] of Object.entries(agent.queue_opt_in)) {
-      if (!merged[agent.display_name][queueName]) merged[agent.display_name][queueName] = {};
-      merged[agent.display_name][queueName][currentHour] = rcv;
-    }
-  }
-
-  // Sort agents: those with any data first, then alpha
-  const sortedAgents = [...realAgents].sort((a, b) =>
-    a.display_name.localeCompare(b.display_name),
+  const realAgents = agents.filter(
+    (a) => !a.display_name.toLowerCase().includes("overflow"),
   );
 
   const allQueues = TRACKED_QUEUES.filter((q) =>
     realAgents.some((a) => a.queue_opt_in && q in a.queue_opt_in),
   );
 
-  if (sortedAgents.length === 0) {
+  if (realAgents.length === 0) {
     return <Empty icon={IconCalendarStats} label="No agent data available." />;
   }
 
+  // Build rows: merge live agents + queueHours accumulated data
+  const agentNames = Array.from(
+    new Set([
+      ...realAgents.map((a) => a.display_name),
+      ...Object.keys(queueHours),
+    ]),
+  );
+
+  const rows = agentNames
+    .map((name) => {
+      const hoursPerQueue: Record<string, number> = {};
+      let total = 0;
+      for (const q of allQueues) {
+        const h = queueHours[name]?.[q] ?? 0;
+        hoursPerQueue[q] = h;
+        total += h;
+      }
+      const currentStatus = realAgents.find((a) => a.display_name === name);
+      return { name, hoursPerQueue, total, currentStatus };
+    })
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
+
+  function fmtHours(h: number): string {
+    if (h === 0) return "—";
+    const hrs = Math.floor(h);
+    const mins = Math.round((h - hrs) * 60);
+    if (hrs === 0) return `${mins}m`;
+    if (mins === 0) return `${hrs}h`;
+    return `${hrs}h ${mins}m`;
+  }
+
+  const today = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    weekday: "long", month: "short", day: "numeric",
+  }).format(new Date());
+
   return (
     <Stack gap="md">
-      <Group justify="space-between">
-        <Text size="sm" c="dimmed">
-          Today's queue opt-in history per agent · PST timezone
-          {availability ? ` · data from ${availability.date}` : " · polling every 5 min"}
-        </Text>
-        <Group gap={12}>
-          <Group gap={4}>
-            <Box w={12} h={12} style={{ borderRadius: 3, background: "var(--mantine-color-green-6)" }} />
-            <Text size="xs" c="dimmed">Opted in</Text>
-          </Group>
-          <Group gap={4}>
-            <Box w={12} h={12} style={{ borderRadius: 3, background: "var(--mantine-color-dark-5)" }} />
-            <Text size="xs" c="dimmed">Out</Text>
-          </Group>
-          <Group gap={4}>
-            <Box w={12} h={12} style={{ borderRadius: 3, background: "var(--mantine-color-dark-7)", border: "1px dashed var(--mantine-color-dark-4)" }} />
-            <Text size="xs" c="dimmed">No data</Text>
-          </Group>
+      <Group justify="space-between" align="center">
+        <Group gap="xs">
+          <IconCalendarStats size={16} color="var(--mantine-color-blue-4)" />
+          <Text size="sm" fw={600}>{today}</Text>
+          <Text size="sm" c="dimmed">· hours opted into queue</Text>
         </Group>
+        <Text size="xs" c="dimmed">Updates every 15 s · persists via Supabase every 5 min</Text>
       </Group>
 
-      {allQueues.map((queueName) => (
-        <Card key={queueName} withBorder radius="md" p="sm">
-          <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs">
-            {QUEUE_SHORT[queueName] ?? queueName} Queue
-          </Text>
-          <ScrollArea>
-            <Box style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: "4px 8px", minWidth: 160, fontSize: 12, color: "var(--mantine-color-dimmed)" }}>
-                      Agent
-                    </th>
-                    {hours.map((h) => (
-                      <th key={h} style={{
-                        padding: "4px 4px",
-                        fontSize: 11,
-                        color: h === currentHour ? "var(--mantine-color-blue-4)" : "var(--mantine-color-dimmed)",
-                        fontWeight: h === currentHour ? 700 : 400,
-                        minWidth: 38,
-                        textAlign: "center",
-                      }}>
-                        {fmtHour(h)}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedAgents
-                    .filter((a) => a.queue_opt_in && queueName in a.queue_opt_in)
-                    .map((agent) => {
-                      const agentData = merged[agent.display_name]?.[queueName] ?? {};
-                      return (
-                        <tr key={agent.agent_id}>
-                          <td style={{ padding: "3px 8px", fontSize: 13, fontWeight: 500 }}>
-                            {agent.display_name}
-                          </td>
-                          {hours.map((h) => {
-                            const val = agentData[h] ?? null;
-                            const isNow = h === currentHour;
-                            let bg = "var(--mantine-color-dark-7)";
-                            let border = "1px dashed var(--mantine-color-dark-4)";
-                            if (val === true) { bg = "var(--mantine-color-green-9)"; border = "1px solid var(--mantine-color-green-7)"; }
-                            if (val === false) { bg = "var(--mantine-color-dark-5)"; border = "1px solid var(--mantine-color-dark-4)"; }
-                            return (
-                              <td key={h} style={{ padding: "3px 4px", textAlign: "center" }}>
-                                <Tooltip
-                                  withinPortal
-                                  label={`${agent.display_name} · ${fmtHour(h)} · ${val === null ? "no data" : val ? "Opted in" : "Out of queue"}`}
-                                >
-                                  <Box
-                                    style={{
-                                      width: 28, height: 20, borderRadius: 4,
-                                      background: bg, border,
-                                      margin: "0 auto",
-                                      outline: isNow ? "2px solid var(--mantine-color-blue-6)" : undefined,
-                                    }}
-                                  />
-                                </Tooltip>
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </Box>
-          </ScrollArea>
-        </Card>
-      ))}
+      <Card withBorder radius="md" p={0}>
+        <Table fz="sm" horizontalSpacing="md" verticalSpacing="sm" striped highlightOnHover>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Agent</Table.Th>
+              {allQueues.map((q) => (
+                <Table.Th key={q} style={{ textAlign: "center" }}>
+                  {QUEUE_SHORT[q] ?? q}
+                </Table.Th>
+              ))}
+              <Table.Th style={{ textAlign: "center" }}>Total</Table.Th>
+              <Table.Th style={{ textAlign: "center" }}>Live Status</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.map(({ name, hoursPerQueue, total, currentStatus }) => (
+              <Table.Tr key={name}>
+                <Table.Td>
+                  <Text fw={500} size="sm">{name}</Text>
+                </Table.Td>
+                {allQueues.map((q) => {
+                  const h = hoursPerQueue[q] ?? 0;
+                  const isIn = currentStatus?.queue_opt_in?.[q] === true;
+                  return (
+                    <Table.Td key={q} style={{ textAlign: "center" }}>
+                      <Tooltip
+                        withinPortal
+                        label={`${name} in ${QUEUE_SHORT[q] ?? q}: ${fmtHours(h)}${isIn ? " · currently opted in" : ""}`}
+                      >
+                        <Text
+                          size="sm"
+                          fw={h > 0 ? 600 : 400}
+                          c={h > 0 ? (isIn ? "green.4" : "dimmed") : "dark.3"}
+                          ff={h > 0 ? "monospace" : undefined}
+                        >
+                          {fmtHours(h)}
+                          {isIn && h > 0 && (
+                            <Text component="span" size="xs" c="green.6"> ●</Text>
+                          )}
+                        </Text>
+                      </Tooltip>
+                    </Table.Td>
+                  );
+                })}
+                <Table.Td style={{ textAlign: "center" }}>
+                  <Text
+                    size="sm"
+                    fw={total > 0 ? 700 : 400}
+                    c={total >= 4 ? "green.4" : total > 0 ? "yellow.4" : "dark.3"}
+                    ff={total > 0 ? "monospace" : undefined}
+                  >
+                    {fmtHours(total)}
+                  </Text>
+                </Table.Td>
+                <Table.Td style={{ textAlign: "center" }}>
+                  {currentStatus ? (
+                    <Badge
+                      size="xs"
+                      variant="light"
+                      color={ZOOM_STATUS_COLORS[currentStatus.status]}
+                    >
+                      {ZOOM_STATUS_LABELS[currentStatus.status]}
+                    </Badge>
+                  ) : (
+                    <Text size="xs" c="dimmed">—</Text>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Card>
 
-      {!availability && (
-        <Text size="xs" c="dimmed" ta="center">
-          Timeline data builds up as the widget polls the queue every 5 minutes. Come back later to see the full day's history.
-        </Text>
-      )}
+      <Text size="xs" c="dimmed">
+        Hours accumulate from the moment this widget is opened. Historical data is loaded from Supabase if the{" "}
+        <Text component="span" c="blue.4" fw={600}>zoom_queue_snapshots</Text> table has been pushed.
+      </Text>
     </Stack>
   );
 }
