@@ -23,6 +23,8 @@ export interface ZoomAgent {
   engagement_channel?: "voice" | "video" | "chat" | "sms" | "email";
   // Queue names this agent is opted into.
   queues: string[];
+  // Per-queue receive_call status: { "Network Tech Support": true, "Mobility Tech Support": false }
+  queue_opt_in?: Record<string, boolean>;
 }
 
 export interface ZoomQueueData {

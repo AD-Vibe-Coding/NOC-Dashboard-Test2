@@ -128,6 +128,7 @@ export default async function handler(req: any, res: any) {
     const memberMap = new Map<string, {
       id: string; name: string; email?: string;
       receive_call: boolean; queues: string[];
+      queue_opt_in: Record<string, boolean>; // per-queue receive_call
     }>();
 
     await Promise.all(targetQueues.map(async (q: any) => {
@@ -135,17 +136,21 @@ export default async function handler(req: any, res: any) {
       for (const m of members) {
         const uid = String(m.id ?? m.user_id ?? "");
         if (!uid) continue;
+        const qName = String(q.name);
+        const rcv = !!m.receive_call;
         if (memberMap.has(uid)) {
-          memberMap.get(uid)!.queues.push(String(q.name));
-          // If ANY queue has receive_call=true, treat as ready
-          if (m.receive_call) memberMap.get(uid)!.receive_call = true;
+          const existing = memberMap.get(uid)!;
+          existing.queues.push(qName);
+          existing.queue_opt_in[qName] = rcv;
+          if (rcv) existing.receive_call = true;
         } else {
           memberMap.set(uid, {
             id: uid,
             name: String(m.name ?? m.display_name ?? m.email ?? "Unknown"),
             email: m.email ? String(m.email) : undefined,
-            receive_call: !!m.receive_call,
-            queues: [String(q.name)],
+            receive_call: rcv,
+            queues: [qName],
+            queue_opt_in: { [qName]: rcv },
           });
         }
       }
@@ -216,6 +221,7 @@ export default async function handler(req: any, res: any) {
         engagement_started_at: status === "on_call" ? now : undefined,
         engagement_channel,
         queues: u.queues,
+        queue_opt_in: u.queue_opt_in, // per-queue receive_call status
       };
     });
 

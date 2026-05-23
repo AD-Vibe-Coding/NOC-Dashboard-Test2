@@ -227,6 +227,23 @@ export const wfh_requests = pgTable("wfh_requests", {
 // only what's needed to answer "who used what, when".
 // =============================================================================
 
+// =============================================================================
+// Zoom Queue Snapshots — periodic opt-in/out status per agent per queue
+// Saved every ~5 minutes by the ZoomQueue widget for daily availability view
+// =============================================================================
+
+export const zoom_queue_snapshots = pgTable("zoom_queue_snapshots", {
+  id: serial("id").primaryKey(),
+  agent_id: text("agent_id").notNull(),
+  agent_name: text("agent_name").notNull(),
+  queue_name: text("queue_name").notNull(),
+  receive_call: boolean("receive_call").notNull(),
+  snapshot_date: text("snapshot_date").notNull(),   // YYYY-MM-DD PST
+  snapshot_hour: integer("snapshot_hour").notNull(), // 0-23 PST
+  snapshot_time: text("snapshot_time").notNull(),    // ISO timestamp
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const app_events = pgTable("app_events", {
   id: serial("id").primaryKey(),
   user_name: text("user_name").notNull(),        // canonical roster name
