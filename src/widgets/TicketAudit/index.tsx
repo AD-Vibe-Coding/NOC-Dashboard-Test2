@@ -32,6 +32,7 @@ import {
   Table,
   Tabs,
   Text,
+  Textarea,
   TextInput,
 } from "@mantine/core";
 import {
@@ -63,28 +64,44 @@ export { TicketAuditTile } from "./Tile";
 
 const MAX_PROMPT_CHARS = 80_000;
 
+// ── The 6 exact audit criteria (in display order) ─────────────────────────────
+const AUDIT_CRITERIA = [
+  "Response & Timeliness",
+  "Data Quality & Completeness",
+  "Communication Quality",
+  "Process & Workflow Compliance",
+  "Technical Handling",
+  "Closure & Documentation",
+] as const;
+
 // ── Editable fields after AI analysis ────────────────────────────────────────
 interface AuditFields {
   ticket_number: string;
   ticket_subject: string;
+  ticket_date: string;
   agent_name: string;
   overall_score: number | "";
   grade: string;
   audit_month: string;
   queue: string;
   criteria: Record<string, number>;
+  what_did_well: string;
+  what_missed: string;
 }
 
 function emptyFields(): AuditFields {
   return {
     ticket_number: "",
     ticket_subject: "",
+    ticket_date: "",
     agent_name: "",
     overall_score: "",
     grade: "",
     audit_month: new Date().toISOString().slice(0, 7),
     queue: "noc",
     criteria: {},
+    what_did_well: "",
+    what_missed: "",
   };
 }
 
@@ -223,16 +240,27 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
     // Parse structured fields from the result
     const parsed = parseAuditJson(assembled);
     if (parsed) {
-      const criteria = (parsed.criteria as Record<string, number>) ?? {};
+      const criteriaRaw = (parsed.criteria as Record<string, number>) ?? {};
+      // Ensure all 6 criteria are present (default 0 if AI missed any)
+      const criteria: Record<string, number> = {};
+      for (const c of AUDIT_CRITERIA) {
+        criteria[c] = typeof criteriaRaw[c] === "number" ? Math.min(10, Math.max(0, Math.round(criteriaRaw[c]))) : 0;
+      }
+      // Auto-compute total score as average × 10 if AI didn't provide one
+      const sum = Object.values(criteria).reduce((s, v) => s + v, 0);
+      const autoScore = Math.round((sum / AUDIT_CRITERIA.length) * 10);
       setFields({
         ticket_number: String(parsed.ticket_number ?? fields.ticket_number ?? ""),
         ticket_subject: String(parsed.ticket_subject ?? fields.ticket_subject ?? ""),
+        ticket_date: String(parsed.date ?? ""),
         agent_name: resolveTeamMember(String(parsed.agent_name ?? "")) ?? String(parsed.agent_name ?? ""),
-        overall_score: typeof parsed.overall_score === "number" ? Math.round(parsed.overall_score) : "",
+        overall_score: typeof parsed.overall_score === "number" ? Math.round(parsed.overall_score) : autoScore,
         grade: String(parsed.grade ?? ""),
         audit_month: String(parsed.audit_month ?? fields.audit_month ?? new Date().toISOString().slice(0, 7)),
         queue: String(parsed.queue ?? "noc"),
         criteria,
+        what_did_well: String(parsed.what_did_well ?? ""),
+        what_missed: String(parsed.what_missed ?? ""),
       });
     }
     setAnalysisMarkdown(extractAnalysisMarkdown(assembled));
@@ -253,17 +281,20 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
         file_size_bytes: fileSize,
         ticket_number: fields.ticket_number || null,
         ticket_subject: fields.ticket_subject || null,
+        ticket_date: fields.ticket_date || null,
         agent_name: fields.agent_name || null,
         agent_name_raw: fields.agent_name || null,
         overall_score: typeof fields.overall_score === "number" ? fields.overall_score : null,
         grade: fields.grade || null,
         criteria_json: criteriaJson,
+        what_did_well: fields.what_did_well || null,
+        what_missed: fields.what_missed || null,
         analysis_markdown: analysisMarkdown || streamResult,
         audit_month: fields.audit_month || null,
         queue: fields.queue || null,
         audited_by: identity?.name ?? null,
         metrics_id: null,
-      });
+      } as any);
       setSaved(true);
       onSaved();
     } catch (e) {
@@ -375,7 +406,15 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
         <>
           <Divider label="Review & Edit Audit Fields" labelPosition="center" />
 
-          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+          {/* Row 1: ticket info */}
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
+            <TextInput
+              label="Date"
+              value={fields.ticket_date}
+              onChange={(e) => setFields((f) => ({ ...f, ticket_date: e.target.value }))}
+              placeholder="YYYY-MM-DD"
+              description="Date the ticket was worked"
+            />
             <TextInput
               label="Ticket Number"
               value={fields.ticket_number}
@@ -388,20 +427,23 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
               onChange={(e) => setFields((f) => ({ ...f, ticket_subject: e.target.value }))}
               placeholder="Brief description"
             />
+          </SimpleGrid>
+
+          {/* Row 2: agent + queue + month + grade */}
+          <SimpleGrid cols={{ base: 1, sm: 2, md: 4 }} spacing="sm">
             <Select
-              label="Agent Name"
+              label="Ticket Owner (Agent)"
               data={teamNames}
               value={fields.agent_name || null}
               onChange={(v) => setFields((f) => ({ ...f, agent_name: v ?? "" }))}
-              searchable
-              clearable
+              searchable clearable
               placeholder="Select team member"
             />
             <Select
               label="Queue"
               data={[
-                { value: "noc", label: "NOC (Network Tech Support)" },
-                { value: "mobility", label: "Mobility Tech Support" },
+                { value: "noc", label: "NOC" },
+                { value: "mobility", label: "Mobility" },
               ]}
               value={fields.queue}
               onChange={(v) => setFields((f) => ({ ...f, queue: v ?? "noc" }))}
@@ -420,41 +462,78 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
             />
           </SimpleGrid>
 
-          {/* Overall score */}
+          {/* Criteria scores — 6 exact columns */}
           <Card withBorder radius="md" p="md">
-            <Group justify="space-between" mb="xs">
-              <Text size="sm" fw={600}>Overall Score</Text>
-              <ScoreBadge score={typeof fields.overall_score === "number" ? fields.overall_score : null} grade={fields.grade} />
+            <Group justify="space-between" mb="sm">
+              <Text size="sm" fw={700}>Criteria Scores (0–10 each)</Text>
+              <ScoreBadge
+                score={typeof fields.overall_score === "number" ? fields.overall_score : null}
+                grade={fields.grade}
+              />
             </Group>
-            <NumberInput
-              value={fields.overall_score}
-              onChange={(v) => setFields((f) => ({ ...f, overall_score: typeof v === "number" ? Math.min(100, Math.max(0, v)) : "" }))}
-              min={0} max={100} step={1}
-              placeholder="0–100"
-              size="md"
-            />
-            {typeof fields.overall_score === "number" && (
-              <Progress value={fields.overall_score} color={scoreColor(fields.overall_score)} mt="sm" radius="xl" />
-            )}
+            <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="xs">
+              {AUDIT_CRITERIA.map((criterion) => {
+                const score = fields.criteria[criterion] ?? 0;
+                return (
+                  <Box key={criterion}>
+                    <Group justify="space-between" mb={4}>
+                      <Text size="xs" fw={500}>{criterion}</Text>
+                      <Badge size="xs" color={scoreColor(score * 10)} variant="light">{score}/10</Badge>
+                    </Group>
+                    <Group gap="xs" align="center">
+                      <NumberInput
+                        value={score}
+                        onChange={(v) => setFields((f) => {
+                          const updated = { ...f.criteria, [criterion]: typeof v === "number" ? Math.min(10, Math.max(0, v)) : 0 };
+                          const sum = Object.values(updated).reduce((s, x) => s + x, 0);
+                          const auto = Math.round((sum / AUDIT_CRITERIA.length) * 10);
+                          return { ...f, criteria: updated, overall_score: auto };
+                        })}
+                        min={0} max={10} step={1} size="xs"
+                        style={{ width: 64 }}
+                      />
+                      <Progress value={score * 10} color={scoreColor(score * 10)} size="sm" style={{ flex: 1 }} />
+                    </Group>
+                  </Box>
+                );
+              })}
+            </SimpleGrid>
+            <Divider my="sm" />
+            <Group justify="space-between" align="center">
+              <Text size="sm" fw={600}>Total Score</Text>
+              <Group gap="xs">
+                <NumberInput
+                  value={fields.overall_score}
+                  onChange={(v) => setFields((f) => ({ ...f, overall_score: typeof v === "number" ? Math.min(100, Math.max(0, v)) : "" }))}
+                  min={0} max={100} step={1} size="sm"
+                  style={{ width: 80 }}
+                />
+                {typeof fields.overall_score === "number" && (
+                  <Progress value={fields.overall_score} color={scoreColor(fields.overall_score)} size="md" w={120} radius="xl" />
+                )}
+              </Group>
+            </Group>
           </Card>
 
-          {/* Per-criteria scores */}
-          {Object.keys(fields.criteria).length > 0 && (
-            <Card withBorder radius="md" p="md">
-              <Text size="sm" fw={600} mb="sm">Criteria Scores (0–10)</Text>
-              <Stack gap="xs">
-                {Object.entries(fields.criteria).map(([criterion, score]) => (
-                  <Group key={criterion} justify="space-between" align="center">
-                    <Text size="sm" style={{ flex: 1 }}>{criterion}</Text>
-                    <Group gap="xs">
-                      <Progress value={score * 10} size="sm" w={80} color={scoreColor(score * 10)} />
-                      <Badge size="sm" color={scoreColor(score * 10)} variant="light" w={32} ta="center">{score}</Badge>
-                    </Group>
-                  </Group>
-                ))}
-              </Stack>
-            </Card>
-          )}
+          {/* Feedback fields */}
+          <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+            <Textarea
+              label="What You Did Well"
+              value={fields.what_did_well}
+              onChange={(e) => setFields((f) => ({ ...f, what_did_well: e.target.value }))}
+              placeholder="• Specific strengths observed..."
+              minRows={4}
+              autosize
+            />
+            <Textarea
+              label="What You Missed / Could Do Better"
+              value={fields.what_missed}
+              onChange={(e) => setFields((f) => ({ ...f, what_missed: e.target.value }))}
+              placeholder="• Areas needing improvement..."
+              minRows={4}
+              autosize
+            />
+          </SimpleGrid>
 
           {saveError && (
             <Alert color="red" icon={<IconAlertCircle size={16} />} radius="md">

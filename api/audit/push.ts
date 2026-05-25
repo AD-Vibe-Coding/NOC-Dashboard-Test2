@@ -71,10 +71,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (importErr) throw new Error(`Import row failed: ${importErr.message}`);
 
       // 2. Create performance_metrics row
-      let criteriaObj: Record<string, unknown> = {};
+      let criteriaObj: Record<string, number> = {};
       try {
         if (audit.criteria_json) criteriaObj = JSON.parse(audit.criteria_json);
       } catch { /* ignore */ }
+
+      // Map the 6 exact criteria to their column names
+      const CRITERIA_KEYS: Record<string, string> = {
+        "Response & Timeliness":        "response_timeliness",
+        "Data Quality & Completeness":  "data_quality",
+        "Communication Quality":        "communication_quality",
+        "Process & Workflow Compliance":"process_compliance",
+        "Technical Handling":           "technical_handling",
+        "Closure & Documentation":      "closure_documentation",
+      };
+
+      const criteriaScores: Record<string, number | null> = {};
+      for (const [label, key] of Object.entries(CRITERIA_KEYS)) {
+        criteriaScores[key] = criteriaObj[label] ?? null;
+      }
 
       const { data: metricRow, error: metricErr } = await supabaseAdmin
         .from("performance_metrics")
@@ -85,18 +100,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           total_count: 1,
           success_count: (audit.overall_score ?? 0) >= 70 ? 1 : 0,
           score: String(audit.overall_score),
-          period_start: audit.audit_month ? `${audit.audit_month}-01` : null,
-          period_end: audit.audit_month ? `${audit.audit_month}-01` : null,
+          period_start: audit.ticket_date ?? (audit.audit_month ? `${audit.audit_month}-01` : null),
+          period_end:   audit.ticket_date ?? (audit.audit_month ? `${audit.audit_month}-01` : null),
           period_month: audit.audit_month ?? null,
           queue: audit.queue ?? null,
           raw_json: JSON.stringify({
-            ticket_number: audit.ticket_number,
-            ticket_subject: audit.ticket_subject,
-            overall_score: audit.overall_score,
-            grade: audit.grade,
-            criteria: criteriaObj,
-            file_name: audit.file_name,
-            audit_id: audit.id,
+            // ── Exact columns the user specified ──────────────────────
+            date:                   audit.ticket_date ?? audit.audit_month ?? null,
+            ticket_owner:           audit.agent_name,
+            ticket_number:          audit.ticket_number ?? null,
+            response_timeliness:    criteriaScores.response_timeliness,
+            data_quality:           criteriaScores.data_quality,
+            communication_quality:  criteriaScores.communication_quality,
+            process_compliance:     criteriaScores.process_compliance,
+            technical_handling:     criteriaScores.technical_handling,
+            closure_documentation:  criteriaScores.closure_documentation,
+            total_score:            audit.overall_score,
+            what_did_well:          audit.what_did_well ?? null,
+            what_missed:            audit.what_missed ?? null,
+            // ── Additional context ─────────────────────────────────────
+            ticket_subject:         audit.ticket_subject ?? null,
+            grade:                  audit.grade ?? null,
+            file_name:              audit.file_name,
+            audit_id:               audit.id,
           }),
         })
         .select()

@@ -29,6 +29,7 @@ import {
   IconBolt,
   IconClipboardList,
   IconDownload,
+  IconGavel,
   IconPhone,
   IconTable,
   IconTicket,
@@ -45,7 +46,7 @@ import {
 // ---------------------------------------------------------------------------
 
 type SortDir = "asc" | "desc";
-type SourceTab = "tickets" | "calls" | "tasks";
+type SourceTab = "tickets" | "calls" | "tasks" | "audits";
 
 export interface DisputeInfo {
   id: number;
@@ -437,22 +438,147 @@ const TASK_COLS: ColDef[] = [
   },
 ];
 
+function scoreCell(score: number | null | undefined) {
+  if (score == null) return "—";
+  const pct = score * 10;
+  const color = pct >= 80 ? "green" : pct >= 60 ? "yellow" : "red";
+  return (
+    <Badge size="xs" color={color} variant="light" fw={700}>
+      {score}/10
+    </Badge>
+  );
+}
+
+function totalScoreCell(score: number | null | undefined) {
+  if (score == null) return "—";
+  const color = score >= 80 ? "green" : score >= 60 ? "yellow" : "red";
+  return (
+    <Badge size="sm" color={color} variant="filled" fw={700}>
+      {score}
+    </Badge>
+  );
+}
+
+const AUDIT_COLS: ColDef[] = [
+  {
+    key: "date",
+    label: "Date",
+    render: (m) => str(raw(m).date) || (m.period_start ?? "—"),
+    sortValue: (m) => str(raw(m).date) || (m.period_start ?? ""),
+    width: 100,
+  },
+  {
+    key: "ticket_owner",
+    label: "Ticket Owner",
+    render: (m) => str(raw(m).ticket_owner) || m.member_name,
+    sortValue: (m) => str(raw(m).ticket_owner) || m.member_name,
+    width: 160,
+  },
+  {
+    key: "ticket_number",
+    label: "Ticket Number",
+    render: (m) => str(raw(m).ticket_number) || "—",
+    sortValue: (m) => str(raw(m).ticket_number),
+    width: 110,
+  },
+  {
+    key: "response_timeliness",
+    label: "Response & Timeliness",
+    render: (m) => raw(m).response_timeliness != null ? `${raw(m).response_timeliness}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).response_timeliness as number),
+    sortValue: (m) => (raw(m).response_timeliness as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "data_quality",
+    label: "Data Quality & Completeness",
+    render: (m) => raw(m).data_quality != null ? `${raw(m).data_quality}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).data_quality as number),
+    sortValue: (m) => (raw(m).data_quality as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "communication_quality",
+    label: "Communication Quality",
+    render: (m) => raw(m).communication_quality != null ? `${raw(m).communication_quality}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).communication_quality as number),
+    sortValue: (m) => (raw(m).communication_quality as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "process_compliance",
+    label: "Process & Workflow Compliance",
+    render: (m) => raw(m).process_compliance != null ? `${raw(m).process_compliance}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).process_compliance as number),
+    sortValue: (m) => (raw(m).process_compliance as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "technical_handling",
+    label: "Technical Handling",
+    render: (m) => raw(m).technical_handling != null ? `${raw(m).technical_handling}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).technical_handling as number),
+    sortValue: (m) => (raw(m).technical_handling as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "closure_documentation",
+    label: "Closure & Documentation",
+    render: (m) => raw(m).closure_documentation != null ? `${raw(m).closure_documentation}/10` : "—",
+    renderCell: (m) => scoreCell(raw(m).closure_documentation as number),
+    sortValue: (m) => (raw(m).closure_documentation as number) ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "total_score",
+    label: "Total Score",
+    render: (m) => raw(m).total_score != null ? String(raw(m).total_score) : (m.score ?? "—"),
+    renderCell: (m) => totalScoreCell((raw(m).total_score as number) ?? (m.score ? parseFloat(m.score) : null)),
+    sortValue: (m) => (raw(m).total_score as number) ?? parseFloat(m.score ?? "0") ?? -1,
+    width: 80,
+    align: "right",
+  },
+  {
+    key: "what_did_well",
+    label: "What You Did Well",
+    render: (m) => str(raw(m).what_did_well) || "—",
+    sortValue: (m) => str(raw(m).what_did_well),
+    width: 260,
+  },
+  {
+    key: "what_missed",
+    label: "What You Missed / Could Do Better",
+    render: (m) => str(raw(m).what_missed) || "—",
+    sortValue: (m) => str(raw(m).what_missed),
+    width: 260,
+  },
+];
+
 const COLS_BY_SOURCE: Record<SourceTab, ColDef[]> = {
   tickets: TICKET_COLS,
   calls: CALL_COLS,
   tasks: TASK_COLS,
+  audits: AUDIT_COLS,
 };
 
 const TAB_ICONS: Record<SourceTab, typeof IconTicket> = {
   tickets: IconTicket,
   calls: IconPhone,
   tasks: IconClipboardList,
+  audits: IconGavel,
 };
 
 const TAB_COLORS: Record<SourceTab, string> = {
   tickets: "blue",
   calls: "green",
   tasks: "orange",
+  audits: "violet",
 };
 
 // ---------------------------------------------------------------------------
@@ -486,10 +612,12 @@ export function RawDataModal({
       tickets: [],
       calls: [],
       tasks: [],
+      audits: [],
     };
     for (const m of memberRows) {
       const st = m.source_type as SourceTab;
       if (st in out) out[st].push(m);
+      else if ((st as string) === "audit") out.audits.push(m); // handle "audit" singular
     }
     return out;
   }, [memberRows]);
@@ -575,7 +703,7 @@ export function RawDataModal({
               setActiveTab(v as SourceTab);
               setSortCol(null);
             }}
-            data={(["tickets", "calls", "tasks"] as SourceTab[]).map((s) => ({
+            data={(["tickets", "calls", "tasks", "audits"] as SourceTab[]).map((s) => ({
               value: s,
               label: (
                 <Group gap={4} wrap="nowrap">

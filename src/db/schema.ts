@@ -264,8 +264,13 @@ export const ticket_audits = pgTable("ticket_audits", {
   // Audit result
   overall_score: real("overall_score"),     // 0–100
   grade: text("grade"),                     // "Pass" | "Fail" | "Needs Improvement"
-  // Per-criteria scores (JSON: { criterion: score })
+  // Date of the ticket being audited (YYYY-MM-DD)
+  ticket_date: text("ticket_date"),
+  // Per-criteria scores (JSON: { criterion: score }) — 6 exact criteria
   criteria_json: text("criteria_json"),
+  // Feedback fields (extracted by AI)
+  what_did_well: text("what_did_well"),
+  what_missed: text("what_missed"),
   // AI full analysis markdown
   analysis_markdown: text("analysis_markdown").notNull(),
   // Month this audit belongs to (YYYY-MM) — for Performance Tracker grouping

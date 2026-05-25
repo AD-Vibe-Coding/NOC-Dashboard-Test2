@@ -60,20 +60,22 @@ Instructions:
    - grade: "Pass" | "Needs Improvement" | "Fail"
    - audit_month: string "YYYY-MM" based on the ticket date, or null
    - queue: "noc" | "mobility" | null (based on the ticket type/queue)
-   - criteria: object with criterion names as keys and scores (0–10) as values. Use these criteria:
-     - "Acknowledgement Speed" (was it acknowledged promptly?)
-     - "Communication Quality" (were updates clear and professional?)
-     - "Technical Accuracy" (was the diagnosis and troubleshooting correct?)
-     - "Process Adherence" (did they follow escalation and documentation procedures?)
-     - "Resolution Completeness" (was the issue fully resolved with proper closure?)
-     - "Customer Handling" (how well was the customer/stakeholder managed?)
+   - date: string "YYYY-MM-DD" — the date the ticket was opened/worked, or null
+   - criteria: object with EXACTLY these six keys and scores (0–10 each):
+     - "Response & Timeliness" (was the ticket acknowledged and responded to promptly?)
+     - "Data Quality & Completeness" (were notes, details, and data entries accurate and complete?)
+     - "Communication Quality" (were all updates clear, professional, and customer-friendly?)
+     - "Process & Workflow Compliance" (did the agent follow escalation, routing, and SOP procedures?)
+     - "Technical Handling" (was the diagnosis, troubleshooting, and technical approach correct?)
+     - "Closure & Documentation" (was the ticket properly closed with complete documentation?)
+   - what_did_well: string — 2–4 bullet points (use "• " prefix) describing specific things the agent did well
+   - what_missed: string — 2–4 bullet points (use "• " prefix) describing specific things missed or that could be improved
 
-2. After the JSON block, write a detailed markdown audit report with these sections:
+2. After the JSON block, write a concise markdown audit report with these sections:
    ## Audit Summary
-   ## Strengths
-   ## Areas for Improvement
-   ## Recommendations
    ## Score Breakdown
+   ## What You Did Well
+   ## What You Missed / Could Do Better
 
 Be objective and specific. Reference actual ticket notes and timestamps when scoring.`;
 

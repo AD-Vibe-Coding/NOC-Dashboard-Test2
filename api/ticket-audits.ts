@@ -19,7 +19,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : (req.body ?? {});
     const {
       file_name, file_size_bytes, ticket_number, ticket_subject,
-      agent_name, agent_name_raw, overall_score, grade, criteria_json,
+      ticket_date, agent_name, agent_name_raw, overall_score, grade,
+      criteria_json, what_did_well, what_missed,
       analysis_markdown, audit_month, queue, audited_by, metrics_id,
     } = body;
 
@@ -31,9 +32,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       .from("ticket_audits")
       .insert({
         file_name, file_size_bytes: file_size_bytes ?? 0,
-        ticket_number, ticket_subject,
+        ticket_number, ticket_subject, ticket_date,
         agent_name, agent_name_raw, overall_score, grade,
         criteria_json: typeof criteria_json === "object" ? JSON.stringify(criteria_json) : criteria_json,
+        what_did_well, what_missed,
         analysis_markdown, audit_month, queue, audited_by, metrics_id,
       })
       .select()
