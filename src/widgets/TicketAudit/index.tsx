@@ -10,7 +10,7 @@
  *   2. Audit History     — table of all saved audits with scores
  *   3. Push to Metrics   — select audits → push scores to Performance Tracker
  */
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -26,6 +26,7 @@ import {
   NumberInput,
   Progress,
   ScrollArea,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
@@ -34,17 +35,22 @@ import {
   Text,
   Textarea,
   TextInput,
+  Tooltip,
 } from "@mantine/core";
 import {
   IconAlertCircle,
   IconCheck,
   IconChartBar,
+  IconClipboardText,
+  IconFlag,
   IconGavel,
   IconHistory,
+  IconInfoCircle,
   IconPlayerStop,
   IconSend,
   IconTrash,
   IconUpload,
+  IconX,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import { parseMhtmlFile } from "../../lib/mhtml";
@@ -57,6 +63,8 @@ import {
   parseAuditJson,
   scoreColor,
   useTicketAudits,
+  type AuditIndividual,
+  type ParsedAuditResult,
   type TicketAudit,
 } from "./data";
 
@@ -85,6 +93,7 @@ interface AuditFields {
   audit_month: string;
   queue: string;
   criteria: Record<string, number>;
+  deductions: Record<string, string>;  // criterion → reason for deduction
   what_did_well: string;
   what_missed: string;
 }
@@ -100,9 +109,225 @@ function emptyFields(): AuditFields {
     audit_month: new Date().toISOString().slice(0, 7),
     queue: "noc",
     criteria: {},
+    deductions: {},
     what_did_well: "",
     what_missed: "",
   };
+}
+
+// ── Dispute state for a single criterion ─────────────────────────────────────
+interface DisputeEntry {
+  criterion: string;
+  originalScore: number;
+  suggestedScore: number | "";
+  reason: string;
+  resolved: boolean;  // true once user submits the dispute (score updated)
+}
+
+// ── Dispute Modal ─────────────────────────────────────────────────────────────
+function DisputeModal({
+  entry,
+  deductionReason,
+  onClose,
+  onSubmit,
+}: {
+  entry: DisputeEntry | null;
+  deductionReason: string;
+  onClose: () => void;
+  onSubmit: (criterion: string, newScore: number, reason: string) => void;
+}) {
+  const [score, setScore] = useState<number | "">(entry?.suggestedScore ?? "");
+  const [reason, setReason] = useState(entry?.reason ?? "");
+
+  // Reset when entry changes
+  useEffect(() => {
+    setScore(entry?.originalScore ?? "");
+    setReason("");
+  }, [entry?.criterion]);
+
+  if (!entry) return null;
+
+  return (
+    <Modal
+      opened={!!entry}
+      onClose={onClose}
+      title={
+        <Group gap="xs">
+          <IconFlag size={16} color="var(--mantine-color-orange-5)" />
+          <Text fw={600} size="sm">Dispute Score — {entry.criterion}</Text>
+        </Group>
+      }
+      size="md"
+      withinPortal
+    >
+      <Stack gap="md">
+        {/* Current score + deduction reason */}
+        <Card withBorder radius="md" p="sm" style={{ background: "var(--mantine-color-dark-7)" }}>
+          <Group justify="space-between" mb={6}>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">AI-Assigned Score</Text>
+            <Badge color="red" variant="filled" size="sm" fw={700}>{entry.originalScore}</Badge>
+          </Group>
+          {deductionReason ? (
+            <>
+              <Text size="xs" fw={600} c="orange" mb={2}>Reason for deduction:</Text>
+              <Text size="sm" c="dimmed" style={{ fontStyle: "italic" }}>{deductionReason}</Text>
+            </>
+          ) : (
+            <Text size="xs" c="dimmed">No specific reason extracted from agent output.</Text>
+          )}
+        </Card>
+
+        {/* Suggested corrected score */}
+        <NumberInput
+          label="Your Suggested Score"
+          description="Enter the score you believe is correct for this criterion"
+          value={score}
+          onChange={(v) => setScore(typeof v === "number" ? v : "")}
+          step={1}
+          placeholder="e.g. 9"
+        />
+
+        {/* Dispute reason */}
+        <Textarea
+          label="Reason for Dispute"
+          description="Explain why you believe the score should be different"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. The ticket was acknowledged within 10 minutes as per the notes on line 3..."
+          minRows={4}
+          autosize
+        />
+
+        <Group justify="flex-end" gap="sm">
+          <Button variant="subtle" color="gray" onClick={onClose} leftSection={<IconX size={14} />}>
+            Cancel
+          </Button>
+          <Button
+            color="orange"
+            leftSection={<IconFlag size={14} />}
+            disabled={typeof score !== "number" || !reason.trim()}
+            onClick={() => {
+              if (typeof score === "number" && reason.trim()) {
+                onSubmit(entry.criterion, score, reason.trim());
+                onClose();
+              }
+            }}
+          >
+            Apply Dispute
+          </Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+// ── Score Deductions Panel ────────────────────────────────────────────────────
+function DeductionsPanel({
+  criteria,
+  deductions,
+  disputes,
+  onDispute,
+}: {
+  criteria: Record<string, number>;
+  deductions: Record<string, string>;
+  disputes: Record<string, DisputeEntry>;
+  onDispute: (criterion: string) => void;
+}) {
+  const rows = AUDIT_CRITERIA.filter((c) => criteria[c] !== undefined);
+  if (rows.length === 0) return null;
+
+  return (
+    <Card withBorder radius="md" p="md">
+      <Group gap="xs" mb="sm">
+        <IconFlag size={15} color="var(--mantine-color-orange-5)" />
+        <Text size="sm" fw={700}>Score Deductions</Text>
+        <Tooltip label="Shows the score given by the AI for each criterion and the reason. Dispute any score you disagree with before saving." withinPortal>
+          <IconInfoCircle size={14} color="var(--mantine-color-dimmed)" style={{ cursor: "help" }} />
+        </Tooltip>
+      </Group>
+
+      <Table fz="sm" withColumnBorders withTableBorder>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th style={{ width: 200 }}>Criterion</Table.Th>
+            <Table.Th style={{ width: 80, textAlign: "center" }}>Score</Table.Th>
+            <Table.Th>Reason for Deduction</Table.Th>
+            <Table.Th style={{ width: 120, textAlign: "center" }}>Action</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {rows.map((criterion) => {
+            const score = criteria[criterion];
+            const reason = deductions[criterion] ?? "";
+            const dispute = disputes[criterion];
+
+            return (
+              <Table.Tr key={criterion}>
+                <Table.Td>
+                  <Text size="xs" fw={500}>{criterion}</Text>
+                </Table.Td>
+                <Table.Td style={{ textAlign: "center" }}>
+                  <Group gap={4} justify="center">
+                    <Badge
+                      size="sm"
+                      variant="filled"
+                      color={dispute?.resolved ? "orange" : "violet"}
+                      fw={700}
+                    >
+                      {dispute?.resolved ? dispute.suggestedScore : score}
+                    </Badge>
+                    {dispute?.resolved && (
+                      <Tooltip label={`Original: ${dispute.originalScore} → Disputed to: ${dispute.suggestedScore}`} withinPortal>
+                        <Badge size="xs" color="orange" variant="light">disputed</Badge>
+                      </Tooltip>
+                    )}
+                  </Group>
+                </Table.Td>
+                <Table.Td>
+                  {dispute?.resolved ? (
+                    <Stack gap={2}>
+                      <Text size="xs" c="dimmed" style={{ textDecoration: "line-through" }}>{reason || "—"}</Text>
+                      <Text size="xs" c="orange">✓ {dispute.reason}</Text>
+                    </Stack>
+                  ) : (
+                    <Text size="xs" c={reason ? "dimmed" : "dark.3"} style={{ fontStyle: reason ? "italic" : "normal" }}>
+                      {reason || "No specific deduction reason extracted"}
+                    </Text>
+                  )}
+                </Table.Td>
+                <Table.Td style={{ textAlign: "center" }}>
+                  {dispute?.resolved ? (
+                    <Badge size="xs" color="orange" variant="outline" leftSection={<IconCheck size={10} />}>
+                      Disputed
+                    </Badge>
+                  ) : (
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="orange"
+                      leftSection={<IconFlag size={12} />}
+                      onClick={() => onDispute(criterion)}
+                    >
+                      Dispute
+                    </Button>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            );
+          })}
+        </Table.Tbody>
+      </Table>
+
+      {Object.values(disputes).some((d) => d.resolved) && (
+        <Alert color="orange" variant="light" radius="md" mt="sm" icon={<IconInfoCircle size={14} />}>
+          <Text size="xs">
+            {Object.values(disputes).filter((d) => d.resolved).length} dispute(s) applied.
+            Disputed scores are shown in orange above and will be saved with your audit.
+          </Text>
+        </Alert>
+      )}
+    </Card>
+  );
 }
 
 // ── Score badge ───────────────────────────────────────────────────────────────
@@ -128,9 +353,11 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
   const { identity } = useIdentity();
   const { saveAudit } = useTicketAudits();
 
+  const [inputMode, setInputMode] = useState<"upload" | "paste">("upload");
   const [fileName, setFileName] = useState("");
   const [fileSize, setFileSize] = useState(0);
   const [parsedText, setParsedText] = useState("");
+  const [pastedText, setPastedText] = useState("");
   const [parseError, setParseError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -143,22 +370,36 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
   const [analysisMarkdown, setAnalysisMarkdown] = useState("");
   const [analyzed, setAnalyzed] = useState(false);
 
+  // Multi-individual state
+  const [parsedResult, setParsedResult] = useState<ParsedAuditResult | null>(null);
+  const [selectedIndividualIdx, setSelectedIndividualIdx] = useState(0);
+
+  // Dispute state
+  const [disputeTarget, setDisputeTarget] = useState<string | null>(null); // criterion name
+  const [disputes, setDisputes] = useState<Record<string, DisputeEntry>>({});
+
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  async function handleFile(file: File) {
+  function resetState() {
     setParseError(null);
     setStreamResult("");
     setStreamError(null);
     setAnalyzed(false);
     setSaved(false);
     setFields(emptyFields());
+    setDisputes({});
+    setDisputeTarget(null);
+  }
+
+  async function handleFile(file: File) {
+    resetState();
     setFileName(file.name);
     setFileSize(file.size);
-
+    setParsedText("");
     try {
       const parsed = await parseMhtmlFile(file);
       setParsedText(parsed.text.slice(0, MAX_PROMPT_CHARS));
@@ -167,6 +408,43 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
     } catch (e) {
       setParseError(e instanceof Error ? e.message : "Failed to parse file");
     }
+  }
+
+  function handleUsePasted() {
+    if (!pastedText.trim()) return;
+    resetState();
+    setFileName("pasted-ticket.txt");
+    setFileSize(new Blob([pastedText]).size);
+    setParsedText(pastedText.slice(0, MAX_PROMPT_CHARS));
+  }
+
+  function populateFieldsFromIndividual(result: ParsedAuditResult, _idx: number, ind: AuditIndividual) {
+    const criteria: Record<string, number> = {};
+    const deductions: Record<string, string> = {};
+    for (const c of AUDIT_CRITERIA) {
+      const s = ind.scores[c];
+      if (s) {
+        criteria[c] = s.score;
+        if (s.deduction_reason && s.deduction_reason.toLowerCase() !== "full marks") {
+          deductions[c] = s.deduction_reason;
+        }
+      }
+    }
+    setFields({
+      ticket_number: result.ticket_number ?? "",
+      ticket_subject: result.ticket_subject ?? "",
+      ticket_date: result.ticket_date ?? "",
+      agent_name: resolveTeamMember(ind.name) ?? ind.name ?? "",
+      overall_score: typeof ind.total_score === "number" ? ind.total_score : "",
+      grade: ind.grade ?? "",
+      audit_month: result.audit_month ?? new Date().toISOString().slice(0, 7),
+      queue: result.queue ?? "noc",
+      criteria,
+      deductions,
+      what_did_well: ind.what_did_well ?? "",
+      what_missed: ind.what_missed ?? "",
+    });
+    setDisputes({});
   }
 
   async function runAnalysis() {
@@ -239,29 +517,11 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
 
     // Parse structured fields from the result
     const parsed = parseAuditJson(assembled);
-    if (parsed) {
-      const criteriaRaw = (parsed.criteria as Record<string, number>) ?? {};
-      // Ensure all 6 criteria are present (default 0 if AI missed any)
-      const criteria: Record<string, number> = {};
-      for (const c of AUDIT_CRITERIA) {
-        criteria[c] = typeof criteriaRaw[c] === "number" ? Math.min(10, Math.max(0, Math.round(criteriaRaw[c]))) : 0;
-      }
-      // Auto-compute total score as average × 10 if AI didn't provide one
-      const sum = Object.values(criteria).reduce((s, v) => s + v, 0);
-      const autoScore = Math.round((sum / AUDIT_CRITERIA.length) * 10);
-      setFields({
-        ticket_number: String(parsed.ticket_number ?? fields.ticket_number ?? ""),
-        ticket_subject: String(parsed.ticket_subject ?? fields.ticket_subject ?? ""),
-        ticket_date: String(parsed.date ?? ""),
-        agent_name: resolveTeamMember(String(parsed.agent_name ?? "")) ?? String(parsed.agent_name ?? ""),
-        overall_score: typeof parsed.overall_score === "number" ? Math.round(parsed.overall_score) : autoScore,
-        grade: String(parsed.grade ?? ""),
-        audit_month: String(parsed.audit_month ?? fields.audit_month ?? new Date().toISOString().slice(0, 7)),
-        queue: String(parsed.queue ?? "noc"),
-        criteria,
-        what_did_well: String(parsed.what_did_well ?? ""),
-        what_missed: String(parsed.what_missed ?? ""),
-      });
+    setParsedResult(parsed);
+    if (parsed && parsed.individuals.length > 0) {
+      setSelectedIndividualIdx(0);
+      populateFieldsFromIndividual(parsed, 0, parsed.individuals[0]);
+      setDisputes({});
     }
     setAnalysisMarkdown(extractAnalysisMarkdown(assembled));
     setStreaming(false);
@@ -304,56 +564,138 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
     }
   }
 
+  function handleDisputeSubmit(criterion: string, newScore: number, reason: string) {
+    const originalScore = fields.criteria[criterion];
+    // Update the criteria score in fields
+    setFields((f) => ({
+      ...f,
+      criteria: { ...f.criteria, [criterion]: newScore },
+    }));
+    // Record the dispute
+    setDisputes((d) => ({
+      ...d,
+      [criterion]: {
+        criterion,
+        originalScore,
+        suggestedScore: newScore,
+        reason,
+        resolved: true,
+      },
+    }));
+  }
+
   const teamNames = LOCKED_TEAM.map((m) => ({ value: m.name, label: m.name }));
 
   return (
     <Stack gap="md" pt="md">
-      {/* Drop zone */}
-      <Card
-        withBorder
-        radius="md"
-        p="xl"
-        style={{
-          borderStyle: "dashed",
-          borderColor: dragOver
-            ? "var(--mantine-color-violet-5)"
-            : "var(--mantine-color-dark-4)",
-          background: dragOver ? "var(--mantine-color-violet-9)" : undefined,
-          cursor: "pointer",
-          textAlign: "center",
+
+      {/* Input mode switcher */}
+      <SegmentedControl
+        value={inputMode}
+        onChange={(v) => {
+          setInputMode(v as "upload" | "paste");
+          resetState();
+          setParsedText("");
+          setPastedText("");
+          setFileName("");
         }}
-        onClick={() => fileInputRef.current?.click()}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          const f = e.dataTransfer.files[0];
-          if (f) handleFile(f);
-        }}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".mhtml,.mht,.html,.htm"
-          style={{ display: "none" }}
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
-        />
-        <Stack align="center" gap="xs">
-          <IconUpload size={28} color="var(--mantine-color-violet-5)" />
-          {fileName ? (
-            <>
-              <Text fw={600} size="sm">{fileName}</Text>
-              <Text size="xs" c="dimmed">{(fileSize / 1024).toFixed(1)} KB · {parsedText.length.toLocaleString()} chars extracted</Text>
-            </>
-          ) : (
-            <>
-              <Text fw={600} size="sm">Drop a ticket .mhtml file here</Text>
-              <Text size="xs" c="dimmed">or click to browse · .mhtml / .mht / .html</Text>
-            </>
+        data={[
+          { value: "upload", label: (
+            <Group gap={6} wrap="nowrap">
+              <IconUpload size={14} />
+              <Text size="sm">Upload MHTML File</Text>
+            </Group>
+          )},
+          { value: "paste", label: (
+            <Group gap={6} wrap="nowrap">
+              <IconClipboardText size={14} />
+              <Text size="sm">Paste Ticket Data</Text>
+            </Group>
+          )},
+        ]}
+        fullWidth
+      />
+
+      {/* ── Upload mode ── */}
+      {inputMode === "upload" && (
+        <>
+          <Card
+            withBorder radius="md" p="xl"
+            style={{
+              borderStyle: "dashed",
+              borderColor: dragOver ? "var(--mantine-color-violet-5)" : "var(--mantine-color-dark-4)",
+              background: dragOver ? "var(--mantine-color-violet-9)" : undefined,
+              cursor: "pointer",
+              textAlign: "center",
+            }}
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const f = e.dataTransfer.files[0];
+              if (f) handleFile(f);
+            }}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".mhtml,.mht,.html,.htm"
+              style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
+            />
+            <Stack align="center" gap="xs">
+              <IconUpload size={28} color="var(--mantine-color-violet-5)" />
+              {parsedText ? (
+                <>
+                  <Text fw={600} size="sm">{fileName}</Text>
+                  <Text size="xs" c="dimmed">{(fileSize / 1024).toFixed(1)} KB · {parsedText.length.toLocaleString()} chars extracted</Text>
+                </>
+              ) : (
+                <>
+                  <Text fw={600} size="sm">Drop a ticket .mhtml file here</Text>
+                  <Text size="xs" c="dimmed">or click to browse · .mhtml / .mht / .html</Text>
+                </>
+              )}
+            </Stack>
+          </Card>
+        </>
+      )}
+
+      {/* ── Paste mode ── */}
+      {inputMode === "paste" && (
+        <Stack gap="sm">
+          <Textarea
+            label="Paste Ticket Data"
+            description="Paste the full ticket notes, history, or any relevant text directly here"
+            placeholder={"Ticket #: TT-123456\nAgent: John Smith\nDate: 2026-05-20\n\nNotes:\n[Paste your ticket content here...]"}
+            value={pastedText}
+            onChange={(e) => setPastedText(e.target.value)}
+            minRows={10}
+            autosize
+            styles={{ input: { fontFamily: "monospace", fontSize: 13 } }}
+          />
+          {pastedText.trim() && !parsedText && (
+            <Group>
+              <Button
+                leftSection={<IconClipboardText size={15} />}
+                color="violet"
+                variant="light"
+                onClick={handleUsePasted}
+              >
+                Use This Text
+              </Button>
+              <Text size="xs" c="dimmed">{pastedText.length.toLocaleString()} characters</Text>
+            </Group>
+          )}
+          {parsedText && inputMode === "paste" && (
+            <Alert color="green" variant="light" radius="md" icon={<IconCheck size={14} />}>
+              <Text size="xs">Text loaded — {parsedText.length.toLocaleString()} chars ready for analysis.</Text>
+            </Alert>
           )}
         </Stack>
-      </Card>
+      )}
 
       {parseError && (
         <Alert color="red" icon={<IconAlertCircle size={16} />} radius="md">
@@ -405,6 +747,35 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
       {analyzed && (
         <>
           <Divider label="Review & Edit Audit Fields" labelPosition="center" />
+
+          {/* Multi-individual selector */}
+          {parsedResult && parsedResult.individuals.length > 1 && (
+            <Alert icon={<IconInfoCircle size={14} />} color="violet" variant="light" radius="md">
+              <Text size="sm" fw={600} mb={6}>
+                {parsedResult.individuals.length} individuals identified in this ticket. Select each to review and save separately.
+              </Text>
+              <Group gap="xs" wrap="wrap">
+                {parsedResult.individuals.map((ind, idx) => (
+                  <Button
+                    key={idx}
+                    size="xs"
+                    variant={selectedIndividualIdx === idx ? "filled" : "light"}
+                    color="violet"
+                    onClick={() => {
+                      setSelectedIndividualIdx(idx);
+                      populateFieldsFromIndividual(parsedResult, idx, ind);
+                      setSaved(false);
+                    }}
+                  >
+                    {ind.name || `Individual ${idx + 1}`}
+                    <Badge size="xs" ml={6} color={selectedIndividualIdx === idx ? "white" : "violet"} variant={selectedIndividualIdx === idx ? "white" : "light"}>
+                      {ind.role}
+                    </Badge>
+                  </Button>
+                ))}
+              </Group>
+            </Alert>
+          )}
 
           {/* Row 1: ticket info */}
           <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
@@ -465,7 +836,7 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
           {/* Criteria scores — 6 exact columns */}
           <Card withBorder radius="md" p="md">
             <Group justify="space-between" mb="sm">
-              <Text size="sm" fw={700}>Criteria Scores (0–10 each)</Text>
+              <Text size="sm" fw={700}>Criteria Scores</Text>
               <ScoreBadge
                 score={typeof fields.overall_score === "number" ? fields.overall_score : null}
                 grade={fields.grade}
@@ -473,27 +844,27 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
             </Group>
             <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="xs">
               {AUDIT_CRITERIA.map((criterion) => {
-                const score = fields.criteria[criterion] ?? 0;
+                const score = fields.criteria[criterion];
                 return (
                   <Box key={criterion}>
                     <Group justify="space-between" mb={4}>
                       <Text size="xs" fw={500}>{criterion}</Text>
-                      <Badge size="xs" color={scoreColor(score * 10)} variant="light">{score}/10</Badge>
+                      {score !== undefined && (
+                        <Badge size="xs" color="violet" variant="light">{score}</Badge>
+                      )}
                     </Group>
-                    <Group gap="xs" align="center">
-                      <NumberInput
-                        value={score}
-                        onChange={(v) => setFields((f) => {
-                          const updated = { ...f.criteria, [criterion]: typeof v === "number" ? Math.min(10, Math.max(0, v)) : 0 };
-                          const sum = Object.values(updated).reduce((s, x) => s + x, 0);
-                          const auto = Math.round((sum / AUDIT_CRITERIA.length) * 10);
-                          return { ...f, criteria: updated, overall_score: auto };
-                        })}
-                        min={0} max={10} step={1} size="xs"
-                        style={{ width: 64 }}
-                      />
-                      <Progress value={score * 10} color={scoreColor(score * 10)} size="sm" style={{ flex: 1 }} />
-                    </Group>
+                    <NumberInput
+                      value={score ?? ""}
+                      onChange={(v) => setFields((f) => {
+                        const updated = { ...f.criteria };
+                        if (typeof v === "number") updated[criterion] = v;
+                        else delete updated[criterion];
+                        return { ...f, criteria: updated };
+                      })}
+                      step={1} size="xs"
+                      style={{ width: "100%" }}
+                      placeholder="—"
+                    />
                   </Box>
                 );
               })}
@@ -501,19 +872,41 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
             <Divider my="sm" />
             <Group justify="space-between" align="center">
               <Text size="sm" fw={600}>Total Score</Text>
-              <Group gap="xs">
-                <NumberInput
-                  value={fields.overall_score}
-                  onChange={(v) => setFields((f) => ({ ...f, overall_score: typeof v === "number" ? Math.min(100, Math.max(0, v)) : "" }))}
-                  min={0} max={100} step={1} size="sm"
-                  style={{ width: 80 }}
-                />
-                {typeof fields.overall_score === "number" && (
-                  <Progress value={fields.overall_score} color={scoreColor(fields.overall_score)} size="md" w={120} radius="xl" />
-                )}
-              </Group>
+              <NumberInput
+                value={fields.overall_score}
+                onChange={(v) => setFields((f) => ({ ...f, overall_score: typeof v === "number" ? v : "" }))}
+                step={1} size="sm"
+                style={{ width: 100 }}
+                placeholder="—"
+              />
             </Group>
           </Card>
+
+          {/* Score Deductions + Dispute Panel */}
+          <DeductionsPanel
+            criteria={fields.criteria}
+            deductions={fields.deductions}
+            disputes={disputes}
+            onDispute={(criterion) => setDisputeTarget(criterion)}
+          />
+
+          {/* Dispute Modal */}
+          <DisputeModal
+            entry={
+              disputeTarget
+                ? {
+                    criterion: disputeTarget,
+                    originalScore: fields.criteria[disputeTarget] ?? 0,
+                    suggestedScore: disputes[disputeTarget]?.suggestedScore ?? "",
+                    reason: disputes[disputeTarget]?.reason ?? "",
+                    resolved: disputes[disputeTarget]?.resolved ?? false,
+                  }
+                : null
+            }
+            deductionReason={fields.deductions[disputeTarget ?? ""] ?? ""}
+            onClose={() => setDisputeTarget(null)}
+            onSubmit={handleDisputeSubmit}
+          />
 
           {/* Feedback fields */}
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">

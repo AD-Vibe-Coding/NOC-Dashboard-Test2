@@ -13,8 +13,10 @@ import {
   Badge,
   Box,
   Button,
+  Card,
   Group,
   Modal,
+  Popover,
   ScrollArea,
   SegmentedControl,
   Stack,
@@ -90,6 +92,20 @@ interface ColDef {
 const raw = (m: PerformanceMetric) => m as Record<string, unknown>;
 const str = (v: unknown): string =>
   v != null && v !== "" ? String(v) : "";
+
+/** Parse raw_json for audit rows — cached per metric id to avoid repeated JSON.parse calls */
+const auditRawCache = new WeakMap<PerformanceMetric, Record<string, unknown>>();
+function auditRaw(m: PerformanceMetric): Record<string, unknown> {
+  if (auditRawCache.has(m)) return auditRawCache.get(m)!;
+  try {
+    const parsed = JSON.parse((m as any).raw_json ?? "{}");
+    auditRawCache.set(m, parsed);
+    return parsed;
+  } catch {
+    auditRawCache.set(m, {});
+    return {};
+  }
+}
 
 function fmtMin(v: number | null | undefined): string {
   if (v == null) return "—";
@@ -439,12 +455,11 @@ const TASK_COLS: ColDef[] = [
 ];
 
 function scoreCell(score: number | null | undefined) {
-  if (score == null) return "—";
-  const pct = score * 10;
-  const color = pct >= 80 ? "green" : pct >= 60 ? "yellow" : "red";
+  if (score == null) return <Text size="xs" c="dimmed">—</Text>;
+  const color = score >= 8 ? "green" : score >= 6 ? "yellow" : "red";
   return (
     <Badge size="xs" color={color} variant="light" fw={700}>
-      {score}/10
+      {score}
     </Badge>
   );
 }
@@ -459,104 +474,147 @@ function totalScoreCell(score: number | null | undefined) {
   );
 }
 
+/** Truncated cell with a popover on hover showing the full text */
+function FeedbackCell({ value, color }: { value: string; color: string }) {
+  if (!value || value === "—") return <Text size="xs" c="dimmed">—</Text>;
+  const preview = value.length > 60 ? value.slice(0, 60) + "…" : value;
+  return (
+    <Popover
+      width={360}
+      position="left"
+      withArrow
+      shadow="md"
+      withinPortal
+    >
+      <Popover.Target>
+        <Text
+          size="xs"
+          c={color}
+          style={{
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            maxWidth: 190,
+          }}
+        >
+          {preview}
+        </Text>
+      </Popover.Target>
+      <Popover.Dropdown p={0}>
+        <Card withBorder={false} radius="md" p="md" style={{ maxHeight: 320, overflowY: "auto" }}>
+          <Text size="xs" fw={700} tt="uppercase" c={color} mb="xs">
+            {color === "green" ? "What You Did Well" : "What You Missed / Could Do Better"}
+          </Text>
+          <Text size="sm" style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>
+            {value}
+          </Text>
+        </Card>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
 const AUDIT_COLS: ColDef[] = [
   {
     key: "date",
     label: "Date",
-    render: (m) => str(raw(m).date) || (m.period_start ?? "—"),
-    sortValue: (m) => str(raw(m).date) || (m.period_start ?? ""),
+    render: (m) => str(auditRaw(m).date) || (m.period_start ?? "—"),
+    sortValue: (m) => str(auditRaw(m).date) || (m.period_start ?? ""),
     width: 100,
   },
   {
     key: "ticket_owner",
     label: "Ticket Owner",
-    render: (m) => str(raw(m).ticket_owner) || m.member_name,
-    sortValue: (m) => str(raw(m).ticket_owner) || m.member_name,
+    render: (m) => str(auditRaw(m).ticket_owner) || m.member_name,
+    sortValue: (m) => str(auditRaw(m).ticket_owner) || m.member_name,
     width: 160,
   },
   {
     key: "ticket_number",
     label: "Ticket Number",
-    render: (m) => str(raw(m).ticket_number) || "—",
-    sortValue: (m) => str(raw(m).ticket_number),
+    render: (m) => str(auditRaw(m).ticket_number) || "—",
+    sortValue: (m) => str(auditRaw(m).ticket_number),
     width: 110,
   },
   {
     key: "response_timeliness",
     label: "Response & Timeliness",
-    render: (m) => raw(m).response_timeliness != null ? `${raw(m).response_timeliness}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).response_timeliness as number),
-    sortValue: (m) => (raw(m).response_timeliness as number) ?? -1,
+    render: (m) => auditRaw(m).response_timeliness != null ? String(auditRaw(m).response_timeliness) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).response_timeliness as number),
+    sortValue: (m) => (auditRaw(m).response_timeliness as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "data_quality",
     label: "Data Quality & Completeness",
-    render: (m) => raw(m).data_quality != null ? `${raw(m).data_quality}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).data_quality as number),
-    sortValue: (m) => (raw(m).data_quality as number) ?? -1,
+    render: (m) => auditRaw(m).data_quality != null ? String(auditRaw(m).data_quality) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).data_quality as number),
+    sortValue: (m) => (auditRaw(m).data_quality as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "communication_quality",
     label: "Communication Quality",
-    render: (m) => raw(m).communication_quality != null ? `${raw(m).communication_quality}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).communication_quality as number),
-    sortValue: (m) => (raw(m).communication_quality as number) ?? -1,
+    render: (m) => auditRaw(m).communication_quality != null ? String(auditRaw(m).communication_quality) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).communication_quality as number),
+    sortValue: (m) => (auditRaw(m).communication_quality as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "process_compliance",
     label: "Process & Workflow Compliance",
-    render: (m) => raw(m).process_compliance != null ? `${raw(m).process_compliance}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).process_compliance as number),
-    sortValue: (m) => (raw(m).process_compliance as number) ?? -1,
+    render: (m) => auditRaw(m).process_compliance != null ? String(auditRaw(m).process_compliance) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).process_compliance as number),
+    sortValue: (m) => (auditRaw(m).process_compliance as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "technical_handling",
     label: "Technical Handling",
-    render: (m) => raw(m).technical_handling != null ? `${raw(m).technical_handling}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).technical_handling as number),
-    sortValue: (m) => (raw(m).technical_handling as number) ?? -1,
+    render: (m) => auditRaw(m).technical_handling != null ? String(auditRaw(m).technical_handling) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).technical_handling as number),
+    sortValue: (m) => (auditRaw(m).technical_handling as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "closure_documentation",
     label: "Closure & Documentation",
-    render: (m) => raw(m).closure_documentation != null ? `${raw(m).closure_documentation}/10` : "—",
-    renderCell: (m) => scoreCell(raw(m).closure_documentation as number),
-    sortValue: (m) => (raw(m).closure_documentation as number) ?? -1,
+    render: (m) => auditRaw(m).closure_documentation != null ? String(auditRaw(m).closure_documentation) : "—",
+    renderCell: (m) => scoreCell(auditRaw(m).closure_documentation as number),
+    sortValue: (m) => (auditRaw(m).closure_documentation as number) ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "total_score",
     label: "Total Score",
-    render: (m) => raw(m).total_score != null ? String(raw(m).total_score) : (m.score ?? "—"),
-    renderCell: (m) => totalScoreCell((raw(m).total_score as number) ?? (m.score ? parseFloat(m.score) : null)),
-    sortValue: (m) => (raw(m).total_score as number) ?? parseFloat(m.score ?? "0") ?? -1,
+    render: (m) => auditRaw(m).total_score != null ? String(auditRaw(m).total_score) : (m.score ?? "—"),
+    renderCell: (m) => totalScoreCell((auditRaw(m).total_score as number) ?? (m.score ? parseFloat(m.score) : null)),
+    sortValue: (m) => (auditRaw(m).total_score as number) ?? parseFloat(m.score ?? "0") ?? -1,
     width: 80,
     align: "right",
   },
   {
     key: "what_did_well",
     label: "What You Did Well",
-    render: (m) => str(raw(m).what_did_well) || "—",
-    sortValue: (m) => str(raw(m).what_did_well),
-    width: 260,
+    render: (m) => str(auditRaw(m).what_did_well) || "—",
+    renderCell: (m) => <FeedbackCell value={str(auditRaw(m).what_did_well)} color="green" />,
+    sortValue: (m) => str(auditRaw(m).what_did_well),
+    width: 200,
   },
   {
     key: "what_missed",
     label: "What You Missed / Could Do Better",
-    render: (m) => str(raw(m).what_missed) || "—",
-    sortValue: (m) => str(raw(m).what_missed),
-    width: 260,
+    render: (m) => str(auditRaw(m).what_missed) || "—",
+    renderCell: (m) => <FeedbackCell value={str(auditRaw(m).what_missed)} color="orange" />,
+    sortValue: (m) => str(auditRaw(m).what_missed),
+    width: 200,
   },
 ];
 

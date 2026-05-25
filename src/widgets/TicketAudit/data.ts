@@ -68,21 +68,43 @@ export function useTicketAudits() {
   return { audits, loading, error, refresh, saveAudit, deleteAudit };
 }
 
+// ── Types for the structured audit JSON the agent returns ────────────────────
+export interface AuditIndividual {
+  name: string;
+  role: "Owner" | "Contributor" | string;
+  scores: Record<string, { score: number; max: number; deduction_reason: string }>;
+  total_score: number;
+  grade: string;
+  what_did_well: string;
+  what_missed: string;
+}
+
+export interface ParsedAuditResult {
+  ticket_number: string | null;
+  ticket_subject: string | null;
+  ticket_date: string | null;
+  audit_month: string | null;
+  queue: string | null;
+  individuals: AuditIndividual[];
+}
+
 /**
- * Parse structured fields from the AI agent's response.
- * Supports two formats:
- *   1. A ```json ... ``` block (if the agent emits one)
- *   2. Plain-text / markdown extraction — handles table rows, bold labels,
- *      and natural language patterns the Ticket Auditor agent produces.
+ * Parse the structured JSON block the agent returns.
+ * Returns null if no valid JSON block found.
  */
-export function parseAuditJson(markdown: string): Record<string, unknown> | null {
-  // ── Strategy 1: explicit ```json block ─────────────────────────────────────
+export function parseAuditJson(markdown: string): ParsedAuditResult | null {
+  // Parse the structured ```json block the agent returns
   const jsonMatch = markdown.match(/```json\s*([\s\S]*?)```/i);
   if (jsonMatch) {
-    try { return JSON.parse(jsonMatch[1]); } catch { /* fall through */ }
+    try {
+      const parsed = JSON.parse(jsonMatch[1]);
+      if (Array.isArray(parsed.individuals) && parsed.individuals.length > 0) {
+        return parsed as ParsedAuditResult;
+      }
+    } catch { /* fall through to legacy */ }
   }
 
-  // ── Strategy 2: extract fields from natural agent output ───────────────────
+  // ── Legacy fallback: plain-text extraction for old format ──────────────────
   const result: Record<string, unknown> = {};
 
   // Helper: search for a value after a label in the text
@@ -155,14 +177,10 @@ export function parseAuditJson(markdown: string): Record<string, unknown> | null
     /score[:\s|*]+([\d.]+)\s*(?:\/\s*(?:60|100))?/i,
   ]);
   if (scoreRaw) {
-    const num = parseFloat(scoreRaw);
-    // Normalise: if score looks like it's out of 60 (sum of 6×10), convert to 0-100
-    result.overall_score = num > 10 && num <= 60
-      ? Math.round((num / 60) * 100)
-      : num > 100 ? 100 : Math.round(num);
+    result.overall_score = parseFloat(scoreRaw);
   }
 
-  // Criteria scores — match table rows or labeled lines
+  // Criteria scores + deduction reasons — match table rows or labeled lines
   const CRITERIA_KEYS = [
     "Response & Timeliness",
     "Data Quality & Completeness",
@@ -173,16 +191,51 @@ export function parseAuditJson(markdown: string): Record<string, unknown> | null
   ];
 
   const criteria: Record<string, number> = {};
+  const criteria_reasons: Record<string, string> = {};
+
   for (const key of CRITERIA_KEYS) {
-    // Escape key for regex
     const escaped = key.replace(/[.*+?^${}()|[\]\\&]/g, "\\$&").replace(/\s+/g, "\\s+");
-    const re = new RegExp(`${escaped}[\\s|*:]+([\\d.]+)(?:\\s*/\\s*10)?`, "i");
-    const m = markdown.match(re);
-    if (m?.[1]) {
-      criteria[key] = Math.min(10, Math.max(0, parseFloat(m[1])));
+
+    // Score extraction
+    const scoreRe = new RegExp(`${escaped}[\\s|*:]+([\\d.]+)(?:\\s*/\\s*[\\d]+)?`, "i");
+    const scoreMatch = markdown.match(scoreRe);
+    if (scoreMatch?.[1]) {
+      criteria[key] = parseFloat(scoreMatch[1]);
+    }
+
+    // Reason extraction — try multiple patterns:
+    // 1. Table row with 4+ cols: | Criterion | Score | Max | Reason |
+    const tableReasonRe = new RegExp(
+      `\\|\\s*${escaped}\\s*\\|[^|]+\\|[^|]*\\|\\s*([^|\\n]+)`, "i"
+    );
+    const tableReason = markdown.match(tableReasonRe);
+    if (tableReason?.[1]?.trim()) {
+      criteria_reasons[key] = tableReason[1].trim();
+      continue;
+    }
+
+    // 2. Line after criterion heading: "**Criterion:** score\nreason text"
+    const afterRe = new RegExp(
+      `${escaped}[\\s|*:]+[\\d./]+[^\\n]*\\n+([^\\n#|*]+)`, "i"
+    );
+    const afterMatch = markdown.match(afterRe);
+    if (afterMatch?.[1]?.trim()) {
+      criteria_reasons[key] = afterMatch[1].trim();
+      continue;
+    }
+
+    // 3. Inline dash/colon after score: "Criterion: 7/10 – reason"
+    const inlineRe = new RegExp(
+      `${escaped}[^\\n]*[\\d.]+[^\\n]*[-–—:]+\\s*([^\\n|]+)`, "i"
+    );
+    const inlineMatch = markdown.match(inlineRe);
+    if (inlineMatch?.[1]?.trim()) {
+      criteria_reasons[key] = inlineMatch[1].trim();
     }
   }
+
   if (Object.keys(criteria).length > 0) result.criteria = criteria;
+  if (Object.keys(criteria_reasons).length > 0) result.criteria_reasons = criteria_reasons;
 
   // What You Did Well
   const wellSection = markdown.match(
@@ -210,8 +263,41 @@ export function parseAuditJson(markdown: string): Record<string, unknown> | null
       .join("\n");
   }
 
-  // Return null only if we found nothing at all
-  return Object.keys(result).length > 0 ? result : null;
+  // Wrap legacy result into ParsedAuditResult shape
+  if (Object.keys(result).length === 0) return null;
+  const r = result as Record<string, unknown>;
+  const criteriaObj = (r.criteria as Record<string, number>) ?? {};
+  const reasonsObj = (r.criteria_reasons as Record<string, string>) ?? {};
+  const scores: Record<string, { score: number; max: number; deduction_reason: string }> = {};
+  const MAXES: Record<string, number> = {
+    "Response & Timeliness": 17,
+    "Data Quality & Completeness": 17,
+    "Communication Quality": 17,
+    "Process & Workflow Compliance": 17,
+    "Technical Handling": 16,
+    "Closure & Documentation": 16,
+  };
+  for (const [k, max] of Object.entries(MAXES)) {
+    scores[k] = { score: criteriaObj[k] ?? max, max, deduction_reason: reasonsObj[k] ?? "Full marks" };
+  }
+  const total = typeof r.overall_score === "number" ? r.overall_score
+    : Object.values(scores).reduce((s, v) => s + v.score, 0);
+  return {
+    ticket_number: (r.ticket_number as string) ?? null,
+    ticket_subject: (r.ticket_subject as string) ?? null,
+    ticket_date: (r.date as string) ?? null,
+    audit_month: (r.audit_month as string) ?? null,
+    queue: (r.queue as string) ?? null,
+    individuals: [{
+      name: (r.agent_name as string) ?? "",
+      role: "Owner",
+      scores,
+      total_score: total,
+      grade: (r.grade as string) ?? "",
+      what_did_well: (r.what_did_well as string) ?? "",
+      what_missed: (r.what_missed as string) ?? "",
+    }],
+  };
 }
 
 /** Extract the markdown report — the full response is the report when no JSON block */
