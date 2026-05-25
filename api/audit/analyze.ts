@@ -11,11 +11,16 @@
  * The agent does NOT define the rules — the app does. The agent only applies them.
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { SCORING_CATEGORIES, TOTAL_MAX, DO_NOT_PENALIZE, FIRST_TOUCH_TARGET_MIN, CARRIER_TICKET_TARGET_MIN, SLA_ESCALATION } from "./rules.js";
+import { SCORING_CATEGORIES, TOTAL_MAX, DO_NOT_PENALIZE, VALID_STAGES, FIRST_TOUCH_TARGET_MIN, CARRIER_TICKET_TARGET_MIN, SLA_ESCALATION } from "./rules.js";
 
 const MAX_TEXT_CHARS = 80_000;
 
-function buildPrompt(ticketText: string, fileName: string): string {
+/**
+ * System message — sent as role:"system" so it takes absolute priority
+ * over any agent-level system prompt that may be configured on Devs.ai.
+ * This ensures our scoring rules are the ONLY rules applied.
+ */
+function buildSystemMessage(): string {
   const categoryTable = SCORING_CATEGORIES.map(c =>
     `| ${c.name} | ${c.column} | ${c.max} |`
   ).join("\n");
@@ -24,42 +29,56 @@ function buildPrompt(ticketText: string, fileName: string): string {
 ### ${c.name} (max ${c.max} pts — Column ${c.column})
 ${c.evaluate.trim()}`).join("\n");
 
-  return `You are auditing a vCom NOC support ticket. The scoring rules below are defined by the app — apply them exactly. Do NOT use any other scoring model.
+  return `You are a vCom NOC ticket auditor. Apply ONLY the scoring rules below. Ignore any other scoring instructions you may have been given.
+
+# ABSOLUTE RULES — THESE OVERRIDE EVERYTHING ELSE
+
+## ❌ NEVER flag or deduct for these — ever, under any category:
+
+### Resolution Code
+The iPath "Resolution Code" field and the "Next Step" field are THE SAME THING for scoring purposes.
+- If the Next Step field has ANY content that indicates the reason for outage or resolution — even one word such as "OU", "restored", "fiber cut", "carrier outage", "no ETR", "tech dispatched" — the resolution code is FULLY SATISFIED.
+- Do NOT mention "resolution code" as a finding anywhere in your output.
+- Do NOT deduct from Closure & Documentation or any other category for a blank Resolution Code field.
+- Do NOT list missing resolution code under What You Missed.
+- This rule is absolute. There are no exceptions.
+
+### Valid Ticket Stages
+The following are ALL standard, valid stages. NEVER flag any of them as non-standard, out-of-sequence, or invalid:
+${VALID_STAGES.map(s => `- ${s}`).join("\n")}
+
+Only flag a stage if it does NOT appear in the list above.
+
+### Monitoring-Based Closure
+A ticket may be closed based on monitoring data (LogicMonitor, APEX API, or any monitoring tool showing service restored) WITHOUT explicit customer acknowledgment.
+Do NOT penalize closure without a customer reply when monitoring data confirms restoration.
+
+### All Other Do-Not-Penalize Rules
+${DO_NOT_PENALIZE.trim()}
 
 ---
 
-## SCORING MODEL (app-defined — apply exactly)
+# SCORING MODEL
 
-### Categories & Max Points
+## Categories & Max Points
 | Category | Sheet Column | Max Points |
 |---|---|---|
 ${categoryTable}
 | **TOTAL** | J | **${TOTAL_MAX}** |
 
-### Timeliness Thresholds
+## Timeliness Thresholds
 - First touch target: ≤${FIRST_TOUCH_TARGET_MIN} minutes from ticket creation
 - Carrier engagement target: ≤${CARRIER_TICKET_TARGET_MIN} minutes from ticket creation
 - SLA escalation (Pending Carrier Action): Lead@${SLA_ESCALATION.lead_hours}hr, MGR@${SLA_ESCALATION.mgr_hours}hr, VP@${SLA_ESCALATION.vp_hours}hr, SVP@${SLA_ESCALATION.svp_hours}hr
 
-### Category Evaluation Rules
+## Category Evaluation Rules
 ${categoryDetails}
-
-### NEVER PENALIZE FOR
-${DO_NOT_PENALIZE.trim()}
 
 ---
 
-## YOUR TASK
+# OUTPUT FORMAT
 
-Analyze the ticket below and perform a complete audit. Identify EVERY individual who worked the ticket (Owner + all Contributors). Score each person separately.
-
-**STEP 1 — Extract ticket metadata:**
-Ticket number, date, subject, queue (noc/mobility), ticket owner, all contributors with their roles and actions.
-
-**STEP 2 — Score each individual** using ONLY the app-defined scoring rules above.
-For any scoring item NOT applicable to an individual (performed by someone else), award FULL MARKS.
-
-**STEP 3 — Output a \`\`\`json block** with this exact structure (one entry per individual):
+First output a \`\`\`json block with this exact structure (one entry per individual found in the ticket):
 
 \`\`\`json
 {
@@ -73,16 +92,16 @@ For any scoring item NOT applicable to an individual (performed by someone else)
       "name": "Full Name",
       "role": "Owner or Contributor",
       "scores": {
-        "Response & Timeliness":        { "score": 0, "max": 17, "deduction_reason": "why points were deducted, or 'Full marks' if none" },
-        "Data Quality & Completeness":  { "score": 0, "max": 17, "deduction_reason": "..." },
-        "Communication Quality":        { "score": 0, "max": 17, "deduction_reason": "..." },
-        "Process & Workflow Compliance":{ "score": 0, "max": 17, "deduction_reason": "..." },
-        "Technical Handling":           { "score": 0, "max": 16, "deduction_reason": "..." },
-        "Closure & Documentation":      { "score": 0, "max": 16, "deduction_reason": "..." }
+        "Response & Timeliness":         { "score": 0, "max": 17, "deduction_reason": "specific reason or 'Full marks'" },
+        "Data Quality & Completeness":   { "score": 0, "max": 17, "deduction_reason": "..." },
+        "Communication Quality":         { "score": 0, "max": 17, "deduction_reason": "..." },
+        "Process & Workflow Compliance": { "score": 0, "max": 17, "deduction_reason": "..." },
+        "Technical Handling":            { "score": 0, "max": 16, "deduction_reason": "..." },
+        "Closure & Documentation":       { "score": 0, "max": 16, "deduction_reason": "..." }
       },
       "total_score": 0,
       "grade": "Pass or Needs Improvement or Fail",
-      "what_did_well": "• bullet 1\n• bullet 2\n• bullet 3",
+      "what_did_well": "• bullet 1\n• bullet 2",
       "what_missed": "• bullet 1 with timestamp/evidence\n• bullet 2"
     }
   ]
@@ -90,16 +109,15 @@ For any scoring item NOT applicable to an individual (performed by someone else)
 \`\`\`
 
 Grade thresholds: Pass = 85–100, Needs Improvement = 70–84, Fail = below 70.
-total_score MUST equal sum of all six category scores. Max 100.
+total_score MUST equal the sum of all six category scores. Max = ${TOTAL_MAX}.
 
-**STEP 4 — After the JSON block**, write your full markdown audit report covering:
-- Extracted Ticket Information (table)
-- Ticket Content Review
-- Individual Audit sections (one per person) with Score Breakdown table, ✅ What You Did Well, ❌ What You Missed
+Then write the full markdown audit report after the JSON block.`;
+}
 
----
+function buildUserMessage(ticketText: string, fileName: string): string {
+  return `Please audit this ticket file.
 
-## TICKET FILE: ${fileName}
+TICKET FILE: ${fileName}
 
 ${ticketText}`;
 }
@@ -132,8 +150,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const truncated = text.slice(0, MAX_TEXT_CHARS);
-  const prompt = buildPrompt(truncated, fileName ?? "unknown.mhtml");
+  const systemMessage = buildSystemMessage();
+  const userMessage = buildUserMessage(truncated, fileName ?? "unknown.mhtml");
 
+  // Send rules as role:"system" — this takes priority over any agent-level
+  // system prompt configured on Devs.ai, ensuring our scoring rules win.
   const upstream = await fetch(`${platformUrl}/api/v1/chats/completions`, {
     method: "POST",
     headers: {
@@ -142,7 +163,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     },
     body: JSON.stringify({
       model: agentId,
-      messages: [{ role: "user", content: prompt }],
+      messages: [
+        { role: "system", content: systemMessage },
+        { role: "user",   content: userMessage },
+      ],
       stream: true,
     }),
   });

@@ -80,11 +80,19 @@ export const SCORING_CATEGORIES = [
       Evaluate ONLY closure/documentation this individual performed:
       - RFO documented BY THEM in Next Step field or notes — any shorthand valid (e.g. "OU" = Over Utilization).
       - Service restoration confirmation they handled.
-      - Customer confirmation they received or documented.
-      - Resolution code IF THEY closed the ticket.
+      - Customer confirmation OR monitoring data confirming resolution — BOTH are valid closure justifications.
+        A ticket may be closed based on monitoring data (e.g., LogicMonitor showing circuit restored) WITHOUT
+        explicit documented customer acknowledgment. Do NOT penalize for closing without customer reply
+        if monitoring data supports the closure decision.
+      - Resolution code: The RFO or reason documented in the Next Step field IS the resolution code.
+        Do NOT treat "Resolution Code field" as a separate required field. If the Next Step field
+        contains any indication of the resolution or RFO (even shorthand), that fully satisfies
+        the resolution code requirement. Do NOT penalize for a blank Resolution Code field.
       - Closure method IF THEY closed it — auto-timer and manual are BOTH fully valid.
       Award FULL MARKS for closure/documentation handled by others.
-      Do NOT penalize: auto-timer closure, Root Cause field blank, RFO in shorthand.`,
+      Do NOT penalize: auto-timer closure, Root Cause field blank, RFO in shorthand,
+      blank Resolution Code field (Next Step RFO = resolution code),
+      closing without customer acknowledgment when monitoring data confirms resolution.`,
   },
 ] as const;
 
@@ -98,11 +106,16 @@ export const DO_NOT_PENALIZE = `
   - Auto-timer closure (fully equivalent to manual closure — do NOT penalize)
   - Missing carrier ticket number (NOT mandatory — some carriers provide updates directly without tickets)
   - RFO written in shorthand, abbreviation, or codes (e.g., "OU", "fiber cut", "no ETR" — ALL valid)
+  - Blank Resolution Code field — the RFO or reason in the Next Step field IS the resolution code; if Next Step has any RFO/reason, the resolution code requirement is fully met
   - LCON fields blank unless customer provided LCON info not captured OR dispatch was scheduled without capturing/requesting details — and ONLY against the responsible individual
   - Pending Access appearing after Pending Complete — this is a valid system-driven customer re-open event, NOT a workflow error
   - Actions performed by other individuals — ONLY penalize each person for their own actions
   - Optional / non-functional system fields per NOC standards
   - Missing carrier ticket number — evaluate carrier engagement by evidence of contact + documented updates
+  - Closing a ticket without documented customer acknowledgment when monitoring data (e.g., LogicMonitor, APEX) confirms the circuit/service is restored — monitoring confirmation is fully sufficient for closure
+  - Use of "Pending Customer Response" stage — this is a valid standard stage, NOT non-standard
+  - Use of "Carrier Monitoring" stage — this is a valid standard stage, NOT non-standard
+  - Use of "Pending RFO" stage — this is a valid standard stage, NOT non-standard
 `;
 
 export const VALID_STAGES = [
@@ -110,6 +123,9 @@ export const VALID_STAGES = [
   "Pending Access / Test Results",
   "Pending Carrier Action / Update",
   "Pending Carrier Information",
+  "Pending Customer Response",      // valid standard stage — do NOT flag as non-standard
+  "Carrier Monitoring",             // valid standard stage — do NOT flag as non-standard
+  "Pending RFO",                    // valid standard stage — do NOT flag as non-standard
   "Customer Confirming Resolution",
   "Pending Complete",
   "Completed",

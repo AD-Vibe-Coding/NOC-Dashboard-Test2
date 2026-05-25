@@ -42,6 +42,7 @@ import {
   IconCheck,
   IconChartBar,
   IconClipboardText,
+  IconFiles,
   IconFlag,
   IconGavel,
   IconHistory,
@@ -57,6 +58,7 @@ import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
 import { LOCKED_TEAM, resolveTeamMember } from "../PerformanceTracker/team";
+import { BulkUploadTab } from "./BulkUploadTab";
 import {
   extractAnalysisMarkdown,
   gradeColor,
@@ -1311,6 +1313,9 @@ export function TicketAuditWidget() {
             <Tabs.Tab value="upload" leftSection={<IconUpload size={14} />}>
               Upload &amp; Analyze
             </Tabs.Tab>
+            <Tabs.Tab value="bulk" leftSection={<IconFiles size={14} />}>
+              Bulk Upload
+            </Tabs.Tab>
             <Tabs.Tab
               value="history"
               leftSection={<IconHistory size={14} />}
@@ -1329,6 +1334,10 @@ export function TicketAuditWidget() {
 
           <Tabs.Panel value="upload">
             <UploadTab onSaved={() => { refresh(); setActiveTab("history"); }} />
+          </Tabs.Panel>
+
+          <Tabs.Panel value="bulk">
+            <BulkUploadTab onSaved={refresh} />
           </Tabs.Panel>
 
           <Tabs.Panel value="history">
