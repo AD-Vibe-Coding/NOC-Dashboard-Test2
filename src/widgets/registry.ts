@@ -8,6 +8,7 @@ import {
   IconCoffee,
   IconDeviceMobileMessage,
   IconFileText,
+  IconGavel,
   IconHeadset,
   IconHome,
   IconMail,
@@ -55,6 +56,10 @@ import {
   ZoomCallMetricsWidget,
   ZoomCallMetricsTile,
 } from "./ZoomCallMetrics";
+import {
+  TicketAuditWidget,
+  TicketAuditTile,
+} from "./TicketAudit";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -246,5 +251,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: MobilityTroubleshooterTile,
     Full: MobilityTroubleshooterWidget,
+  },
+  {
+    id: "ticket-audit",
+    title: "Ticket Audit",
+    description: "AI quality audits from MHTML tickets — scores pushed to Performance Tracker",
+    icon: IconGavel,
+    iconColor: "violet",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: TicketAuditTile,
+    Full: TicketAuditWidget,
   },
 ];

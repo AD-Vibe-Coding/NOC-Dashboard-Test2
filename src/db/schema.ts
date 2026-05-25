@@ -244,6 +244,41 @@ export const zoom_queue_snapshots = pgTable("zoom_queue_snapshots", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+// =============================================================================
+// Ticket Audits — AI-analyzed ticket quality audits uploaded as MHTML files.
+// Each row = one audited ticket. Also writes a row to performance_metrics
+// with source_type = "audit" so scores appear in the Performance Tracker.
+// =============================================================================
+
+export const ticket_audits = pgTable("ticket_audits", {
+  id: serial("id").primaryKey(),
+  // Source file
+  file_name: text("file_name").notNull(),
+  file_size_bytes: integer("file_size_bytes").notNull(),
+  // Ticket metadata (extracted by AI)
+  ticket_number: text("ticket_number"),
+  ticket_subject: text("ticket_subject"),
+  // Agent attribution
+  agent_name: text("agent_name"),           // canonical team member name
+  agent_name_raw: text("agent_name_raw"),   // as found in the ticket
+  // Audit result
+  overall_score: real("overall_score"),     // 0–100
+  grade: text("grade"),                     // "Pass" | "Fail" | "Needs Improvement"
+  // Per-criteria scores (JSON: { criterion: score })
+  criteria_json: text("criteria_json"),
+  // AI full analysis markdown
+  analysis_markdown: text("analysis_markdown").notNull(),
+  // Month this audit belongs to (YYYY-MM) — for Performance Tracker grouping
+  audit_month: text("audit_month"),
+  // Queue: "noc" | "mobility" — for Performance Tracker split
+  queue: text("queue"),
+  // Who ran the audit
+  audited_by: text("audited_by"),
+  // Linked performance_metrics row id
+  metrics_id: integer("metrics_id"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const app_events = pgTable("app_events", {
   id: serial("id").primaryKey(),
   user_name: text("user_name").notNull(),        // canonical roster name
