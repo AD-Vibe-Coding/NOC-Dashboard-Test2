@@ -689,78 +689,31 @@ function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushe
     setPushError(null);
     setPushResult(null);
 
-    const toSave = unpushed.filter((a) => selected.has(a.id));
-    let pushed = 0;
-    let failed = 0;
+    const audit_ids = unpushed
+      .filter((a) => selected.has(a.id))
+      .map((a) => a.id);
 
-    for (const audit of toSave) {
-      try {
-        // Create an import record first
-        const importR = await fetch("/api/performance_imports", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            file_name: audit.file_name,
-            imported_by: "Ticket Audit Widget",
-            source_type: "audit",
-            sheet_name: "AI Audit",
-            row_count: 1,
-            matched_count: 1,
-            skipped_count: 0,
-            period_label: audit.audit_month ?? undefined,
-            period_start: audit.audit_month ? `${audit.audit_month}-01` : undefined,
-            period_end: audit.audit_month ? `${audit.audit_month}-01` : undefined,
-            notes: `Ticket ${audit.ticket_number ?? ""} · Score: ${audit.overall_score} · ${audit.grade}`,
-          }),
-        });
-        if (!importR.ok) throw new Error(`Import create failed: ${importR.status}`);
-        const importRow = await importR.json();
+    try {
+      const r = await fetch("/api/audit/push", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ audit_ids }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
 
-        // Create the metric row
-        const metricR = await fetch("/api/performance_metrics", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            import_id: importRow.id,
-            member_name: audit.agent_name,
-            source_type: "audit",
-            total_count: 1,
-            success_count: (audit.overall_score ?? 0) >= 70 ? 1 : 0,
-            score: String(audit.overall_score ?? ""),
-            period_start: audit.audit_month ? `${audit.audit_month}-01` : undefined,
-            period_end: audit.audit_month ? `${audit.audit_month}-01` : undefined,
-            queue: audit.queue ?? undefined,
-            period_month: audit.audit_month ?? undefined,
-            raw_json: JSON.stringify({
-              ticket_number: audit.ticket_number,
-              ticket_subject: audit.ticket_subject,
-              overall_score: audit.overall_score,
-              grade: audit.grade,
-              criteria: audit.criteria_json ? JSON.parse(audit.criteria_json) : {},
-              file_name: audit.file_name,
-              audit_id: audit.id,
-            }),
-          }),
-        });
-        if (!metricR.ok) throw new Error(`Metric create failed: ${metricR.status}`);
-        const metricRow = await metricR.json();
+      const { pushed, failed, errors } = j as { pushed: number; failed: number; errors: string[] };
 
-        // Update audit with metrics_id
-        await fetch(`/api/ticket-audits/${audit.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ metrics_id: metricRow.id }),
-        });
-
-        pushed++;
-      } catch (e) {
-        console.error("[TicketAudit] push failed for", audit.id, e);
-        failed++;
-      }
+      setPushResult(
+        `Pushed ${pushed} audit${pushed !== 1 ? "s" : ""} to Performance Tracker` +
+        (failed > 0 ? ` · ${failed} failed: ${errors.join("; ")}` : " ✅"),
+      );
+      setSelected(new Set());
+      onPushed();
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : "Push failed");
     }
 
-    setPushResult(`Pushed ${pushed} audit${pushed !== 1 ? "s" : ""} to Performance Tracker${failed > 0 ? ` (${failed} failed)` : ""}.`);
-    setSelected(new Set());
     setPushing(false);
     onPushed();
   }
