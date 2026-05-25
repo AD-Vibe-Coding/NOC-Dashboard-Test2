@@ -42,42 +42,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const truncated = text.slice(0, MAX_TEXT_CHARS);
 
-  const prompt = `You are a NOC ticket quality auditor. Analyze the following support ticket and produce a structured quality audit.
+  // Pass the raw ticket content directly to the agent.
+  // The agent has its own scoring instructions — do not override them.
+  const prompt = `TICKET FILE: ${fileName ?? "unknown.mhtml"}
 
-TICKET FILE: ${fileName ?? "unknown.mhtml"}
-
-TICKET CONTENT:
-${truncated}
-
----
-
-Instructions:
-1. First, output a JSON block (fenced with \`\`\`json ... \`\`\`) containing the following fields:
-   - ticket_number: string or null
-   - ticket_subject: string or null  
-   - agent_name: string or null (the primary agent who worked the ticket)
-   - overall_score: number 0–100
-   - grade: "Pass" | "Needs Improvement" | "Fail"
-   - audit_month: string "YYYY-MM" based on the ticket date, or null
-   - queue: "noc" | "mobility" | null (based on the ticket type/queue)
-   - date: string "YYYY-MM-DD" — the date the ticket was opened/worked, or null
-   - criteria: object with EXACTLY these six keys and scores (0–10 each):
-     - "Response & Timeliness" (was the ticket acknowledged and responded to promptly?)
-     - "Data Quality & Completeness" (were notes, details, and data entries accurate and complete?)
-     - "Communication Quality" (were all updates clear, professional, and customer-friendly?)
-     - "Process & Workflow Compliance" (did the agent follow escalation, routing, and SOP procedures?)
-     - "Technical Handling" (was the diagnosis, troubleshooting, and technical approach correct?)
-     - "Closure & Documentation" (was the ticket properly closed with complete documentation?)
-   - what_did_well: string — 2–4 bullet points (use "• " prefix) describing specific things the agent did well
-   - what_missed: string — 2–4 bullet points (use "• " prefix) describing specific things missed or that could be improved
-
-2. After the JSON block, write a concise markdown audit report with these sections:
-   ## Audit Summary
-   ## Score Breakdown
-   ## What You Did Well
-   ## What You Missed / Could Do Better
-
-Be objective and specific. Reference actual ticket notes and timestamps when scoring.`;
+${truncated}`;
 
   const upstream = await fetch(`${platformUrl}/api/v1/chats/completions`, {
     method: "POST",

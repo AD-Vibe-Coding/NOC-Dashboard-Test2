@@ -27,7 +27,7 @@ export function TicketAuditTile({ onExpand }: Props) {
       description="AI quality audits from MHTML ticket files"
       icon={IconGavel}
       iconColor="violet"
-      status={{ label: "AI", color: "violet", tooltip: "Powered by Devs.ai audit agent" }}
+      status={{ label: "AI AUDIT", color: "violet", tooltip: "Powered by Devs.ai audit agent" }}
       onExpand={onExpand}
     >
       <Stack gap="sm" style={{ height: "100%" }}>
