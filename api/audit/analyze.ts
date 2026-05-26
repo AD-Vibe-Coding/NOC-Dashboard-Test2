@@ -148,9 +148,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "text is required" });
   }
 
-  const truncated = text.slice(0, MAX_TEXT_CHARS);
   const systemMessage = buildSystemMessage();
-  const userMessage = buildUserMessage(truncated, fileName ?? "unknown.mhtml");
+  const userMessage = buildUserMessage(text, fileName ?? "unknown.mhtml");
 
   // Send rules as role:"system" — this takes priority over any agent-level
   // system prompt configured on Devs.ai, ensuring our scoring rules win.
