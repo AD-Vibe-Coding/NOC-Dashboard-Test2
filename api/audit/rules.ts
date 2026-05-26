@@ -17,8 +17,17 @@ export const SCORING_CATEGORIES = [
       - First touch/response time IF THEY sent it (target ≤5 min; average 2 min). Deduct if late.
       - Carrier ticket timing IF THEY engaged the carrier (target ≤15 min of ticket creation). Deduct if late.
       - Follow-up timing for their own updates — unexplained delays.
-      - SLA escalation chain adherence during the period THEY were responsible:
-          Lead Alert: 2hr, MGR Alert: 3hr, VP Alert: 4hr, SVP Alert: 5hr (in Pending Carrier Action).
+      - SLA escalation chain adherence during the period THEY were responsible,
+        but ONLY when escalation rules apply:
+          - Applicable when the ticket service type is an SLA service, OR
+          - A system-generated escalation email/alert is present in the ticket history.
+        Escalation levels/timers:
+          Level 1 (Tier 2 / Tier 3): 2hr
+          Level 2 (NOC Managers): 3hr
+          Level 3 (OPs VPs): 4hr
+          Level 4 (SVP): 5hr
+        If neither condition is met (non-SLA service and no escalation alert evidence),
+        do NOT score or penalize escalation timing.
       - Review turnaround after Pending Access re-open IF THEY were the responsible tech.
       Award FULL MARKS for any of these items they did not personally perform.`,
   },
@@ -57,7 +66,8 @@ export const SCORING_CATEGORIES = [
       - Dispatch scheduling/details capture IF THEY handled the dispatch.
       - TSP codes IF THEY opened the carrier ticket AND customer is Stanford Health Care AND service type is DIA/VPLS/MPLS/Point-to-Point ONLY.
       - TTU process if applicable to their actions.
-      - Correct and timely stage update after Pending Access re-open IF THEY were responsible.
+      - Correct and timely stage update after Pending Access re-open IF THEY were responsible,
+        evaluated against due date/SLA expectations and active assignment timeline (not an instant-update expectation after reassignment).
       Do NOT penalize: auto-timer closure (fully valid), Pending Access appearing after Pending Complete (valid system re-open — NOT a workflow error), missing carrier ticket number, process steps performed by other individuals.`,
   },
   {

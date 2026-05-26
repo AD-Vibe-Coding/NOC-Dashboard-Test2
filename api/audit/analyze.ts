@@ -13,7 +13,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { SCORING_CATEGORIES, TOTAL_MAX, DO_NOT_PENALIZE, VALID_STAGES, FIRST_TOUCH_TARGET_MIN, CARRIER_TICKET_TARGET_MIN, SLA_ESCALATION } from "./rules.js";
 
-const MAX_TEXT_CHARS = 80_000;
 
 /**
  * System message — sent as role:"system" so it takes absolute priority
