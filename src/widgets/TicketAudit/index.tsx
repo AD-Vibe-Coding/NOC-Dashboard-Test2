@@ -84,6 +84,15 @@ const AUDIT_CRITERIA = [
   "Closure & Documentation",
 ] as const;
 
+export const AUDIT_CRITERIA_MAX: Record<string, number> = {
+  "Response & Timeliness": 20,
+  "Data Quality & Completeness": 16,
+  "Communication Quality": 25,
+  "Process & Workflow Compliance": 14,
+  "Technical Handling": 13,
+  "Closure & Documentation": 12,
+};
+
 // ── Editable fields after AI analysis ────────────────────────────────────────
 interface AuditFields {
   ticket_number: string;

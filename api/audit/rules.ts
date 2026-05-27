@@ -11,7 +11,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Response & Timeliness",
     column: "D",
-    max: 17,
+    max: 20,
     evaluate: `
       Evaluate ONLY actions this individual personally performed:
       - First touch/response time IF THEY sent it (target ≤5 min; average 2 min). Deduct if late.
@@ -34,7 +34,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Data Quality & Completeness",
     column: "E",
-    max: 17,
+    max: 16,
     evaluate: `
       - For Owner only: initial ticket fields completeness, issue description, customer info.
       - For all: their own documentation quality, carrier engagement evidence (ticket# NOT required — evidence of contact suffices), troubleshooting they documented.
@@ -45,7 +45,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Communication Quality",
     column: "F",
-    max: 17,
+    max: 25,
     evaluate: `
       Evaluate ONLY this individual's own customer-facing communications:
       - Clarity, professionalism, empathy, grammar.
@@ -57,7 +57,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Process & Workflow Compliance",
     column: "G",
-    max: 17,
+    max: 14,
     evaluate: `
       Evaluate ONLY process steps this individual was responsible for:
       - Stage changes they made — correct sequence per 7-stage standard.
@@ -76,7 +76,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Technical Handling",
     column: "H",
-    max: 16,
+    max: 13,
     evaluate: `
       Evaluate ONLY this individual's own technical work:
       - Their troubleshooting quality and technical accuracy.
@@ -88,7 +88,7 @@ export const SCORING_CATEGORIES = [
   {
     name: "Closure & Documentation",
     column: "I",
-    max: 16,
+    max: 12,
     evaluate: `
       Evaluate ONLY closure/documentation this individual performed:
       - RFO documented BY THEM in Next Step field or notes — any shorthand valid (e.g. "OU" = Over Utilization).
