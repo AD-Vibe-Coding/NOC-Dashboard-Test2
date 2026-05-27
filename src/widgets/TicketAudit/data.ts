@@ -6,11 +6,14 @@ export interface TicketAudit {
   file_size_bytes: number;
   ticket_number: string | null;
   ticket_subject: string | null;
+  ticket_date?: string | null;
   agent_name: string | null;
   agent_name_raw: string | null;
   overall_score: number | null;
   grade: string | null;
   criteria_json: string | null;
+  what_did_well?: string | null;
+  what_missed?: string | null;
   analysis_markdown: string;
   audit_month: string | null;
   queue: string | null;
@@ -78,14 +81,32 @@ export function useTicketAudits() {
 }
 
 // ── Types for the structured audit JSON the agent returns ────────────────────
+export interface AuditScoreDetail {
+  score: number;
+  max: number;
+  points_deducted: number;
+  deduction_reason: string;
+  evidence: string;
+  // legacy fields — kept for backward compatibility with older saved audits
+  what_happened?: string;
+  exact_evidence?: string;
+}
+
 export interface AuditIndividual {
   name: string;
+  party?: string;
   role: "Owner" | "Contributor" | string;
-  scores: Record<string, { score: number; max: number; deduction_reason: string }>;
+  scores: Record<string, AuditScoreDetail>;
   total_score: number;
   grade: string;
   what_did_well: string;
   what_missed: string;
+}
+
+export interface AuditParties {
+  agents: string[];
+  customers: string[];
+  carriers: string[];
 }
 
 export interface ParsedAuditResult {
@@ -94,6 +115,7 @@ export interface ParsedAuditResult {
   ticket_date: string | null;
   audit_month: string | null;
   queue: string | null;
+  parties?: AuditParties;
   individuals: AuditIndividual[];
 }
 
@@ -101,16 +123,118 @@ export interface ParsedAuditResult {
  * Parse the structured JSON block the agent returns.
  * Returns null if no valid JSON block found.
  */
+/** Extract the raw JSON string from whatever shape the model returned.
+ *
+ * Three cases (in priority order):
+ *  1. Full fenced block:  ```json\n{...}\n```
+ *  2. Primer mode:        model response starts with "{" because the opening
+ *     ```json was pre-filled as an assistant primer — response is just the
+ *     object body + optional closing ```
+ *  3. Bare JSON anywhere in the text: first "{" to last "}"
+ */
+function extractJsonString(text: string): string | null {
+  // Helper: slice from first "{" to last "}" — handles any nesting depth
+  function firstToLast(s: string): string | null {
+    const first = s.indexOf("{");
+    const last  = s.lastIndexOf("}");
+    return (first !== -1 && last > first) ? s.slice(first, last + 1) : null;
+  }
+
+  // Case 1 — find ALL fence pairs and try each one until JSON.parse succeeds.
+  // This handles: ```json...```, ```...```, and nested/repeated fences.
+  const fenceOpenRe = /```(?:json)?\s*\n/gi;
+  let match: RegExpExecArray | null;
+  while ((match = fenceOpenRe.exec(text)) !== null) {
+    const contentStart = match.index + match[0].length;
+    const fenceEnd = text.indexOf("```", contentStart);
+    if (fenceEnd === -1) continue;
+    const between = text.slice(contentStart, fenceEnd);
+    const json = firstToLast(between);
+    if (json) {
+      try { JSON.parse(json); return json; } catch { /* try next fence */ }
+    }
+  }
+
+  // Case 2 — primer mode OR bare response: starts with "{" (or whitespace then "{")
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{")) {
+    // strip trailing ``` if model closed the code block
+    const stripped = trimmed.replace(/\s*```[\w]*\s*$/, "").trim();
+    const json = firstToLast(stripped);
+    if (json) {
+      try { JSON.parse(json); return json; } catch { /* fall through */ }
+    }
+  }
+
+  // Case 3 — last resort: grab first "{" to last "}"
+  return firstToLast(text);
+}
+
 export function parseAuditJson(markdown: string): ParsedAuditResult | null {
-  // Parse the structured ```json block the agent returns
-  const jsonMatch = markdown.match(/```json\s*([\s\S]*?)```/i);
-  if (jsonMatch) {
+  const raw = extractJsonString(markdown);
+  if (!raw) {
+    console.warn("[parseAuditJson] No JSON string found. Response head:", markdown.slice(0, 300));
+    return null;
+  }
+  if (raw) {
     try {
-      const parsed = JSON.parse(jsonMatch[1]);
-      if (Array.isArray(parsed.individuals) && parsed.individuals.length > 0) {
-        return parsed as ParsedAuditResult;
+      const parsed = JSON.parse(raw);
+
+      // Accept either "individuals" (expected) or "individual" (model typo)
+      if (!Array.isArray(parsed.individuals) && Array.isArray(parsed.individual)) {
+        parsed.individuals = parsed.individual;
       }
-    } catch { /* fall through to legacy */ }
+      // Accept root-level individual object (model returned one object without array)
+      if (!Array.isArray(parsed.individuals) && parsed.name && parsed.scores) {
+        parsed.individuals = [parsed];
+      }
+
+      if (Array.isArray(parsed.individuals) && parsed.individuals.length > 0) {
+        // Sanitize each individual: clamp per-category scores to their max,
+        // then recompute total_score from the clamped values — never trust
+        // a model-returned total that could exceed 100.
+        const CATEGORY_MAXES: Record<string, number> = {
+          "Response & Timeliness": 20,
+          "Data Quality & Completeness": 16,
+          "Communication Quality": 25,
+          "Process & Workflow Compliance": 14,
+          "Technical Handling": 13,
+          "Closure & Documentation": 12,
+        };
+        parsed.individuals = parsed.individuals.map((ind: AuditIndividual) => {
+          if (ind.scores && typeof ind.scores === "object") {
+            for (const [cat, catMax] of Object.entries(CATEGORY_MAXES)) {
+              if (ind.scores[cat]) {
+                const s = ind.scores[cat];
+                s.score = Math.min(s.score ?? 0, catMax);
+                s.max = catMax; // enforce correct max
+                // Recompute points_deducted from clamped score
+                s.points_deducted = catMax - s.score;
+                // Ensure deduction detail fields are always present
+                s.deduction_reason = s.deduction_reason || "Full marks";
+                // Normalise: new format uses `evidence`, old format used what_happened + exact_evidence
+                if (!s.evidence) {
+                  const wh = s.what_happened || "";
+                  const ee = s.exact_evidence || "";
+                  s.evidence = [wh, ee].filter(v => v && v !== "N/A").join(" | ") || "N/A";
+                }
+              }
+            }
+          }
+          // Recompute total from clamped scores — ignore model-returned total
+          const computedTotal = Object.values(ind.scores ?? {}).reduce(
+            (s: number, v: AuditScoreDetail) => s + (v.score ?? 0), 0
+          );
+          ind.total_score = Math.min(computedTotal, 100);
+          return ind;
+        });
+        return parsed as ParsedAuditResult;
+      } else {
+        console.warn("[parseAuditJson] JSON parsed OK but no individuals found. Keys:", Object.keys(parsed), "| head:", raw.slice(0, 200));
+      }
+    } catch (e) {
+      console.warn("[parseAuditJson] JSON.parse failed:", (e as Error).message, "| raw head:", raw.slice(0, 300));
+    }
   }
 
   // ── Legacy fallback: plain-text extraction for old format ──────────────────
@@ -277,20 +401,30 @@ export function parseAuditJson(markdown: string): ParsedAuditResult | null {
   const r = result as Record<string, unknown>;
   const criteriaObj = (r.criteria as Record<string, number>) ?? {};
   const reasonsObj = (r.criteria_reasons as Record<string, string>) ?? {};
-  const scores: Record<string, { score: number; max: number; deduction_reason: string }> = {};
+  const scores: Record<string, AuditScoreDetail> = {};
   const MAXES: Record<string, number> = {
-    "Response & Timeliness": 17,
-    "Data Quality & Completeness": 17,
-    "Communication Quality": 17,
-    "Process & Workflow Compliance": 17,
-    "Technical Handling": 16,
-    "Closure & Documentation": 16,
+    "Response & Timeliness": 20,
+    "Data Quality & Completeness": 16,
+    "Communication Quality": 25,
+    "Process & Workflow Compliance": 14,
+    "Technical Handling": 13,
+    "Closure & Documentation": 12,
   };
   for (const [k, max] of Object.entries(MAXES)) {
-    scores[k] = { score: criteriaObj[k] ?? max, max, deduction_reason: reasonsObj[k] ?? "Full marks" };
+    const raw = criteriaObj[k] ?? max;
+    const clamped = Math.min(raw, max);
+    // Clamp each criterion score to its own max — never allow over-scoring
+    scores[k] = {
+      score: clamped,
+      max,
+      points_deducted: max - clamped,
+      deduction_reason: reasonsObj[k] ?? "Full marks",
+      evidence: "N/A",
+    };
   }
-  const total = typeof r.overall_score === "number" ? r.overall_score
-    : Object.values(scores).reduce((s, v) => s + v.score, 0);
+  // Always recompute total from actual scores — never trust a model-returned total
+  const computedTotal = Object.values(scores).reduce((s, v) => s + v.score, 0);
+  const total = Math.min(computedTotal, 100);
   return {
     ticket_number: (r.ticket_number as string) ?? null,
     ticket_subject: (r.ticket_subject as string) ?? null,
@@ -315,7 +449,12 @@ export function extractAnalysisMarkdown(full: string): string {
   const idx = full.indexOf("```json");
   if (idx !== -1) {
     const endIdx = full.indexOf("```", idx + 7);
-    if (endIdx !== -1) return full.slice(endIdx + 3).trim();
+    if (endIdx !== -1) {
+      const after = full.slice(endIdx + 3).trim();
+      // If nothing remains after the JSON block (SECTION 3 was dropped),
+      // store the full response so analysis_markdown is never empty.
+      return after.length > 0 ? after : full.trim();
+    }
   }
   // Otherwise the entire response is the analysis
   return full.trim();

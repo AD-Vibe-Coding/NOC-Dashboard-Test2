@@ -65,7 +65,7 @@ export function NewsTicker() {
   const [postModalOpen, setPostModalOpen] = useState(false);
   const [manageModalOpen, setManageModalOpen] = useState(false);
   const tickerRef = useRef<HTMLDivElement>(null);
-  const [paused, setPaused] = useState(false);
+  void tickerRef; // kept to avoid removing the import
 
   const isManager = isManagerRole(identity?.role);
 
@@ -204,93 +204,49 @@ export function NewsTicker() {
           </Group>
         </Group>
 
-        {/* Scrolling ticker area */}
+        {/* Static updates list */}
         {sorted.length > 0 ? (
-          <Box
-            ref={tickerRef}
-            onMouseEnter={() => setPaused(true)}
-            onMouseLeave={() => setPaused(false)}
-            style={{ overflow: "hidden", position: "relative", height: 36 }}
-          >
-            <Box
-              style={{
-                display: "flex",
-                gap: 48,
-                whiteSpace: "nowrap",
-                animation: `ticker-scroll ${Math.max(sorted.length * 8, 20)}s linear infinite`,
-                animationPlayState: paused ? "paused" : "running",
-                paddingTop: 7,
-                paddingBottom: 7,
-                paddingLeft: "100%",
-              }}
-            >
-              {sorted.map((u, idx) => {
-                const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
-                const Icon = cfg.icon;
-                return (
-                  <Group
-                    key={`ticker-${u.id}-${idx}`}
-                    gap={6}
-                    wrap="nowrap"
-                    style={{ flexShrink: 0 }}
+          <Stack gap={0} style={{ padding: "6px 10px" }}>
+            {sorted.map((u, idx) => {
+              const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
+              const Icon = cfg.icon;
+              return (
+                <Group
+                  key={`update-${u.id}-${idx}`}
+                  gap={8}
+                  wrap="nowrap"
+                  py={5}
+                  style={{
+                    borderBottom: idx < sorted.length - 1
+                      ? "1px solid var(--mantine-color-dark-5)"
+                      : undefined,
+                  }}
+                >
+                  {u.pinned && (
+                    <IconPin
+                      size={11}
+                      style={{ color: "var(--mantine-color-appdirect-5)", flexShrink: 0 }}
+                    />
+                  )}
+                  <Icon
+                    size={13}
+                    style={{ color: `var(--mantine-color-${cfg.color}-5)`, flexShrink: 0 }}
+                  />
+                  <Text
+                    size="xs"
+                    fw={u.priority === "urgent" ? 700 : 500}
+                    c={u.priority === "urgent" ? "red" : undefined}
+                    style={{ flex: 1 }}
                   >
-                    {u.pinned && (
-                      <IconPin
-                        size={11}
-                        style={{ color: "var(--mantine-color-appdirect-5)", flexShrink: 0 }}
-                      />
-                    )}
-                    <Icon size={13} style={{ color: `var(--mantine-color-${cfg.color}-5)`, flexShrink: 0 }} />
-                    <Text
-                      size="xs"
-                      fw={u.priority === "urgent" ? 700 : 500}
-                      c={u.priority === "urgent" ? "red" : undefined}
-                      style={{ whiteSpace: "nowrap" }}
-                    >
-                      {u.content}
-                    </Text>
-                    <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
-                      — {u.author_name},{" "}
-                      {formatRelative(u.created_at)}
-                    </Text>
-                  </Group>
-                );
-              })}
-              {/* Duplicate for seamless loop */}
-              {sorted.map((u, idx) => {
-                const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
-                const Icon = cfg.icon;
-                return (
-                  <Group
-                    key={`ticker-dup-${u.id}-${idx}`}
-                    gap={6}
-                    wrap="nowrap"
-                    style={{ flexShrink: 0 }}
-                  >
-                    {u.pinned && (
-                      <IconPin
-                        size={11}
-                        style={{ color: "var(--mantine-color-appdirect-5)", flexShrink: 0 }}
-                      />
-                    )}
-                    <Icon size={13} style={{ color: `var(--mantine-color-${cfg.color}-5)`, flexShrink: 0 }} />
-                    <Text
-                      size="xs"
-                      fw={u.priority === "urgent" ? 700 : 500}
-                      c={u.priority === "urgent" ? "red" : undefined}
-                      style={{ whiteSpace: "nowrap" }}
-                    >
-                      {u.content}
-                    </Text>
-                    <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
-                      — {u.author_name},{" "}
-                      {formatRelative(u.created_at)}
-                    </Text>
-                  </Group>
-                );
-              })}
-            </Box>
-          </Box>
+                    {u.content}
+                  </Text>
+                  <Text size="xs" c="dimmed" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+                    — {u.author_name}, {formatRelative(u.created_at)}
+                  </Text>
+                </Group>
+              );
+            })}
+          </Stack>
         ) : (
           <Box px="sm" py={8}>
             <Text size="xs" c="dimmed" ta="center">

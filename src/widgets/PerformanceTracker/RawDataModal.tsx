@@ -454,12 +454,17 @@ const TASK_COLS: ColDef[] = [
   },
 ];
 
-function scoreCell(score: number | null | undefined) {
-  if (score == null) return <Text size="xs" c="dimmed">—</Text>;
-  const color = score >= 8 ? "green" : score >= 6 ? "yellow" : "red";
+function scoreCell(score: number | null | undefined | unknown) {
+  // Defensively handle object format { score, max, ... } stored by older push logic
+  if (score != null && typeof score === "object" && typeof (score as any).score === "number") {
+    score = (score as any).score;
+  }
+  const n = score == null ? null : Number(score);
+  if (n == null || isNaN(n)) return <Text size="xs" c="dimmed">—</Text>;
+  const color = n >= 8 ? "green" : n >= 6 ? "yellow" : "red";
   return (
     <Badge size="xs" color={color} variant="light" fw={700}>
-      {score}
+      {n}
     </Badge>
   );
 }

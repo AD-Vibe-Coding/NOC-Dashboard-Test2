@@ -31,16 +31,17 @@ import {
   IconAlertCircle,
   IconCheck,
   IconFiles,
+  IconGavel,
   IconPlayerStop,
   IconTrash,
   IconUpload,
+  IconUsers,
   IconX,
 } from "@tabler/icons-react";
 import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
 import { resolveTeamMember } from "../PerformanceTracker/team";
-import { parseAuditJson, scoreColor, gradeColor } from "./data";
-import { useTicketAudits } from "./data";
+import { parseAuditJson, extractAnalysisMarkdown, scoreColor, gradeColor, useTicketAudits } from "./data";
 
 // ── Per-file status ────────────────────────────────────────────────────────────
 type BulkStatus =
@@ -56,12 +57,17 @@ interface BulkItem {
   id: string;
   file: File;
   status: BulkStatus;
-  statusText?: string;     // live sub-status shown while analyzing
+  statusText?: string;
   error?: string;
-  savedCount?: number;     // number of individual rows saved
-  agentNames?: string[];   // one per individual
-  scores?: number[];
-  grades?: string[];
+  savedCount?: number;
+  individuals?: SavedIndividual[];   // one entry per saved individual with role
+}
+
+interface SavedIndividual {
+  name: string;
+  role: string;      // Owner | Contributor | Contributor - AS
+  score: number | null;
+  grade: string | null;
 }
 
 function statusBadge(item: BulkItem) {
@@ -227,30 +233,47 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
     patchItem(item.id, { statusText: "Parsing structured results…" });
     const result = parseAuditJson(rawResponse);
     if (!result || !result.individuals || result.individuals.length === 0) {
+      const snippet = rawResponse.slice(0, 120).replace(/\n/g, " ");
+      console.error("[BulkUpload] Parse failed. Response head:", snippet);
       patchItem(item.id, {
         status: "needs_review",
-        error: "Could not extract structured scores — open in Upload & Analyze tab for manual review",
+        error: `Could not extract structured scores (response: "${snippet}…") — open in Upload & Analyze tab to review manually`,
       });
       return;
     }
 
-    // 4. Save each individual
-    patchItem(item.id, { status: "saving", statusText: `Saving ${result.individuals.length} individual(s)…` });
-    let savedCount = 0;
-    const agentNames: string[] = [];
-    const scores: number[] = [];
-    const grades: string[] = [];
+    // Auto-save — owners first, then contributors
+    const owners = result.individuals.filter(i => i.role === "Owner");
+    const contributors = result.individuals.filter(i => i.role !== "Owner");
+    const orderedInds = [...owners, ...contributors];
+    patchItem(item.id, {
+      status: "saving",
+      statusText: `Auto-saving ${owners.length} owner(s) + ${contributors.length} contributor(s)…`,
+    });
 
-    for (const ind of result.individuals) {
+    let savedCount = 0;
+    const individuals: SavedIndividual[] = [];
+
+    // Strip JSON block from markdown once — reuse for all individuals
+    const cleanMarkdown = extractAnalysisMarkdown(rawResponse);
+
+    for (const ind of orderedInds) {
       try {
-        const criteria: Record<string, number> = {};
+        const criteriaFull: Record<string, {
+          score: number; max: number; points_deducted: number;
+          deduction_reason: string; evidence: string;
+        }> = {};
         for (const [cat, s] of Object.entries(ind.scores ?? {})) {
-          if (typeof s.score === "number") criteria[cat] = s.score;
+          criteriaFull[cat] = {
+            score: s.score,
+            max: s.max,
+            points_deducted: s.points_deducted ?? (s.max - s.score),
+            deduction_reason: s.deduction_reason || "Full marks",
+            evidence: s.evidence || "N/A",
+          };
         }
+
         const agentName = resolveTeamMember(ind.name) ?? ind.name ?? null;
-        if (agentName) agentNames.push(agentName);
-        if (typeof ind.total_score === "number") scores.push(ind.total_score);
-        if (ind.grade) grades.push(ind.grade);
 
         await saveAudit({
           file_name: item.file.name,
@@ -262,17 +285,26 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
           agent_name_raw: ind.name ?? null,
           overall_score: typeof ind.total_score === "number" ? ind.total_score : null,
           grade: ind.grade ?? null,
-          criteria_json: Object.keys(criteria).length > 0 ? JSON.stringify(criteria) : null,
+          criteria_json: Object.keys(criteriaFull).length > 0 ? JSON.stringify(criteriaFull) : null,
           what_did_well: ind.what_did_well ?? null,
           what_missed: ind.what_missed ?? null,
-          analysis_markdown: rawResponse,
+          analysis_markdown: cleanMarkdown,
           audit_month: result.audit_month ?? null,
           queue: result.queue ?? null,
           audited_by: identity?.name ?? null,
           metrics_id: null,
         } as any);
+
+        individuals.push({
+          name: agentName ?? ind.name ?? "Unknown",
+          role: ind.role ?? "Owner",
+          score: typeof ind.total_score === "number" ? ind.total_score : null,
+          grade: ind.grade ?? null,
+        });
         savedCount++;
-      } catch { /* individual save failure — don't block rest */ }
+      } catch (saveErr) {
+        console.error("[BulkUpload] Save failed for", ind.name, ":", saveErr instanceof Error ? saveErr.message : saveErr);
+      }
     }
 
     if (savedCount > 0) {
@@ -280,9 +312,7 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
         status: "saved",
         statusText: undefined,
         savedCount,
-        agentNames,
-        scores,
-        grades,
+        individuals,
         error: undefined,
       });
       onSaved();
@@ -513,10 +543,14 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
                 <Table.Tr>
                   <Table.Th>#</Table.Th>
                   <Table.Th>File</Table.Th>
-                  <Table.Th style={{ width: 150 }}>Status</Table.Th>
-                  <Table.Th style={{ width: 170 }}>Agent(s)</Table.Th>
-                  <Table.Th style={{ width: 80, textAlign: "center" }}>Score</Table.Th>
-                  <Table.Th style={{ width: 110 }}>Grade</Table.Th>
+                  <Table.Th style={{ width: 140 }}>Status</Table.Th>
+                  <Table.Th style={{ width: 170 }}>
+                    <Group gap={4}><IconGavel size={11} /><span>Owners</span></Group>
+                  </Table.Th>
+                  <Table.Th style={{ width: 160 }}>
+                    <Group gap={4}><IconUsers size={11} /><span>Contributors</span></Group>
+                  </Table.Th>
+                  <Table.Th style={{ width: 100 }}>Grade</Table.Th>
                   <Table.Th style={{ width: 36 }}></Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -563,41 +597,50 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
                     {/* Status badge */}
                     <Table.Td>{statusBadge(item)}</Table.Td>
 
-                    {/* Agent names */}
+                    {/* Owners */}
                     <Table.Td>
-                      {item.agentNames && item.agentNames.length > 0 ? (
-                        <Stack gap={2}>
-                          {item.agentNames.map((n, i) => (
-                            <Text key={i} size="xs" fw={500} truncate style={{ maxWidth: 160 }}>
-                              {n}
-                            </Text>
+                      {item.individuals && item.individuals.filter(i => i.role === "Owner").length > 0 ? (
+                        <Stack gap={3}>
+                          {item.individuals.filter(i => i.role === "Owner").map((ind, i) => (
+                            <Group key={i} gap={4} wrap="nowrap">
+                              <IconGavel size={10} color="var(--mantine-color-violet-5)" />
+                              <Text size="xs" fw={600} truncate style={{ maxWidth: 130 }}>{ind.name}</Text>
+                              {ind.score !== null && (
+                                <Badge size="xs" color={scoreColor(ind.score)} variant="filled" fw={700}>{ind.score}</Badge>
+                              )}
+                            </Group>
                           ))}
                         </Stack>
-                      ) : (
-                        <Text size="xs" c="dimmed">—</Text>
-                      )}
+                      ) : <Text size="xs" c="dimmed">—</Text>}
                     </Table.Td>
 
-                    {/* Score(s) */}
-                    <Table.Td style={{ textAlign: "center" }}>
-                      {item.scores && item.scores.length > 0 ? (
-                        <Stack gap={2} align="center">
-                          {item.scores.map((s, i) => (
-                            <Badge key={i} size="sm" color={scoreColor(s)} variant="filled" fw={700}>
-                              {s}
-                            </Badge>
+                    {/* Contributors */}
+                    <Table.Td>
+                      {item.individuals && item.individuals.filter(i => i.role !== "Owner").length > 0 ? (
+                        <Stack gap={3}>
+                          {item.individuals.filter(i => i.role !== "Owner").map((ind, i) => (
+                            <Group key={i} gap={4} wrap="nowrap">
+                              <IconUsers size={10} color="var(--mantine-color-blue-5)" />
+                              <Text size="xs" fw={500} truncate style={{ maxWidth: 110 }}>{ind.name}</Text>
+                              {ind.role === "Contributor - AS" && (
+                                <Badge size="xs" color="orange" variant="outline">AS</Badge>
+                              )}
+                              {ind.score !== null && (
+                                <Badge size="xs" color={scoreColor(ind.score)} variant="filled" fw={700}>{ind.score}</Badge>
+                              )}
+                            </Group>
                           ))}
                         </Stack>
-                      ) : "—"}
+                      ) : <Text size="xs" c="dimmed">—</Text>}
                     </Table.Td>
 
                     {/* Grade(s) */}
                     <Table.Td>
-                      {item.grades && item.grades.length > 0 ? (
+                      {item.individuals && item.individuals.length > 0 ? (
                         <Stack gap={2}>
-                          {item.grades.map((g, i) => (
-                            <Badge key={i} size="xs" color={gradeColor(g)} variant="light">{g}</Badge>
-                          ))}
+                          {item.individuals.map((ind, i) => ind.grade ? (
+                            <Badge key={i} size="xs" color={gradeColor(ind.grade)} variant="light">{ind.grade}</Badge>
+                          ) : null)}
                         </Stack>
                       ) : "—"}
                     </Table.Td>

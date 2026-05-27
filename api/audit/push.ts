@@ -88,7 +88,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const criteriaScores: Record<string, number | null> = {};
       for (const [label, key] of Object.entries(CRITERIA_KEYS)) {
-        criteriaScores[key] = criteriaObj[label] ?? null;
+        const raw = criteriaObj[label];
+        // criteria_json may store plain numbers (old format) or full objects
+        // { score, max, points_deducted, ... } (new format) — extract score either way
+        if (raw == null) {
+          criteriaScores[key] = null;
+        } else if (typeof raw === "number") {
+          criteriaScores[key] = raw;
+        } else if (typeof raw === "object" && raw !== null && typeof (raw as any).score === "number") {
+          criteriaScores[key] = (raw as any).score;
+        } else {
+          criteriaScores[key] = null;
+        }
       }
 
       const { data: metricRow, error: metricErr } = await supabaseAdmin

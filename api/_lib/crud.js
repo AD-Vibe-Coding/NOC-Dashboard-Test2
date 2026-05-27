@@ -203,7 +203,17 @@ function parseQueue(val) {
  */
 function hydrateMetricRow(row, importSourceMap) {
   const { raw_json, ...rest } = row;
-  // If ALL derived fields already present, just strip raw_json.
+
+  const sourceType = rest.source_type || importSourceMap?.get(rest.import_id) || "tickets";
+
+  // Audit rows must keep raw_json attached — the frontend RawDataModal reads
+  // criteria scores (response_timeliness, data_quality, etc.) directly from
+  // raw_json via auditRaw(). Stripping it would blank the entire Audits tab.
+  if (sourceType === "audit") {
+    return { ...rest, raw_json };
+  }
+
+  // For non-audit rows: if ALL derived fields already present, strip raw_json and return.
   // IMPORTANT: must check ALL hydrated fields — when we add new ones the
   // cache must be forced to re-parse. Check the newest fields last.
   if (rest.source_type && rest.period_month && rest.ack_minutes !== undefined
@@ -214,8 +224,6 @@ function hydrateMetricRow(row, importSourceMap) {
 
   let raw;
   try { raw = JSON.parse(raw_json); } catch { return rest; }
-
-  const sourceType = rest.source_type || importSourceMap?.get(rest.import_id) || "tickets";
   const periodMonth = rest.period_month || parseMonthFromDate(raw.month || raw.Month || raw.start_time || raw["Start Time"]);
   const periodQuarter = rest.period_quarter || quarterFromMonth(periodMonth);
   const queue = rest.queue || parseQueue(raw.reported_via || raw["Operator Name"]);
@@ -584,7 +592,13 @@ export async function handleCollection(table, req, res) {
 
       // Server-side hydration for performance_metrics: fill derived fields
       // from raw_json and strip it from the response (11MB → 1.4MB).
-      if (table === "performance_metrics" && allRows.length > 0 && !allRows[0].source_type) {
+      // ALWAYS run for performance_metrics — the old guard (!allRows[0].source_type)
+      // caused the entire block to be skipped whenever the first row happened to
+      // be an audit row (which already has source_type set). Ticket/call/task rows
+      // imported before the column was reliably written would then stay null.
+      // hydrateMetricRow() has its own early-return when all fields are present,
+      // so running it unconditionally is cheap for already-hydrated rows.
+      if (table === "performance_metrics" && allRows.length > 0) {
         // Build import_id → source_type map
         const importSourceMap = new Map();
         try {

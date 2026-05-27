@@ -1787,34 +1787,66 @@ function MemberDetailView({
         </Card>
       ) : (
         <Grid gutter="md">
-          {tickets && tickets.rowCount > 0 && (
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <MemberTicketCard b={tickets} />
-            </Grid.Col>
-          )}
-          {calls && calls.rowCount > 0 && (
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <MemberCallCard b={calls} />
-            </Grid.Col>
-          )}
-          {summary?.byType.tasks && summary.byType.tasks.rowCount > 0 && (
-            <Grid.Col span={{ base: 12, md: 6 }}>
-              <MemberTaskCard b={summary.byType.tasks} />
-            </Grid.Col>
-          )}
-          {/* Queue / Audit still use the generic shape */}
-          {(["queue", "audit"] as SourceType[]).map((t) => {
-            const b = summary?.byType[t];
-            if (!b || b.rowCount === 0) return null;
+          {/* Tickets — always shown */}
+          <Grid.Col span={{ base: 12, md: 6 }}>
+            {tickets && tickets.rowCount > 0
+              ? <MemberTicketCard b={tickets} />
+              : <EmptySectionCard label="Tickets" icon={IconTicket} color="blue" />}
+          </Grid.Col>
+
+          {/* Calls — always shown */}
+          <Grid.Col span={{ base: 12, md: 6 }}>
+            {calls && calls.rowCount > 0
+              ? <MemberCallCard b={calls} />
+              : <EmptySectionCard label="Calls" icon={IconPhone} color="green" />}
+          </Grid.Col>
+
+          {/* Tasks — always shown */}
+          <Grid.Col span={{ base: 12, md: 6 }}>
+            {summary?.byType.tasks && summary.byType.tasks.rowCount > 0
+              ? <MemberTaskCard b={summary.byType.tasks} />
+              : <EmptySectionCard label="Tasks" icon={IconClipboardList} color="violet" />}
+          </Grid.Col>
+
+          {/* Audit — always shown */}
+          {(() => {
+            const b = summary?.byType["audit"];
             return (
-              <Grid.Col key={t} span={{ base: 12, sm: 6, lg: 4 }}>
-                <MemberGenericCard sourceType={t} b={b} />
+              <Grid.Col span={{ base: 12, md: 6 }}>
+                {b && b.rowCount > 0
+                  ? <MemberGenericCard sourceType="audit" b={b} />
+                  : <EmptySectionCard label="Audit" icon={IconShieldCheck} color="pink" />}
               </Grid.Col>
             );
-          })}
+          })()}
+
+          {/* Queue — only shown when data exists */}
+          {(() => {
+            const b = summary?.byType["queue"];
+            if (!b || b.rowCount === 0) return null;
+            return (
+              <Grid.Col span={{ base: 12, sm: 6, lg: 4 }}>
+                <MemberGenericCard sourceType="queue" b={b} />
+              </Grid.Col>
+            );
+          })()}
         </Grid>
       )}
     </Stack>
+  );
+}
+
+function EmptySectionCard({ label, icon: Icon, color }: { label: string; icon: ComponentType<{ size?: number }>; color: string }) {
+  return (
+    <Card withBorder radius="md" p="md" h="100%" style={{ borderTop: `2px solid var(--mantine-color-${color}-9)` }}>
+      <Group gap="sm" mb="xs">
+        <ThemeIcon variant="light" color={color} radius="md">
+          <Icon size={16} />
+        </ThemeIcon>
+        <Text fw={600} size="sm">{label}</Text>
+      </Group>
+      <Text size="xs" c="dimmed">No data imported yet for this period.</Text>
+    </Card>
   );
 }
 
