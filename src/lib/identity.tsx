@@ -20,6 +20,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { type Role } from "./roles";
+import { ROLE_BY_NAME } from "./roles";
 
 export interface Identity {
   /** Display name from Google profile (or roster pick in dev mode). */
@@ -38,6 +39,8 @@ interface IdentityContextValue {
   ssoEnabled: boolean;
   signIn: () => void;
   devSignIn: (name: string) => Promise<void>;
+  /** Directly switch to any roster member — no server call, manager-only use */
+  impersonate: (name: string) => void;
   signOut: () => Promise<void>;
   setRole: (role: Role) => void;
   clearIdentity: () => Promise<void>;
@@ -124,12 +127,20 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
     setIdentity((prev) => (prev ? { ...prev, role } : null));
   }, []);
 
+  /** Client-side only — sets identity to any name without a server round-trip.
+   *  Safe because this is purely a UI gate; real auth is never bypassed. */
+  const impersonate = useCallback((name: string) => {
+    const role: Role = (ROLE_BY_NAME[name] as Role) ?? "tier1";
+    setIdentity({ name, role, email: `${name.toLowerCase().replace(/\s+/g, ".")}@vcom.local` });
+  }, []);
+
   const value: IdentityContextValue = {
     identity,
     loading,
     ssoEnabled,
     signIn,
     devSignIn,
+    impersonate,
     signOut,
     setRole,
     clearIdentity: signOut,

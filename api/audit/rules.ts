@@ -67,7 +67,10 @@ export const SCORING_CATEGORIES = [
       - TSP codes IF THEY opened the carrier ticket AND customer is Stanford Health Care AND service type is DIA/VPLS/MPLS/Point-to-Point ONLY.
       - TTU process if applicable to their actions.
       - Correct and timely stage update after Pending Access re-open IF THEY were responsible,
-        evaluated against due date/SLA expectations and active assignment timeline (not an instant-update expectation after reassignment).
+        evaluated against due date/SLA expectations and the latest ticket-update baseline.
+        If another person sent a valid update in between, the next follow-up timer resets from that latest update timestamp (not assignment time).
+      - For High/Critical SLA tickets with service/circuit down, enforce hourly follow-up process compliance
+        until restoration or a specific ETR is documented.
       Do NOT penalize: auto-timer closure (fully valid), Pending Access appearing after Pending Complete (valid system re-open — NOT a workflow error), missing carrier ticket number, process steps performed by other individuals.`,
   },
   {

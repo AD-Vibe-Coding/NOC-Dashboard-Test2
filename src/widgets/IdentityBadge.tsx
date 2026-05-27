@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Alert,
   Avatar,
   Badge,
   Box,
@@ -20,6 +21,8 @@ import {
   IconLogin,
   IconLogout,
   IconUser,
+  IconSwitch,
+  IconArrowBack,
 } from "@tabler/icons-react";
 import { useIdentity, type Identity } from "../lib/identity";
 import { BrandLogo } from "./BrandLogo";
@@ -33,14 +36,36 @@ import {
 } from "../lib/roles";
 import { NOC_ROSTER } from "../lib/roster";
 
+// ── Impersonation helpers ─────────────────────────────────────────────────────
+const IMPERSONATE_KEY = "noc_impersonate_original";
+
+function saveOriginalManager(name: string) {
+  localStorage.setItem(IMPERSONATE_KEY, name);
+}
+function getOriginalManager(): string | null {
+  return localStorage.getItem(IMPERSONATE_KEY);
+}
+function clearOriginalManager() {
+  localStorage.removeItem(IMPERSONATE_KEY);
+}
+
 /* -------------------------------------------------------------------------- */
 /*                           Header IdentityBadge                             */
 /* -------------------------------------------------------------------------- */
 
 export function IdentityBadge() {
-  const { identity, loading, devSignIn, signOut, setRole } =
-    useIdentity();
+  const { identity, loading, devSignIn, impersonate, signOut, setRole } = useIdentity();
   const [opened, setOpened] = useState(false);
+
+  const originalManager = getOriginalManager();
+  const isImpersonating = !!originalManager && identity?.name !== originalManager;
+
+  async function returnToManager() {
+    if (!originalManager) return;
+    clearOriginalManager();
+    impersonate(originalManager);
+    setOpened(false);
+  }
 
   if (loading) {
     return <Loader size="xs" color="appdirect" />;
@@ -61,7 +86,6 @@ export function IdentityBadge() {
         >
           Sign in
         </Button>
-
         <DevSignInModal
           opened={opened}
           onClose={() => setOpened(false)}
@@ -73,7 +97,21 @@ export function IdentityBadge() {
 
   return (
     <>
-      <Tooltip label="Manage account">
+      {/* Impersonation banner — shown when a manager is viewing as someone else */}
+      {isImpersonating && (
+        <Button
+          size="xs"
+          variant="filled"
+          color="orange"
+          leftSection={<IconArrowBack size={12} />}
+          onClick={returnToManager}
+          styles={{ root: { fontWeight: 700 } }}
+        >
+          Return to {originalManager}
+        </Button>
+      )}
+
+      <Tooltip label={isImpersonating ? `Viewing as ${identity.name} (manager impersonation)` : "Manage account"}>
         <Box
           role="button"
           tabIndex={0}
@@ -86,8 +124,8 @@ export function IdentityBadge() {
           }}
           style={{
             cursor: "pointer",
-            background: "var(--mantine-color-dark-6)",
-            border: "1px solid var(--mantine-color-dark-4)",
+            background: isImpersonating ? "var(--mantine-color-orange-9)" : "var(--mantine-color-dark-6)",
+            border: `1px solid ${isImpersonating ? "var(--mantine-color-orange-6)" : "var(--mantine-color-dark-4)"}`,
             borderRadius: 8,
             padding: "4px 8px 4px 4px",
             display: "inline-flex",
@@ -104,25 +142,21 @@ export function IdentityBadge() {
               size="sm"
               radius="xl"
               variant="light"
-              color={ROLE_COLORS[identity.role]}
+              color={isImpersonating ? "orange" : ROLE_COLORS[identity.role]}
             >
-              <IconUser size={12} />
+              {isImpersonating ? <IconSwitch size={12} /> : <IconUser size={12} />}
             </ThemeIcon>
           )}
-          <Text
-            size="xs"
-            fw={600}
-            style={{ lineHeight: 1, letterSpacing: "-0.01em" }}
-          >
+          <Text size="xs" fw={600} style={{ lineHeight: 1, letterSpacing: "-0.01em" }}>
             {identity.name}
           </Text>
           <Badge
             size="xs"
             variant="filled"
-            color={ROLE_COLORS[identity.role]}
+            color={isImpersonating ? "orange" : ROLE_COLORS[identity.role]}
             radius="sm"
           >
-            {ROLE_SHORT_LABELS[identity.role]}
+            {isImpersonating ? "As" : ROLE_SHORT_LABELS[identity.role]}
           </Badge>
           <IconChevronDown size={12} style={{ opacity: 0.6 }} />
         </Box>
@@ -133,10 +167,15 @@ export function IdentityBadge() {
         onClose={() => setOpened(false)}
         identity={identity}
         setRole={setRole}
+        isImpersonating={isImpersonating}
+        originalManager={originalManager}
+        impersonate={impersonate}
         signOut={async () => {
+          clearOriginalManager();
           await signOut();
           setOpened(false);
         }}
+        returnToManager={returnToManager}
       />
     </>
   );
@@ -220,14 +259,34 @@ function AccountModal({
   identity,
   setRole,
   signOut,
+  isImpersonating,
+  originalManager,
+  impersonate,
+  returnToManager,
 }: {
   opened: boolean;
   onClose: () => void;
   identity: Identity;
   setRole: (role: Role) => void;
   signOut: () => Promise<void>;
+  isImpersonating: boolean;
+  originalManager: string | null;
+  impersonate: (name: string) => void;
+  returnToManager: () => Promise<void>;
 }) {
   const [role, setLocalRole] = useState<Role>(identity.role);
+  const [impersonateTarget, setImpersonateTarget] = useState<string | null>(null);
+
+  function handleImpersonate() {
+    if (!impersonateTarget) return;
+    // Save manager name before first switch
+    if (!isImpersonating) {
+      saveOriginalManager(identity.name);
+    }
+    impersonate(impersonateTarget);
+    setImpersonateTarget(null);
+    onClose();
+  }
 
   function save() {
     if (role !== identity.role) setRole(role);
@@ -287,6 +346,65 @@ function AccountModal({
             </Badge>
           </Group>
         </Box>
+
+        {/* Impersonation banner inside modal */}
+        {isImpersonating && (
+          <Alert
+            color="orange"
+            variant="light"
+            radius="md"
+            icon={<IconSwitch size={16} />}
+            title={`Viewing as ${identity.name}`}
+          >
+            <Stack gap={6}>
+              <Text size="xs">
+                You are currently logged in as <b>{identity.name}</b> on behalf of manager <b>{originalManager}</b>.
+              </Text>
+              <Button
+                size="xs"
+                color="orange"
+                variant="filled"
+                leftSection={<IconArrowBack size={12} />}
+                onClick={() => returnToManager()}
+              >
+                Return to {originalManager}
+              </Button>
+            </Stack>
+          </Alert>
+        )}
+
+        {/* Login As — managers only */}
+        {(identity.role === "manager" || !!originalManager) && (
+          <Box>
+            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={6}>
+              Login as team member
+            </Text>
+            <Stack gap="xs">
+              <Select
+                placeholder="Select a team member…"
+                data={NOC_ROSTER.filter((n) => n !== (originalManager ?? identity.name))}
+                value={impersonateTarget}
+                onChange={setImpersonateTarget}
+                searchable
+                clearable
+                size="sm"
+                leftSection={<IconSwitch size={14} />}
+              />
+              <Button
+                size="xs"
+                color="orange"
+                variant="light"
+                leftSection={<IconSwitch size={13} />}
+                disabled={!impersonateTarget}
+                onClick={handleImpersonate}
+              >
+                Login as {impersonateTarget ?? "…"}
+              </Button>
+            </Stack>
+          </Box>
+        )}
+
+        <Divider />
 
         {/* Role display — managers can switch for demo; techs see read-only badge */}
         {identity.role === "manager" ? (

@@ -40,6 +40,7 @@ import {
   formatTime,
 } from "../../lib/format";
 import { WidgetFrame } from "../WidgetFrame";
+import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
 import { useBreakData } from "./data";
 
 export { BreakTrackerTile } from "./Tile";
@@ -64,10 +65,13 @@ const BREAK_TYPES = [
 export function BreakTrackerWidget() {
   const { ready, active, history, tick, refresh } = useBreakData();
 
-  // Identity — always use the signed-in user's name. No overrides allowed.
   const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
+  const [selectedName, setSelectedName] = useState<string | null>(null);
 
-  const effectiveName = (identity?.name || "").trim();
+  const effectiveName = (
+    isManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")
+  ).trim();
 
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
@@ -354,30 +358,41 @@ export function BreakTrackerWidget() {
             </Group>
             <Grid gutter="sm" align="flex-end">
               <Grid.Col span={{ base: 12, sm: 6 }}>
-                {/* Read-only name — always the signed-in user, no overrides */}
                 <Box>
                   <Text size="xs" fw={500} c="dimmed" mb={4}>Posting as</Text>
-                  <Group
-                    gap="xs"
-                    p="xs"
-                    style={{
-                      border: "1px solid var(--mantine-color-dark-4)",
-                      borderRadius: 8,
-                      background: "var(--mantine-color-dark-7)",
-                    }}
-                  >
-                    <ThemeIcon size="xs" color="orange" variant="light" radius="xl">
-                      <IconUser size={10} />
-                    </ThemeIcon>
-                    <Text size="sm" fw={600} style={{ flex: 1 }}>
-                      {effectiveName || "Sign in first"}
-                    </Text>
-                    <Tooltip label="Locked — breaks are always posted as you" withArrow>
-                      <ThemeIcon size="xs" color="gray" variant="transparent">
-                        <IconLock size={11} />
+                  {isManager ? (
+                    <Select
+                      data={LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
+                      value={selectedName ?? identity?.name ?? null}
+                      onChange={(v) => setSelectedName(v)}
+                      searchable
+                      allowDeselect={false}
+                      size="sm"
+                      leftSection={<IconUser size={14} />}
+                    />
+                  ) : (
+                    <Group
+                      gap="xs"
+                      p="xs"
+                      style={{
+                        border: "1px solid var(--mantine-color-dark-4)",
+                        borderRadius: 8,
+                        background: "var(--mantine-color-dark-7)",
+                      }}
+                    >
+                      <ThemeIcon size="xs" color="orange" variant="light" radius="xl">
+                        <IconUser size={10} />
                       </ThemeIcon>
-                    </Tooltip>
-                  </Group>
+                      <Text size="sm" fw={600} style={{ flex: 1 }}>
+                        {effectiveName || "Sign in first"}
+                      </Text>
+                      <Tooltip label="Locked — breaks are always posted as you" withArrow>
+                        <ThemeIcon size="xs" color="gray" variant="transparent">
+                          <IconLock size={11} />
+                        </ThemeIcon>
+                      </Tooltip>
+                    </Group>
+                  )}
                 </Box>
               </Grid.Col>
               <Grid.Col span={{ base: 12, sm: 4 }}>

@@ -65,7 +65,16 @@ export function useTicketAudits() {
     await refresh();
   }, [refresh]);
 
-  return { audits, loading, error, refresh, saveAudit, deleteAudit };
+  const clearAllAudits = useCallback(async () => {
+    const r = await fetch("/api/ticket-audits", { method: "DELETE" });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error ?? `HTTP ${r.status}`);
+    }
+    await refresh();
+  }, [refresh]);
+
+  return { audits, loading, error, refresh, saveAudit, deleteAudit, clearAllAudits };
 }
 
 // ── Types for the structured audit JSON the agent returns ────────────────────

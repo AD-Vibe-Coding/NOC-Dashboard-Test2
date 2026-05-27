@@ -45,6 +45,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(201).json(data);
   }
 
-  res.setHeader("Allow", "GET, POST");
+  // DELETE — wipe all audit rows (manager-initiated clear)
+  if (req.method === "DELETE") {
+    const { error } = await supabaseAdmin
+      .from("ticket_audits")
+      .delete()
+      .neq("id", 0); // match all rows
+    if (error) return res.status(500).json({ error: error.message });
+    return res.status(200).json({ cleared: true });
+  }
+
+  res.setHeader("Allow", "GET, POST, DELETE");
   return res.status(405).json({ error: "Method not allowed" });
 }

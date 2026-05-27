@@ -404,7 +404,7 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
     setParsedText("");
     try {
       const parsed = await parseMhtmlFile(file);
-      setParsedText(parsed.text.slice(0, MAX_PROMPT_CHARS));
+      setParsedText(parsed.text);
       if (parsed.ticket_number) setFields((f) => ({ ...f, ticket_number: parsed.ticket_number! }));
       if (parsed.ticket_subject) setFields((f) => ({ ...f, ticket_subject: parsed.ticket_subject! }));
     } catch (e) {
@@ -966,22 +966,56 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
 }
 
 // ── Audit History tab ─────────────────────────────────────────────────────────
-function HistoryTab({ audits, loading, onDelete }: {
+function HistoryTab({ audits, loading, onDelete, onClearAll }: {
   audits: TicketAudit[];
   loading: boolean;
   onDelete: (id: number) => Promise<void>;
+  onClearAll: () => Promise<void>;
 }) {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
   const [viewing, setViewing] = useState<TicketAudit | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   async function handleDelete(id: number) {
     setDeleting(id);
     try { await onDelete(id); } finally { setDeleting(null); }
   }
 
+  async function handleClearAll() {
+    setClearing(true);
+    try { await onClearAll(); setConfirmClear(false); } finally { setClearing(false); }
+  }
+
   return (
     <Stack gap="md" pt="md">
       {loading && <Loader size="sm" color="violet" />}
+
+      {/* Manager-only: Clear All button + confirm */}
+      {isManager && audits.length > 0 && (
+        <Group justify="flex-end">
+          {confirmClear ? (
+            <Group gap="xs">
+              <Text size="xs" c="dimmed">Delete all {audits.length} audits?</Text>
+              <Button size="xs" color="red" loading={clearing} onClick={handleClearAll}
+                leftSection={<IconTrash size={12} />}>
+                Yes, clear all
+              </Button>
+              <Button size="xs" variant="subtle" color="gray" onClick={() => setConfirmClear(false)}>
+                Cancel
+              </Button>
+            </Group>
+          ) : (
+            <Button size="xs" variant="light" color="red"
+              leftSection={<IconTrash size={12} />}
+              onClick={() => setConfirmClear(true)}>
+              Clear All Audits
+            </Button>
+          )}
+        </Group>
+      )}
 
       {audits.length === 0 && !loading && (
         <Text c="dimmed" ta="center" py="xl">
@@ -1288,7 +1322,12 @@ function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushe
 
 // ── Main widget ───────────────────────────────────────────────────────────────
 export function TicketAuditWidget() {
-  const { audits, loading, error, refresh, deleteAudit } = useTicketAudits();
+  const { identity } = useIdentity();
+  const role = identity?.role;
+  const canUseAuditWidget = role === "tier2" || role === "tier3" || role === "manager";
+  const canPushMetrics = role === "manager";
+
+  const { audits, loading, error, refresh, deleteAudit, clearAllAudits } = useTicketAudits();
   const [activeTab, setActiveTab] = useState<string | null>("upload");
 
   return (
@@ -1308,7 +1347,12 @@ export function TicketAuditWidget() {
           </Alert>
         )}
 
-        <Tabs value={activeTab} onChange={setActiveTab} variant="default" keepMounted={false}>
+        {!canUseAuditWidget ? (
+          <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" radius="md" mt="md">
+            Ticket Audit is available to Tier 2, Tier 3, and Managers. Your current role does not have access.
+          </Alert>
+        ) : (
+          <Tabs value={activeTab} onChange={setActiveTab} variant="default" keepMounted={false}>
           <Tabs.List>
             <Tabs.Tab value="upload" leftSection={<IconUpload size={14} />}>
               Upload &amp; Analyze
@@ -1327,9 +1371,11 @@ export function TicketAuditWidget() {
             >
               Audit History
             </Tabs.Tab>
-            <Tabs.Tab value="metrics" leftSection={<IconChartBar size={14} />}>
-              Push to Metrics
-            </Tabs.Tab>
+            {(role === "manager") && (
+              <Tabs.Tab value="metrics" leftSection={<IconChartBar size={14} />}>
+                Push to Metrics
+              </Tabs.Tab>
+            )}
           </Tabs.List>
 
           <Tabs.Panel value="upload">
@@ -1341,13 +1387,16 @@ export function TicketAuditWidget() {
           </Tabs.Panel>
 
           <Tabs.Panel value="history">
-            <HistoryTab audits={audits} loading={loading} onDelete={deleteAudit} />
+            <HistoryTab audits={audits} loading={loading} onDelete={deleteAudit} onClearAll={clearAllAudits} />
           </Tabs.Panel>
 
-          <Tabs.Panel value="metrics">
-            <PushToMetricsTab audits={audits} onPushed={refresh} />
-          </Tabs.Panel>
+          {canPushMetrics && (
+            <Tabs.Panel value="metrics">
+              <PushToMetricsTab audits={audits} onPushed={refresh} />
+            </Tabs.Panel>
+          )}
         </Tabs>
+        )}
       </Stack>
     </WidgetFrame>
   );

@@ -76,8 +76,6 @@ function statusBadge(item: BulkItem) {
   }
 }
 
-const MAX_TEXT_CHARS = 80_000;
-
 export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
   const { identity } = useIdentity();
   const { saveAudit } = useTicketAudits();
@@ -188,7 +186,7 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
     let parsedText = "";
     try {
       const parsed = await parseMhtmlFile(item.file);
-      parsedText = parsed.text.slice(0, MAX_TEXT_CHARS);
+      parsedText = parsed.text;
     } catch (e) {
       patchItem(item.id, {
         status: "error",
