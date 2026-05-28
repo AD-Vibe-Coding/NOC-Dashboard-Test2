@@ -12,7 +12,9 @@ import {
   Button,
   Card,
   Center,
+  Code,
   Container,
+  CopyButton,
   Group,
   Modal,
   Select,
@@ -25,12 +27,19 @@ import {
   ActionIcon,
   Tooltip,
   Divider,
+  Collapse,
 } from "@mantine/core";
 import {
   IconAlertCircle,
   IconBrandGoogle,
+  IconCheck,
+  IconChevronDown,
+  IconChevronUp,
+  IconCopy,
+  IconExternalLink,
   IconLogin,
   IconMoon,
+  IconSettings,
   IconShieldCheck,
   IconSun,
   IconUser,
@@ -57,12 +66,22 @@ export default function SignInPage() {
   const { ssoEnabled, signIn, devSignIn } = useIdentity();
   const [devModalOpened, setDevModalOpened] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [redirectUri, setRedirectUri] = useState<string | null>(null);
+  const [showSetup, setShowSetup] = useState(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
   });
   const isDark = computedColorScheme === "dark";
   const toggleColorScheme = () => setColorScheme(isDark ? "light" : "dark");
+
+  // Fetch the exact redirect URI the server generates
+  useEffect(() => {
+    fetch("/api/auth/redirect-uri")
+      .then((r) => r.json())
+      .then((d) => setRedirectUri(d.google ?? null))
+      .catch(() => null);
+  }, []);
 
   // Parse auth_error from URL on mount, then strip it from the URL
   useEffect(() => {
@@ -75,7 +94,8 @@ export default function SignInPage() {
           ? `${domain} is not an allowed domain. Use your @appdirect.com account.`
           : `Sign-in error: ${err}`);
       setAuthError(msg);
-      // Remove error params from URL so refresh doesn't re-show them
+      // Auto-expand setup panel on redirect_uri_mismatch type errors
+      setShowSetup(true);
       const clean = window.location.pathname;
       window.history.replaceState({}, "", clean);
     }
@@ -187,7 +207,7 @@ export default function SignInPage() {
               radius="lg"
               p="xl"
               w="100%"
-              maw={380}
+              maw={420}
               style={{
                 background: isDark
                   ? "rgba(15, 22, 36, 0.8)"
@@ -234,6 +254,82 @@ export default function SignInPage() {
                     <Text size="xs" c="dimmed" ta="center">
                       Google SSO not configured — using name picker.
                     </Text>
+                  </>
+                )}
+
+                {/* Google Cloud Console setup helper */}
+                {ssoEnabled && redirectUri && (
+                  <>
+                    <Divider />
+                    <Box
+                      style={{ cursor: "pointer" }}
+                      onClick={() => setShowSetup((v) => !v)}
+                    >
+                      <Group justify="space-between" align="center">
+                        <Group gap={6}>
+                          <IconSettings size={13} color="var(--mantine-color-dimmed)" />
+                          <Text size="xs" c="dimmed" fw={500}>
+                            Getting a redirect_uri_mismatch error?
+                          </Text>
+                        </Group>
+                        {showSetup
+                          ? <IconChevronUp size={13} color="var(--mantine-color-dimmed)" />
+                          : <IconChevronDown size={13} color="var(--mantine-color-dimmed)" />
+                        }
+                      </Group>
+                    </Box>
+                    <Collapse in={showSetup}>
+                      <Stack gap="xs">
+                        <Text size="xs" c="dimmed">
+                          Add this exact URI to your{" "}
+                          <Text
+                            component="a"
+                            href="https://console.cloud.google.com/apis/credentials"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="xs"
+                            c="appdirect.5"
+                            style={{ display: "inline-flex", alignItems: "center", gap: 2 }}
+                          >
+                            Google Cloud Console
+                            <IconExternalLink size={10} />
+                          </Text>
+                          {" "}under <b>Authorized redirect URIs</b>:
+                        </Text>
+                        <Group gap="xs" wrap="nowrap" align="center">
+                          <Code
+                            block
+                            style={{
+                              fontSize: 10,
+                              flex: 1,
+                              wordBreak: "break-all",
+                              padding: "6px 10px",
+                            }}
+                          >
+                            {redirectUri}
+                          </Code>
+                          <CopyButton value={redirectUri} timeout={2000}>
+                            {({ copied, copy }) => (
+                              <Tooltip label={copied ? "Copied!" : "Copy"} withArrow>
+                                <ActionIcon
+                                  variant={copied ? "filled" : "light"}
+                                  color={copied ? "green" : "appdirect"}
+                                  size="lg"
+                                  radius="md"
+                                  onClick={copy}
+                                  style={{ flexShrink: 0 }}
+                                >
+                                  {copied ? <IconCheck size={15} /> : <IconCopy size={15} />}
+                                </ActionIcon>
+                              </Tooltip>
+                            )}
+                          </CopyButton>
+                        </Group>
+                        <Text size="xs" c="dimmed">
+                          Google Cloud Console → APIs &amp; Services → Credentials → your OAuth client → Authorized redirect URIs → Add URI → Save
+                        </Text>
+                      </Stack>
+                    </Collapse>
                   </>
                 )}
               </Stack>

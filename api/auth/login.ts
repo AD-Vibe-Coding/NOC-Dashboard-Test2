@@ -13,10 +13,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  // Build redirect URI from the request
-  const proto = (req.headers["x-forwarded-proto"] as string) || "http";
+  // Build redirect URI — APP_BASE_URL wins so the sandbox preview
+  // always generates the correct public URL rather than localhost:5173.
+  const base = (process.env.APP_BASE_URL ?? "").replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "localhost:5173";
-  const redirectUri = `${proto}://${host}/api/auth/callback`;
+  const origin = base || `${proto}://${host}`;
+  const redirectUri = `${origin}/api/auth/callback`;
 
   // CSRF state token
   const state = crypto.randomBytes(16).toString("hex");

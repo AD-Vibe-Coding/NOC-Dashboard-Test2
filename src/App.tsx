@@ -11,12 +11,12 @@
 //     tile grid.
 //   - Widgets can declare `roles: ["lead", "manager"]` to restrict access.
 //     Deep-links to restricted widgets fall back to the dashboard.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import {
   ActionIcon,
   AppShell,
   Box,
-  Button,
+  Card,
   Center,
   Container,
   Grid,
@@ -26,17 +26,18 @@ import {
   Breadcrumbs,
   Anchor,
   ScrollArea,
+  SimpleGrid,
   Stack,
   ThemeIcon,
   Badge,
   Tooltip,
   Burger,
+  UnstyledButton,
   useMantineColorScheme,
   useComputedColorScheme,
 } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import {
-  IconArrowLeft,
   IconLayoutDashboard,
   IconMoon,
   IconSun,
@@ -58,6 +59,10 @@ import {
 } from "./lib/roles";
 import TechDashboard from "./TechDashboard";
 import SignInPage from "./SignInPage";
+import { ManagerDayWidget } from "./widgets/ManagerDay";
+import { WindowManagerProvider, useWindowManager } from "./lib/window-manager";
+import { FloatingWindow } from "./components/FloatingWindow";
+import { Taskbar } from "./components/Taskbar";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -66,8 +71,16 @@ const APPDIRECT_BRAND_PRIMARY = "#006080";
 const APPDIRECT_BRAND_ACCENT = "#0080a6";
 
 export default function App() {
+  return (
+    <WindowManagerProvider>
+      <AppInner />
+    </WindowManagerProvider>
+  );
+}
+
+function AppInner() {
   const { identity, loading: identityLoading } = useIdentity();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { windows, openWindow } = useWindowManager();
   const [navOpened, { toggle: toggleNav, close: closeNav }] =
     useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
@@ -92,28 +105,23 @@ export default function App() {
   );
 
   useEffect(() => {
+    // Handle deep-link hashes by opening the widget as a window
     const fromHash = () => {
       const h = window.location.hash.replace(/^#\/?/, "");
-      if (!h) {
-        setExpandedId(null);
-        return;
-      }
+      if (!h) return;
       const widget = WIDGETS.find((w) => w.id === h);
-      if (!widget) {
-        setExpandedId(null);
-        return;
-      }
+      if (!widget) return;
       if (identity && !canAccess(identity.role, widget.roles)) {
         window.location.hash = "";
-        setExpandedId(null);
         return;
       }
-      setExpandedId(h);
+      openWindow(widget);
+      window.location.hash = "";
     };
     fromHash();
     window.addEventListener("hashchange", fromHash);
     return () => window.removeEventListener("hashchange", fromHash);
-  }, [identity]);
+  }, [identity, openWindow]);
 
   // Show a brief loading spinner while the session check runs (avoids a flash
   // of the "not signed in" welcome card before the session cookie is verified).
@@ -139,15 +147,11 @@ export default function App() {
   // Managers → full admin dashboard below
   function expand(id: string) {
     const w = WIDGETS.find((x) => x.id === id);
-    if (w) trackWidgetOpen(id, w.title);
-    window.location.hash = `#/${id}`;
+    if (!w) return;
+    trackWidgetOpen(id, w.title);
+    openWindow(w);
     closeNav();
   }
-  function collapse() {
-    window.location.hash = "";
-  }
-
-  const expanded = expandedId ? WIDGETS.find((w) => w.id === expandedId) : null;
 
   // Role-tinted accent under the header. Falls back to the AppDirect brand teal
   // when there's no identity yet.
@@ -232,23 +236,17 @@ export default function App() {
                   >
                     <Anchor
                       component="button"
-                      onClick={collapse}
                       fw={600}
-                      c={expanded ? "dimmed" : "bright"}
+                      c="bright"
                       underline="never"
                       style={{ fontSize: 16, letterSpacing: "-0.01em" }}
                     >
                       {identity ? "NOC Manager Dashboard" : "vCom NOC Operations Dashboard"}
                     </Anchor>
-                    {expanded && (
-                      <Text
-                        c="bright"
-                        fw={600}
-                        size="md"
-                        style={{ letterSpacing: "-0.01em" }}
-                      >
-                        {expanded.title}
-                      </Text>
+                    {windows.length > 0 && (
+                      <Badge size="sm" color="appdirect" variant="light">
+                        {windows.length} open
+                      </Badge>
                     )}
                   </Breadcrumbs>
                   <Box
@@ -269,26 +267,14 @@ export default function App() {
                   mt={1}
                   style={{ letterSpacing: "0.01em" }}
                 >
-                  {expanded
-                    ? expanded.description
-                    : identity
-                      ? `Team oversight · ${sidebarWidgets.length + featuredWidgets.length} tools`
-                      : "Sign in to access the dashboard"}
+                  {identity
+                    ? `${sidebarWidgets.length + featuredWidgets.length} tools · click any widget to open`
+                    : "Sign in to access the dashboard"}
                 </Text>
               </Box>
             </Group>
             <Group gap="sm" wrap="nowrap">
-              {expanded && (
-                <Button
-                  leftSection={<IconArrowLeft size={14} />}
-                  variant="default"
-                  size="xs"
-                  onClick={collapse}
-                  visibleFrom="sm"
-                >
-                  Dashboard
-                </Button>
-              )}
+
               <Tooltip
                 label={isDark ? "Switch to light mode" : "Switch to dark mode"}
                 withArrow
@@ -345,8 +331,8 @@ export default function App() {
               iconColor="appdirect"
               label="Dashboard"
               description="Your shift overview"
-              active={!expanded}
-              onClick={collapse}
+              active={false}
+              onClick={() => {}}
             />
 
             <Text
@@ -361,18 +347,23 @@ export default function App() {
               Tools
             </Text>
 
-            {sidebarWidgets.map((widget) => (
-              <SidebarItem
-                key={widget.id}
-                icon={widget.icon}
-                iconColor={widget.iconColor}
-                label={widget.title}
-                description={widget.description}
-                role={widget.roles?.[0]}
-                active={expandedId === widget.id}
-                onClick={() => expand(widget.id)}
-              />
-            ))}
+            {sidebarWidgets.map((widget) => {
+              const isOpen = windows.some((w) => w.id === widget.id);
+              const isMinimized = windows.find((w) => w.id === widget.id)?.minimized;
+              return (
+                <SidebarItem
+                  key={widget.id}
+                  icon={widget.icon}
+                  iconColor={widget.iconColor}
+                  label={widget.title}
+                  description={widget.description}
+                  role={widget.roles?.[0]}
+                  active={isOpen && !isMinimized}
+                  badge={isOpen ? (isMinimized ? "minimized" : "open") : undefined}
+                  onClick={() => expand(widget.id)}
+                />
+              );
+            })}
           </Stack>
         </ScrollArea>
       </AppShell.Navbar>
@@ -436,101 +427,181 @@ export default function App() {
           px="md"
           style={{ position: "relative", zIndex: 1 }}
         >
-          {expanded ? (
-            <ExpandedView WidgetFull={expanded.Full} />
-          ) : (
-            <>
-              <NewsTicker />
-              <FeaturedGrid widgets={featuredWidgets} onExpand={expand} />
-            </>
-          )}
+          <ManagerHome
+            featuredWidgets={featuredWidgets}
+            onExpand={expand}
+          />
         </Container>
       </AppShell.Main>
+
+      {/* ── Floating Windows ── */}
+      {windows.map((win) => (
+        <FloatingWindow key={win.id} win={win} />
+      ))}
+
+      {/* ── Taskbar ── */}
+      <Taskbar />
+
     </AppShell>
   );
 }
 
-function FeaturedGrid({
-  widgets,
+// ── Manager Home ─────────────────────────────────────────────────────────────
+
+function ManagerHome({
+  featuredWidgets,
   onExpand,
 }: {
-  widgets: WidgetDefinition[];
+  identity?: ReturnType<typeof useIdentity>["identity"];
+  featuredWidgets: WidgetDefinition[];
   onExpand: (id: string) => void;
 }) {
-  if (widgets.length === 0) return null;
+  // Separate "my-day" (WorkActivity) from the rest — managers get ManagerDay instead
+  const monitoringWidgets = featuredWidgets.filter((w) => w.id !== "my-day");
 
   return (
-    <Box>
-      {/* Section banner — sits on a real tile-surface card with a left accent
-          bar so the heading stands out from the page background in BOTH light
-          and dark modes (otherwise the page tint blends into bright/dimmed
-          text colors). */}
-      <Box
-        mb="md"
-        py="md"
-        px="lg"
-        style={{
-          background:
-            "linear-gradient(135deg, color-mix(in srgb, var(--mantine-color-appdirect-6) 10%, var(--widget-tile-surface)) 0%, var(--widget-tile-surface) 100%)",
-          border:
-            "1px solid color-mix(in srgb, var(--mantine-color-appdirect-6) 25%, var(--widget-tile-border))",
-          borderRadius: 12,
-          position: "relative",
-          overflow: "hidden",
-        }}
-      >
-        {/* Left accent bar */}
-        <Box
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 4,
-            background:
-              "linear-gradient(180deg, var(--mantine-color-appdirect-6) 0%, var(--mantine-color-appdirect-8) 100%)",
-          }}
-        />
-        <Group justify="space-between" align="flex-end" wrap="nowrap">
-          <Box>
-            <Text
-              size="xs"
-              fw={700}
-              c="appdirect.6"
-              tt="uppercase"
-              style={{ letterSpacing: "0.12em" }}
-            >
-              Team overview
-            </Text>
-            <Text
-              size="xl"
-              fw={700}
-              c="bright"
-              style={{ letterSpacing: "-0.02em", lineHeight: 1.2 }}
-            >
-              What's happening right now
-            </Text>
-          </Box>
-        </Group>
-      </Box>
-      <Grid gutter="lg">
-        {widgets.map((widget) => {
-          const Tile = widget.Tile;
-          const span = SIZE_TO_SPAN[widget.tileSize];
-          return (
-            <Grid.Col key={widget.id} span={span}>
-              <Tile onExpand={() => onExpand(widget.id)} />
-            </Grid.Col>
-          );
-        })}
+    <Stack gap="lg">
+      {/* News ticker */}
+      <NewsTicker />
+
+      {/* Main 2-column layout: My Day (left) + Team monitoring tiles (right) */}
+      <Grid gutter="lg" align="flex-start">
+
+        {/* ── Left: Manager Day planner ── */}
+        <Grid.Col span={{ base: 12, md: 5 }}>
+          <Card withBorder radius="lg" p="lg" h="100%"
+            style={{
+              borderTop: "3px solid var(--mantine-color-appdirect-6)",
+              background: "color-mix(in srgb, var(--mantine-color-appdirect-9) 6%, var(--mantine-color-body))",
+            }}
+          >
+            <Group gap="xs" mb="md">
+              <ThemeIcon size="sm" variant="light" color="appdirect" radius="md">
+                <IconLayoutDashboard size={14} />
+              </ThemeIcon>
+              <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.08em" }}>
+                My Day
+              </Text>
+            </Group>
+            <ManagerDayWidget />
+          </Card>
+        </Grid.Col>
+
+        {/* ── Right: Team monitoring + quick-launch grid ── */}
+        <Grid.Col span={{ base: 12, md: 7 }}>
+          <Stack gap="lg">
+            {/* Featured monitoring tiles */}
+            {monitoringWidgets.length > 0 && (
+              <Box>
+                <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="sm"
+                  style={{ letterSpacing: "0.08em", paddingLeft: 2 }}>
+                  Team Overview
+                </Text>
+                <Grid gutter="md">
+                  {monitoringWidgets.map((w) => {
+                    const Tile = w.Tile;
+                    const span = SIZE_TO_SPAN[w.tileSize];
+                    return (
+                      <Grid.Col key={w.id} span={span}>
+                        <Tile onExpand={() => onExpand(w.id)} />
+                      </Grid.Col>
+                    );
+                  })}
+                </Grid>
+              </Box>
+            )}
+
+            {/* Quick-launch grid: non-featured widgets as compact cards */}
+            <ManagerQuickLaunch onExpand={onExpand} />
+          </Stack>
+        </Grid.Col>
       </Grid>
-    </Box>
+    </Stack>
   );
 }
 
-function ExpandedView({ WidgetFull }: { WidgetFull: React.ComponentType }) {
-  return <WidgetFull />;
+// Quick-launch section — compact cards for non-featured tools
+const MANAGER_QUICK_GROUPS: Array<{
+  label: string;
+  items: Array<{ id: string; emoji: string; label: string; desc: string; color: string }>;
+}> = [
+  {
+    label: "Team Management",
+    items: [
+      { id: "performance-tracker", emoji: "📊", label: "Performance",   desc: "Team metrics & audits",    color: "green"    },
+      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",  desc: "AI-powered QA audits",     color: "pink"     },
+      { id: "break-tracker",       emoji: "☕", label: "Breaks",        desc: "Team break log",           color: "orange"   },
+      { id: "wfh",                 emoji: "🏠", label: "WFH Requests",  desc: "Review & approve WFH",     color: "appdirect"},
+    ],
+  },
+  {
+    label: "Monitoring",
+    items: [
+      { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",  desc: "Alerts & alert analyzer",  color: "red"      },
+      { id: "zoom-queue",          emoji: "📞", label: "Zoom Queue",    desc: "Live call queue",          color: "appdirect"},
+      { id: "qs-escalations",      emoji: "📋", label: "Escalations",   desc: "Carrier contacts",         color: "grape"    },
+    ],
+  },
+  {
+    label: "AI Tools",
+    items: [
+      { id: "ticket-summary",      emoji: "📄", label: "Ticket Summary",desc: "Summarize tickets",        color: "indigo"   },
+      { id: "escalation-email",    emoji: "✉️",  label: "ESC Email",     desc: "Draft escalation alerts",  color: "teal"     },
+      { id: "shift-handover",      emoji: "🔄", label: "Handover",      desc: "Create shift handover",    color: "blue"     },
+    ],
+  },
+];
+
+function ManagerQuickLaunch({ onExpand }: { onExpand: (id: string) => void }) {
+  const visibleIds = useMemo(
+    () => new Set(WIDGETS.map((w) => w.id)),
+    [],
+  );
+
+  const groups = MANAGER_QUICK_GROUPS.map((g) => ({
+    ...g,
+    items: g.items.filter((i) => visibleIds.has(i.id)),
+  })).filter((g) => g.items.length > 0);
+
+  return (
+    <Stack gap="md">
+      {groups.map((group) => (
+        <Box key={group.label}>
+          <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs"
+            style={{ letterSpacing: "0.08em", paddingLeft: 2 }}>
+            {group.label}
+          </Text>
+          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
+            {group.items.map((item) => (
+              <UnstyledButton key={item.id} onClick={() => onExpand(item.id)} style={{ width: "100%" }}>
+                <Card withBorder radius="md" p="sm" className="tech-nav-button"
+                  style={{ cursor: "pointer", transition: "all 150ms ease", position: "relative", overflow: "hidden" }}>
+                  <Box style={{
+                    position: "absolute", top: 0, left: 0, right: 0, height: 2,
+                    background: `var(--mantine-color-${item.color}-6)`, opacity: 0.7,
+                  }} />
+                  <Group gap="xs" wrap="nowrap">
+                    <Text size="xl" style={{ lineHeight: 1 }}>{item.emoji}</Text>
+                    <Box style={{ minWidth: 0 }}>
+                      <Text size="xs" fw={600} c="bright" style={{ lineHeight: 1.3 }}>
+                        {item.label}
+                      </Text>
+                      <Text size="xs" c="dimmed" lineClamp={1} mt={1}>
+                        {item.desc}
+                      </Text>
+                    </Box>
+                  </Group>
+                </Card>
+              </UnstyledButton>
+            ))}
+          </SimpleGrid>
+        </Box>
+      ))}
+    </Stack>
+  );
 }
+
+
 
 /* -------------------------------------------------------------------------- */
 /*                                Sidebar item                                */
@@ -544,6 +615,7 @@ function SidebarItem({
   active,
   onClick,
   role,
+  badge,
 }: {
   icon: React.ComponentType<{ size?: number }>;
   iconColor: string;
@@ -552,6 +624,7 @@ function SidebarItem({
   active?: boolean;
   onClick: () => void;
   role?: string;
+  badge?: "open" | "minimized";
 }) {
   return (
     <Box
@@ -615,6 +688,11 @@ function SidebarItem({
             >
               {label}
             </Text>
+            {badge && (
+              <Badge size="xs" variant="dot" color={badge === "open" ? "green" : "yellow"}>
+                {badge}
+              </Badge>
+            )}
             {role && (
               <Tooltip label={`Restricted to ${ROLE_LABELS[role as keyof typeof ROLE_LABELS] ?? role}`}>
                 <Badge

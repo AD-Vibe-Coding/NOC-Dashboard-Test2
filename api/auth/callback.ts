@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
 import { defaultRoleFor, lookupByEmail } from "../_lib/roles.js";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
+import { encryptAndSign, buildSessionSetCookie } from "./_lib/session.js";
 
 /**
  * GET /api/auth/callback?code=XXX&state=YYY
@@ -38,10 +39,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(500).json({ error: "Google OAuth not configured on server" });
   }
 
-  // Build the same redirect URI that was used in /api/auth/login
-  const proto = (req.headers["x-forwarded-proto"] as string) || "http";
+  // Must exactly match what login.ts sent — both use APP_BASE_URL first.
+  const base = (process.env.APP_BASE_URL ?? "").replace(/\/$/, "");
+  const proto = (req.headers["x-forwarded-proto"] as string) || "https";
   const host = (req.headers["x-forwarded-host"] as string) || req.headers.host || "localhost:5173";
-  const redirectUri = `${proto}://${host}/api/auth/callback`;
+  const origin = base || `${proto}://${host}`;
+  const redirectUri = `${origin}/api/auth/callback`;
 
   // Exchange authorization code for tokens
   let tokenData: Record<string, unknown>;
@@ -145,11 +148,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   } catch { /* non-fatal — user_sessions table may not exist yet */ }
 
+  // Write the new AES-GCM encrypted session cookie so the scaffold's
+  // /api/auth/me endpoint (which reads __appbuilder_session) can resolve
+  // the identity. Include role in the payload so me.ts doesn't need a
+  // second lookup.
+  const now = Math.floor(Date.now() / 1000);
+  let newSessionCookie = "";
+  try {
+    const newPayload = { sub: email, email, name, role, picture, provider: "google", iat: now, exp: now + 86400 };
+    const encrypted = await encryptAndSign(newPayload, process.env.SESSION_SECRET ?? "");
+    newSessionCookie = buildSessionSetCookie(encrypted);
+  } catch {
+    // Non-fatal — noc_session JWT is still set as fallback
+  }
+
   // Set session cookie, clear state cookie, redirect home
-  res.setHeader("Set-Cookie", [
+  const cookies = [
     `noc_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
     "oauth_state=; Path=/; HttpOnly; Max-Age=0",
-  ]);
+  ];
+  if (newSessionCookie) cookies.push(newSessionCookie);
+  res.setHeader("Set-Cookie", cookies);
   res.statusCode = 302;
   res.setHeader("Location", "/");
   res.end();
