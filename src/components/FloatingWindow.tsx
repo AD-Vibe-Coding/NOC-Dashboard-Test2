@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import type { WindowState } from "../lib/window-manager";
 import { useWindowManager } from "../lib/window-manager";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 const HEADER_H  = 68;
 const MIN_W     = 400;
@@ -174,8 +175,24 @@ export function FloatingWindow({ win }: Props) {
       </Group>
 
       {/* ── Content ── */}
-      <Box style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
-        <win.Full />
+      <Box
+        style={{
+          flex: 1,
+          minHeight: 0,
+          minWidth: 0,
+          overflowY: "auto",
+          overflowX: "hidden",
+          overscrollBehaviorY: "contain",
+          WebkitOverflowScrolling: "touch",
+          touchAction: "pan-y",
+          paddingBottom: 8,
+        }}
+      >
+        <Box style={{ minHeight: "100%" }}>
+          <ErrorBoundary label={win.title}>
+            <win.Full />
+          </ErrorBoundary>
+        </Box>
       </Box>
 
       {/* ── Resize handle (bottom-right corner) ── */}

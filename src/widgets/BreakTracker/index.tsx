@@ -148,6 +148,17 @@ export function BreakTrackerWidget() {
   }
 
   async function endBreak(b: Break) {
+    const viewerName = identity?.name?.trim();
+    const breakOwner = b.employee_name.trim();
+    if (!isManager && (!viewerName || viewerName !== breakOwner)) {
+      showToast({
+        color: "red",
+        title: "You can only end your own break",
+        body: "Only managers can end another user's break.",
+      });
+      return;
+    }
+
     const end = new Date();
     const start = new Date(b.start_time);
     const duration = Math.max(

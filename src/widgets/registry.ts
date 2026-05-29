@@ -14,6 +14,7 @@ import {
   IconMail,
   IconMailForward,
   IconPhone,
+  IconSchool,
   IconReportAnalytics,
   IconSearch,
   IconShield,
@@ -60,6 +61,10 @@ import {
   TicketAuditWidget,
   TicketAuditTile,
 } from "./TicketAudit";
+import {
+  TrainingUpdatesWidget,
+  TrainingUpdatesTile,
+} from "./TrainingUpdates";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -168,6 +173,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: WfhTile,
     Full: WfhWidget,
+  },
+  {
+    id: "training-updates",
+    title: "Training Updates",
+    description: "Training requests, reviews, and upcoming sessions",
+    icon: IconSchool,
+    iconColor: "blue",
+    tileSize: "sm",
+    Tile: TrainingUpdatesTile,
+    Full: TrainingUpdatesWidget,
   },
   {
     id: "escalation-email",

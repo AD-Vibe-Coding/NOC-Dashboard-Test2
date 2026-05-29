@@ -51,6 +51,7 @@ import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { NotificationBell } from "./widgets/NotificationBell";
 import { useIdentity } from "./lib/identity";
+import { useTrainingNotifications } from "./lib/training-notifications";
 import {
   canAccess,
   ROLE_COLORS,
@@ -63,6 +64,10 @@ import { ManagerDayWidget } from "./widgets/ManagerDay";
 import { WindowManagerProvider, useWindowManager } from "./lib/window-manager";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { Taskbar } from "./components/Taskbar";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { AppOverview } from "./components/AppOverview";
+import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
+import { type DashboardTemplate, useDashboardPreferences } from "./lib/dashboard-preferences";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -80,9 +85,10 @@ export default function App() {
 
 function AppInner() {
   const { identity, loading: identityLoading } = useIdentity();
+  const { template } = useDashboardPreferences();
   const { windows, openWindow } = useWindowManager();
-  const [navOpened, { toggle: toggleNav, close: closeNav }] =
-    useDisclosure(false);
+  const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
+  const [overviewOpen, { open: openOverview, close: closeOverview }] = useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
@@ -95,6 +101,8 @@ function AppInner() {
     return WIDGETS.filter((w) => canAccess(identity.role, w.roles));
   }, [identity]);
 
+  const { pendingCount: trainingNotificationCount } = useTrainingNotifications();
+
   const featuredWidgets = useMemo(
     () => visibleWidgets.filter((w) => w.featured),
     [visibleWidgets],
@@ -105,19 +113,23 @@ function AppInner() {
   );
 
   useEffect(() => {
-    // Handle deep-link hashes by opening the widget as a window
+    // Manager-only: deep-link hashes open floating windows.
+    // Tech dashboard uses hash routing locally to show full widget views.
+    if (!identity || identity.role !== "manager") return;
+
     const fromHash = () => {
       const h = window.location.hash.replace(/^#\/?/, "");
       if (!h) return;
       const widget = WIDGETS.find((w) => w.id === h);
       if (!widget) return;
-      if (identity && !canAccess(identity.role, widget.roles)) {
+      if (!canAccess(identity.role, widget.roles)) {
         window.location.hash = "";
         return;
       }
       openWindow(widget);
       window.location.hash = "";
     };
+
     fromHash();
     window.addEventListener("hashchange", fromHash);
     return () => window.removeEventListener("hashchange", fromHash);
@@ -162,6 +174,7 @@ function AppInner() {
 
   return (
     <AppShell
+      data-dashboard-template={template}
       header={{ height: 68 }}
       navbar={{ width: 260, breakpoint: "sm", collapsed: { mobile: !navOpened } }}
       padding={0}
@@ -236,6 +249,7 @@ function AppInner() {
                   >
                     <Anchor
                       component="button"
+                      onClick={openOverview}
                       fw={600}
                       c="bright"
                       underline="never"
@@ -274,7 +288,7 @@ function AppInner() {
               </Box>
             </Group>
             <Group gap="sm" wrap="nowrap">
-
+              <DashboardTemplatePicker />
               <Tooltip
                 label={isDark ? "Switch to light mode" : "Switch to dark mode"}
                 withArrow
@@ -316,8 +330,8 @@ function AppInner() {
         p={0}
         style={{
           background: isDark
-            ? "linear-gradient(180deg, #0e1626 0%, rgba(0, 96, 128,0.25) 100%)"
-            : "linear-gradient(180deg, #f4f8fb 0%, rgba(204, 230, 239,0.30) 100%)",
+            ? "var(--dashboard-navbar-bg-dark)"
+            : "var(--dashboard-navbar-bg-light)",
           borderRight: isDark
             ? "1px solid rgba(148,197,221,0.10)"
             : "1px solid rgba(0, 96, 128,0.10)",
@@ -360,6 +374,8 @@ function AppInner() {
                   role={widget.roles?.[0]}
                   active={isOpen && !isMinimized}
                   badge={isOpen ? (isMinimized ? "minimized" : "open") : undefined}
+                  extraBadge={widget.id === "training-updates" && trainingNotificationCount > 0 ? `${trainingNotificationCount}` : undefined}
+                  extraBadgeColor={widget.id === "training-updates" && trainingNotificationCount > 0 ? "red" : undefined}
                   onClick={() => expand(widget.id)}
                 />
               );
@@ -370,8 +386,9 @@ function AppInner() {
 
       <AppShell.Main
         style={{
-          background:
-            "linear-gradient(180deg, #f4f8fb 0%, rgba(204, 230, 239,0.40) 100%)",
+          background: isDark
+            ? "var(--dashboard-page-bg-dark)"
+            : "var(--dashboard-page-bg-light)",
           minHeight: "100vh",
           position: "relative",
           overflow: "hidden",
@@ -430,6 +447,7 @@ function AppInner() {
           <ManagerHome
             featuredWidgets={featuredWidgets}
             onExpand={expand}
+            template={template}
           />
         </Container>
       </AppShell.Main>
@@ -442,6 +460,9 @@ function AppInner() {
       {/* ── Taskbar ── */}
       <Taskbar />
 
+      {/* ── App Overview modal ── */}
+      <AppOverview opened={overviewOpen} onClose={closeOverview} />
+
     </AppShell>
   );
 }
@@ -451,13 +472,21 @@ function AppInner() {
 function ManagerHome({
   featuredWidgets,
   onExpand,
+  template,
 }: {
   identity?: ReturnType<typeof useIdentity>["identity"];
   featuredWidgets: WidgetDefinition[];
   onExpand: (id: string) => void;
+  template: DashboardTemplate;
 }) {
   // Separate "my-day" (WorkActivity) from the rest — managers get ManagerDay instead
   const monitoringWidgets = featuredWidgets.filter((w) => w.id !== "my-day");
+  const highlightedWidgets =
+    template === "learning"
+      ? monitoringWidgets.slice(0, 2)
+      : template === "operations"
+        ? monitoringWidgets.slice(0, 3)
+        : monitoringWidgets;
 
   return (
     <Stack gap="lg">
@@ -491,7 +520,7 @@ function ManagerHome({
         <Grid.Col span={{ base: 12, md: 7 }}>
           <Stack gap="lg">
             {/* Featured monitoring tiles */}
-            {monitoringWidgets.length > 0 && (
+            {highlightedWidgets.length > 0 && (
               <Box>
                 <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="sm"
                   style={{ letterSpacing: "0.08em", paddingLeft: 2 }}>
@@ -503,7 +532,9 @@ function ManagerHome({
                     const span = SIZE_TO_SPAN[w.tileSize];
                     return (
                       <Grid.Col key={w.id} span={span}>
-                        <Tile onExpand={() => onExpand(w.id)} />
+                        <ErrorBoundary label={w.title} compact>
+                          <Tile onExpand={() => onExpand(w.id)} />
+                        </ErrorBoundary>
                       </Grid.Col>
                     );
                   })}
@@ -616,6 +647,8 @@ function SidebarItem({
   onClick,
   role,
   badge,
+  extraBadge,
+  extraBadgeColor,
 }: {
   icon: React.ComponentType<{ size?: number }>;
   iconColor: string;
@@ -625,6 +658,8 @@ function SidebarItem({
   onClick: () => void;
   role?: string;
   badge?: "open" | "minimized";
+  extraBadge?: string;
+  extraBadgeColor?: string;
 }) {
   return (
     <Box
@@ -693,6 +728,11 @@ function SidebarItem({
                 {badge}
               </Badge>
             )}
+            {extraBadge ? (
+              <Badge size="xs" variant="filled" color={extraBadgeColor ?? "red"}>
+                {extraBadge}
+              </Badge>
+            ) : null}
             {role && (
               <Tooltip label={`Restricted to ${ROLE_LABELS[role as keyof typeof ROLE_LABELS] ?? role}`}>
                 <Badge

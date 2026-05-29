@@ -24,16 +24,35 @@ const TARGET_GID     = 1411338244;
 
 let _tokenCache: { value: string; expiresAt: number } | null = null;
 
+function normalizeServiceAccountKey(rawKey: string): string {
+  const trimmed = rawKey.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+
+  const withRealNewlines = unquoted.replace(/\\n/g, "\n").trim();
+
+  if (withRealNewlines.includes("BEGIN PRIVATE KEY") || withRealNewlines.includes("BEGIN RSA PRIVATE KEY")) {
+    return withRealNewlines;
+  }
+
+  throw new Error(
+    "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY is not a valid PEM private key. Save the full key including BEGIN/END lines, and keep newline escapes as \\n in the secret dialog.",
+  );
+}
+
 async function getAccessToken(): Promise<string> {
   if (_tokenCache && _tokenCache.expiresAt > Date.now() + 60_000) {
     return _tokenCache.value;
   }
 
-  const email     = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? "";
-  const rawKey    = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ?? "";
+  const email  = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? "";
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ?? "";
   if (!email || !rawKey) throw new Error("GOOGLE_SERVICE_ACCOUNT_EMAIL / GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY not set");
 
-  const privateKey = rawKey.replace(/\\n/g, "\n");
+  const privateKey = normalizeServiceAccountKey(rawKey);
   const now = Math.floor(Date.now() / 1000);
 
   const header  = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
@@ -45,9 +64,18 @@ async function getAccessToken(): Promise<string> {
     exp: now + 3600,
   })).toString("base64url");
 
-  const input     = `${header}.${payload}`;
-  const signature = crypto.sign("sha256", Buffer.from(input), privateKey).toString("base64url");
-  const jwt       = `${input}.${signature}`;
+  const input = `${header}.${payload}`;
+  let signature: string;
+  try {
+    const keyObject = crypto.createPrivateKey({ key: privateKey, format: "pem" });
+    signature = crypto.sign("RSA-SHA256", Buffer.from(input), keyObject).toString("base64url");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Invalid Google service account private key format. Re-save GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY as the full PEM from the service-account JSON. OpenSSL said: ${message}`,
+    );
+  }
+  const jwt = `${input}.${signature}`;
 
   const r = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",

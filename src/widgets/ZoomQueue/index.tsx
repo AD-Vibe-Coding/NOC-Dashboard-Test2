@@ -27,6 +27,14 @@ import { useZoomQueue } from "./data";
 import { useBreakData } from "../BreakTracker/data";
 import { useRosterShift } from "../../lib/use-roster-shift";
 import { IconCalendar } from "@tabler/icons-react";
+import {
+  resolveTeamMember,
+  SECTION_LABELS,
+  teamFor,
+  TIER_COLORS,
+  TIER_SHORT_LABELS,
+  tierFor,
+} from "../PerformanceTracker/team";
 
 export { ZoomQueueTile } from "./Tile";
 
@@ -309,20 +317,42 @@ function AgentRow({
   breakType,
   showReason,
 }: {
-  agent: ZoomAgent;
+  agent: ZoomAgent & { rosterName?: string | null };
   queues: string[];
   breakType?: string;
   showReason: boolean;
 }) {
   const isOnBreak = !!breakType;
+  const canonicalName = agent.rosterName ?? resolveTeamMember(agent.display_name);
+  const team = canonicalName ? teamFor(canonicalName) : null;
+  const tier = canonicalName ? tierFor(canonicalName) : null;
 
   return (
     <Table.Tr>
       <Table.Td>
-        <Group gap="xs" wrap="nowrap">
-          <Badge size="xs" variant="dot" color={ZOOM_STATUS_COLORS[agent.status]} />
-          <Text size="sm" fw={500}>{agent.display_name}</Text>
-        </Group>
+        <Stack gap={4}>
+          <Group gap="xs" wrap="nowrap">
+            <Badge size="xs" variant="dot" color={ZOOM_STATUS_COLORS[agent.status]} />
+            <Text size="sm" fw={500}>{canonicalName ?? agent.display_name}</Text>
+          </Group>
+          <Group gap={6}>
+            {team && (
+              <Badge size="xs" variant="light" color="gray">
+                {SECTION_LABELS[team]}
+              </Badge>
+            )}
+            {tier && (
+              <Badge size="xs" variant="light" color={TIER_COLORS[tier]}>
+                {TIER_SHORT_LABELS[tier]}
+              </Badge>
+            )}
+            {canonicalName && canonicalName !== agent.display_name && (
+              <Text size="xs" c="dimmed">
+                Zoom: {agent.display_name}
+              </Text>
+            )}
+          </Group>
+        </Stack>
       </Table.Td>
 
       {showReason && (

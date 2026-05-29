@@ -222,6 +222,36 @@ export const wfh_requests = pgTable("wfh_requests", {
 });
 
 // =============================================================================
+// Training Updates — agent-submitted training needs + manager-posted upcoming
+// training schedule visible to everyone.
+// =============================================================================
+
+export const training_requests = pgTable("training_requests", {
+  id: serial("id").primaryKey(),
+  requester_name: text("requester_name").notNull(),
+  requester_email: text("requester_email"),
+  training_title: text("training_title").notNull(),
+  training_type: text("training_type").notNull(),
+  due_date: text("due_date"),              // YYYY-MM-DD
+  details: text("details"),
+  status: text("status").notNull(),        // "requested" | "submitted"
+  manager_note: text("manager_note"),
+  reviewed_by: text("reviewed_by"),
+  reviewed_at: text("reviewed_at"),        // ISO timestamp
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const upcoming_trainings = pgTable("upcoming_trainings", {
+  id: serial("id").primaryKey(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  training_date: text("training_date").notNull(),   // YYYY-MM-DD
+  audience: text("audience").notNull(),             // "all" | "tier1" | "tier2" | "tier3" | "manager"
+  posted_by: text("posted_by").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
 // App Events — per-user widget usage tracking for the manager usage dashboard.
 // One lightweight row per widget open / tool use. Kept lean intentionally —
 // only what's needed to answer "who used what, when".

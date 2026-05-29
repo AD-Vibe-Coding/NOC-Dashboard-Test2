@@ -63,7 +63,13 @@ export function WidgetFrame({
       withBorder
       p={0}
       h="100%"
-      style={{ overflow: "hidden", background: "var(--widget-tile-surface)" }}
+      style={{
+        overflow: "hidden",
+        background: "var(--widget-tile-surface)",
+        display: "flex",
+        flexDirection: "column",
+        minHeight: 0,
+      }}
     >
       <Box
         px="lg"

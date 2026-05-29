@@ -16,19 +16,23 @@ export function useBreakData() {
   const [tick, setTick] = useState(0);
 
   async function refresh() {
-    const [activeRows, historyRows] = await Promise.all([
-      db.breaks.list({
-        filter: { is_active: true },
-        orderBy: { column: "start_time", ascending: false },
-      }),
-      db.breaks.list({
-        filter: { is_active: false },
-        orderBy: { column: "start_time", ascending: false },
-        limit: 50,
-      }),
-    ]);
-    setActive(activeRows);
-    setHistory(historyRows);
+    try {
+      const [activeRows, historyRows] = await Promise.all([
+        db.breaks.list({
+          filter: { is_active: true },
+          orderBy: { column: "start_time", ascending: false },
+        }),
+        db.breaks.list({
+          filter: { is_active: false },
+          orderBy: { column: "start_time", ascending: false },
+          limit: 50,
+        }),
+      ]);
+      setActive(activeRows);
+      setHistory(historyRows);
+    } catch (e) {
+      console.warn("[useBreakData] refresh failed:", e);
+    }
   }
 
   useEffect(() => {

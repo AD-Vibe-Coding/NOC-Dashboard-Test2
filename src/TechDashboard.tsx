@@ -1,15 +1,11 @@
 /**
  * TechDashboard — the focused, personal view for Tier 1/2/3 techs.
  *
- * Layout philosophy:
- *   - Top: Welcome banner + performance hero (the stuff they care about most)
- *   - Middle: Quick-action nav buttons organized by workflow
- *   - Clean, scannable — every click leads to a full widget view
- *
- * No sidebar. No clutter. Focused on getting the tech to the right tool fast.
+ * Individual templates are now real layouts: each person can pick a template,
+ * drag sections and widgets into a custom order, and hide/show sections.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   ActionIcon,
   AppShell,
@@ -17,6 +13,7 @@ import {
   Box,
   Card,
   Container,
+  Divider,
   Group,
   SimpleGrid,
   Stack,
@@ -25,14 +22,15 @@ import {
   Title,
   Tooltip,
   UnstyledButton,
-  useMantineColorScheme,
   useComputedColorScheme,
+  useMantineColorScheme,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
 import {
   IconActivity,
   IconActivityHeartbeat,
   IconAddressBook,
-  IconArrowLeft,
+  IconAdjustmentsHorizontal,
   IconChartArea,
   IconClipboardText,
   IconCoffee,
@@ -47,169 +45,96 @@ import {
   IconSearch,
   IconSun,
 } from "@tabler/icons-react";
-import { WIDGETS } from "./widgets/registry";
+import { BrandLogo } from "./widgets/BrandLogo";
 import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
-import { BrandLogo } from "./widgets/BrandLogo";
+import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
+import { WIDGETS } from "./widgets/registry";
+import { DashboardCustomizerDrawer } from "./components/DashboardCustomizerDrawer";
+import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
+import { FloatingWindow } from "./components/FloatingWindow";
+import { Taskbar } from "./components/Taskbar";
+import {
+  type DashboardSectionKey,
+  useDashboardPreferences,
+} from "./lib/dashboard-preferences";
 import { useIdentity } from "./lib/identity";
 import { canAccess, ROLE_COLORS, ROLE_LABELS } from "./lib/roles";
 import { trackWidgetOpen } from "./lib/track";
-import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
+import { useTrainingNotifications } from "./lib/training-notifications";
+import { useWindowManager } from "./lib/window-manager";
 
-// AppDirect brand colors
 const APPDIRECT_BRAND_PRIMARY = "#006080";
 const APPDIRECT_BRAND_ACCENT = "#0080a6";
 
-// ---------------------------------------------------------------------------
-// Navigation structure — what the tech sees on their home screen
-// ---------------------------------------------------------------------------
-
 interface NavItem {
-  id: string;          // widget id (for expand)
+  id: string;
   label: string;
   icon: React.ComponentType<{ size?: number }>;
-  color: string;       // Mantine color
+  color: string;
   description: string;
+  badgeCount?: number;
 }
 
 interface NavSection {
+  key: DashboardSectionKey;
   title: string;
   items: NavItem[];
 }
 
 const NAV_SECTIONS: NavSection[] = [
   {
+    key: "my-work",
     title: "My Work",
     items: [
-      {
-        id: "my-day",
-        label: "My Day",
-        icon: IconActivity,
-        color: "indigo",
-        description: "Today's tickets & calls",
-      },
-      {
-        id: "performance-tracker",
-        label: "My Metrics",
-        icon: IconReportAnalytics,
-        color: "green",
-        description: "Performance & disputes",
-      },
-      {
-        id: "break-tracker",
-        label: "Breaks",
-        icon: IconCoffee,
-        color: "orange",
-        description: "Start & track breaks",
-      },
+      { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets & calls" },
+      { id: "performance-tracker", label: "My Metrics", icon: IconReportAnalytics, color: "green", description: "Performance & disputes" },
+      { id: "break-tracker", label: "Breaks", icon: IconCoffee, color: "orange", description: "Start & track breaks" },
     ],
   },
   {
+    key: "queue-monitoring",
     title: "Queue & Monitoring",
     items: [
-      {
-        id: "zoom-queue",
-        label: "Zoom Queue",
-        icon: IconHeadset,
-        color: "appdirect",
-        description: "Live call queue",
-      },
-      {
-        id: "logic-monitor",
-        label: "LogicMonitor",
-        icon: IconChartArea,
-        color: "red",
-        description: "Alerts & device health",
-      },
+      { id: "zoom-queue", label: "Zoom Queue", icon: IconHeadset, color: "appdirect", description: "Live call queue" },
+      { id: "logic-monitor", label: "LogicMonitor", icon: IconChartArea, color: "red", description: "Alerts & device health" },
     ],
   },
   {
+    key: "ai-tools",
     title: "AI Tools",
     items: [
-      {
-        id: "smart-search",
-        label: "Smart Search",
-        icon: IconSearch,
-        color: "indigo",
-        description: "Search across everything",
-      },
-      {
-        id: "ticket-summary",
-        label: "Ticket Summary",
-        icon: IconFileText,
-        color: "indigo",
-        description: "Summarize .mhtml tickets",
-      },
-      {
-        id: "noc-troubleshooter",
-        label: "NOC Troubleshooter",
-        icon: IconActivityHeartbeat,
-        color: "cyan",
-        description: "Network & circuit help",
-      },
-      {
-        id: "mobility-troubleshooter",
-        label: "Mobility Troubleshooter",
-        icon: IconDeviceMobileMessage,
-        color: "violet",
-        description: "Wireless & device help",
-      },
+      { id: "smart-search", label: "Smart Search", icon: IconSearch, color: "indigo", description: "Search across everything" },
+      { id: "ticket-summary", label: "Ticket Summary", icon: IconFileText, color: "indigo", description: "Summarize .mhtml tickets" },
+      { id: "noc-troubleshooter", label: "NOC Troubleshooter", icon: IconActivityHeartbeat, color: "cyan", description: "Network & circuit help" },
+      { id: "mobility-troubleshooter", label: "Mobility Troubleshooter", icon: IconDeviceMobileMessage, color: "violet", description: "Wireless & device help" },
     ],
   },
   {
+    key: "communication",
     title: "Communication",
     items: [
-      {
-        id: "escalation-email",
-        label: "Escalation Email",
-        icon: IconMail,
-        color: "teal",
-        description: "Draft ESC-MGR alerts",
-      },
-      {
-        id: "email-polisher",
-        label: "Email Polisher",
-        icon: IconMailForward,
-        color: "lime",
-        description: "Polish any draft email",
-      },
-      {
-        id: "shift-handover",
-        label: "Shift Handover",
-        icon: IconClipboardText,
-        color: "blue",
-        description: "Create handover message",
-      },
-      {
-        id: "qs-escalations",
-        label: "Escalation Contacts",
-        icon: IconAddressBook,
-        color: "grape",
-        description: "Carrier contact lists",
-      },
+      { id: "escalation-email", label: "Escalation Email", icon: IconMail, color: "teal", description: "Draft ESC-MGR alerts" },
+      { id: "email-polisher", label: "Email Polisher", icon: IconMailForward, color: "lime", description: "Polish any draft email" },
+      { id: "shift-handover", label: "Shift Handover", icon: IconClipboardText, color: "blue", description: "Create handover message" },
+      { id: "qs-escalations", label: "Escalation Contacts", icon: IconAddressBook, color: "grape", description: "Carrier contact lists" },
     ],
   },
   {
+    key: "requests",
     title: "Requests",
     items: [
-      {
-        id: "wfh",
-        label: "WFH Request",
-        icon: IconHome,
-        color: "appdirect",
-        description: "Apply for work-from-home",
-      },
+      { id: "wfh", label: "WFH Request", icon: IconHome, color: "appdirect", description: "Apply for work-from-home" },
+      { id: "training-updates", label: "Training Updates", icon: IconFileText, color: "blue", description: "Submit and track training requests" },
     ],
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
 export default function TechDashboard() {
   const { identity } = useIdentity();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const { currentLayout } = useDashboardPreferences();
+  const { windows, openWindow } = useWindowManager();
+  const [customizeOpened, { open: openCustomize, close: closeCustomize }] = useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
@@ -226,64 +151,68 @@ export default function TechDashboard() {
     return WIDGETS.filter((w) => canAccess(identity.role, w.roles));
   }, [identity]);
 
-  // Hash-based routing
-  useEffect(() => {
-    const fromHash = () => {
-      const h = window.location.hash.replace(/^#\/?/, "");
-      if (!h) {
-        setExpandedId(null);
-        return;
-      }
-      const widget = WIDGETS.find((w) => w.id === h);
-      if (!widget) {
-        setExpandedId(null);
-        return;
-      }
-      if (identity && !canAccess(identity.role, widget.roles)) {
-        window.location.hash = "";
-        setExpandedId(null);
-        return;
-      }
-      setExpandedId(h);
-    };
-    fromHash();
-    window.addEventListener("hashchange", fromHash);
-    return () => window.removeEventListener("hashchange", fromHash);
-  }, [identity]);
+  const { pendingCount: trainingNotificationCount } = useTrainingNotifications();
+  const accentColor = identity ? ROLE_COLORS[identity.role] : "appdirect";
 
   function expand(id: string) {
-    const w = WIDGETS.find((x) => x.id === id);
-    if (w) trackWidgetOpen(id, w.title);
-    window.location.hash = `#/${id}`;
-  }
-  function collapse() {
-    window.location.hash = "";
+    const widget = visibleWidgets.find((w) => w.id === id);
+    if (!widget) return;
+    trackWidgetOpen(id, widget.title);
+    openWindow(widget);
   }
 
-  const expanded = expandedId
-    ? WIDGETS.find((w) => w.id === expandedId)
-    : null;
+  const visibleSectionMap = useMemo(() => {
+    return new Map(
+      NAV_SECTIONS.map((section) => {
+        const items = section.items
+          .map((item) =>
+            item.id === "training-updates"
+              ? { ...item, badgeCount: trainingNotificationCount }
+              : item,
+          )
+          .filter((item) => visibleWidgets.some((widget) => widget.id === item.id));
 
-  const accentColor = identity ? ROLE_COLORS[identity.role] : "appdirect";
+        return [section.key, { ...section, items }] as const;
+      }).filter((entry) => entry[1].items.length > 0),
+    );
+  }, [trainingNotificationCount, visibleWidgets]);
+
+  const orderedSections = useMemo(() => {
+    return currentLayout.sections
+      .map((layoutSection) => {
+        const source = visibleSectionMap.get(layoutSection.key);
+        if (!source) return null;
+
+        const itemLookup = new Map(source.items.map((item) => [item.id, item]));
+        const orderedItems = layoutSection.itemIds
+          .map((itemId) => itemLookup.get(itemId))
+          .filter((item): item is NavItem => !!item);
+        const missingItems = source.items.filter((item) => !layoutSection.itemIds.includes(item.id));
+
+        return {
+          key: layoutSection.key,
+          title: source.title,
+          hidden: layoutSection.hidden,
+          items: [...orderedItems, ...missingItems],
+        };
+      })
+      .filter((section): section is { key: DashboardSectionKey; title: string; hidden: boolean; items: NavItem[] } => !!section);
+  }, [currentLayout.sections, visibleSectionMap]);
+
+  const visibleSections = orderedSections.filter((section) => !section.hidden && section.items.length > 0);
 
   return (
     <AppShell header={{ height: 68 }} padding={0}>
-      {/* ---- Header ---- */}
       <AppShell.Header
         style={{
-          background: isDark
-            ? "rgba(15, 22, 36, 0.78)"
-            : "rgba(255, 255, 255, 0.85)",
+          background: isDark ? "rgba(15, 22, 36, 0.78)" : "rgba(255, 255, 255, 0.85)",
           backdropFilter: "blur(16px) saturate(160%)",
           WebkitBackdropFilter: "blur(16px) saturate(160%)",
-          borderBottom: isDark
-            ? "1px solid rgba(255,255,255,0.06)"
-            : "1px solid rgba(15,23,42,0.08)",
+          borderBottom: isDark ? "1px solid rgba(255,255,255,0.06)" : "1px solid rgba(15,23,42,0.08)",
           position: "relative",
           zIndex: 100,
         }}
       >
-        {/* Brand strip */}
         <Box
           style={{
             position: "absolute",
@@ -295,7 +224,6 @@ export default function TechDashboard() {
             pointerEvents: "none",
           }}
         />
-        {/* Role accent line */}
         <Box
           style={{
             position: "absolute",
@@ -311,71 +239,49 @@ export default function TechDashboard() {
         <Container size="xl" h="100%" px="md">
           <Group h="100%" justify="space-between" wrap="nowrap">
             <Group gap="md" wrap="nowrap" style={{ minWidth: 0 }}>
-              {expanded && (
-                <Tooltip label="Back to dashboard">
-                  <ActionIcon
-                    variant="default"
-                    size="lg"
-                    radius="md"
-                    onClick={collapse}
-                  >
-                    <IconArrowLeft size={18} />
-                  </ActionIcon>
-                </Tooltip>
-              )}
               <Box
                 style={{
                   position: "relative",
                   filter: `drop-shadow(0 0 16px var(--mantine-color-${accentColor}-6))`,
-                  cursor: expanded ? "pointer" : undefined,
                 }}
-                onClick={expanded ? collapse : undefined}
               >
-                <BrandLogo
-                  size={32}
-                  glowColor={`var(--mantine-color-${accentColor}-6)`}
-                />
+                <BrandLogo size={32} glowColor={`var(--mantine-color-${accentColor}-6)`} />
               </Box>
               <Box style={{ minWidth: 0 }}>
                 <Group gap={8} align="center">
-                  <Text
-                    fw={600}
-                    c="bright"
-                    style={{ fontSize: 16, letterSpacing: "-0.01em" }}
-                  >
-                    {expanded ? expanded.title : `${displayName}'s Dashboard`}
+                  <Text fw={600} c="bright" style={{ fontSize: 16, letterSpacing: "-0.01em" }}>
+                    {`${displayName}'s Dashboard`}
                   </Text>
-                  {!expanded && (
-                    <Box
-                      className="dashboard-status-pulse"
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: `var(--mantine-color-${accentColor}-5)`,
-                        flexShrink: 0,
-                      }}
-                    />
+                  <Box
+                    className="dashboard-status-pulse"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: `var(--mantine-color-${accentColor}-5)`,
+                      flexShrink: 0,
+                    }}
+                  />
+                  {windows.length > 0 && (
+                    <Badge size="sm" color="appdirect" variant="light">
+                      {windows.length} open
+                    </Badge>
                   )}
                 </Group>
                 <Text size="xs" c="dimmed" mt={1}>
-                  {expanded
-                    ? expanded.description
-                    : `${ROLE_LABELS[identity?.role ?? "tier1"]} · vCom NOC Operations`}
+                  {`${ROLE_LABELS[identity?.role ?? "tier1"]} · Drag and customize your own dashboard layout by template`}
                 </Text>
               </Box>
             </Group>
             <Group gap="sm" wrap="nowrap">
-              <Tooltip
-                label={isDark ? "Switch to light mode" : "Switch to dark mode"}
-                withArrow
-              >
-                <ActionIcon
-                  variant="default"
-                  size="lg"
-                  radius="md"
-                  onClick={toggleColorScheme}
-                >
+              <DashboardTemplatePicker />
+              <Tooltip label="Customize layout" withArrow>
+                <ActionIcon variant="default" size="lg" radius="md" onClick={openCustomize}>
+                  <IconAdjustmentsHorizontal size={18} />
+                </ActionIcon>
+              </Tooltip>
+              <Tooltip label={isDark ? "Switch to light mode" : "Switch to dark mode"} withArrow>
+                <ActionIcon variant="default" size="lg" radius="md" onClick={toggleColorScheme}>
                   {isDark ? <IconSun size={18} /> : <IconMoon size={18} />}
                 </ActionIcon>
               </Tooltip>
@@ -385,18 +291,14 @@ export default function TechDashboard() {
         </Container>
       </AppShell.Header>
 
-      {/* ---- Main content ---- */}
       <AppShell.Main
         style={{
-          background: isDark
-            ? "linear-gradient(180deg, #0b111e 0%, #0e1626 100%)"
-            : "linear-gradient(180deg, #f4f8fb 0%, rgba(204, 230, 239,0.40) 100%)",
+          background: isDark ? "var(--dashboard-page-bg-dark)" : "var(--dashboard-page-bg-light)",
           minHeight: "100vh",
           position: "relative",
           overflow: "hidden",
         }}
       >
-        {/* Subtle ambient glow */}
         <Box
           style={{
             position: "fixed",
@@ -404,9 +306,7 @@ export default function TechDashboard() {
             left: "10%",
             width: "55vw",
             height: "55vh",
-            background: `radial-gradient(circle at center, ${
-              isDark ? "rgba(0, 96, 128,0.18)" : "rgba(0, 96, 128,0.06)"
-            }, transparent 60%)`,
+            background: `radial-gradient(circle at center, ${isDark ? "rgba(0, 96, 128,0.18)" : "rgba(0, 96, 128,0.06)"}, transparent 60%)`,
             pointerEvents: "none",
             zIndex: 0,
             filter: "blur(20px)",
@@ -414,62 +314,50 @@ export default function TechDashboard() {
         />
         <Box className="dot-grid-bg" />
 
-        <Container
-          size="xl"
-          py="lg"
-          px="md"
-          style={{ position: "relative", zIndex: 1 }}
-        >
-          {expanded ? (
-            <expanded.Full />
-          ) : (
-            <TechHome
-              firstName={firstName}
-              identity={identity}
-              accentColor={accentColor}
-              visibleWidgetIds={new Set(visibleWidgets.map((w) => w.id))}
-              onExpand={expand}
-            />
-          )}
+        <Container size="xl" py="lg" px="md" style={{ position: "relative", zIndex: 1, paddingBottom: 72 }}>
+          <TechHome
+            firstName={firstName}
+            identity={identity}
+            accentColor={accentColor}
+            sections={visibleSections}
+            featuredWidgets={visibleWidgets.filter((widget) => ["zoom-queue", "break-tracker"].includes(widget.id))}
+            onExpand={expand}
+          />
         </Container>
       </AppShell.Main>
+
+      <DashboardCustomizerDrawer opened={customizeOpened} onClose={closeCustomize} sections={orderedSections} />
+
+      {windows.map((win) => (
+        <FloatingWindow key={win.id} win={win} />
+      ))}
+
+      <Taskbar />
     </AppShell>
   );
 }
-
-// ---------------------------------------------------------------------------
-// Home — the dashboard grid
-// ---------------------------------------------------------------------------
 
 function TechHome({
   firstName,
   identity,
   accentColor,
-  visibleWidgetIds,
+  sections,
+  featuredWidgets,
   onExpand,
 }: {
   firstName: string;
   identity: ReturnType<typeof useIdentity>["identity"];
   accentColor: string;
-  visibleWidgetIds: Set<string>;
+  sections: Array<{ key: DashboardSectionKey; title: string; hidden: boolean; items: NavItem[] }>;
+  featuredWidgets: Array<(typeof WIDGETS)[number]>;
   onExpand: (id: string) => void;
 }) {
   const role = identity?.role ?? "tier1";
-
-  // Greeting based on time of day
   const hour = new Date().getHours();
-  const greeting =
-    hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-
-  // Filter nav sections to only include visible widgets
-  const sections = NAV_SECTIONS.map((s) => ({
-    ...s,
-    items: s.items.filter((item) => visibleWidgetIds.has(item.id)),
-  })).filter((s) => s.items.length > 0);
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 
   return (
     <Stack gap="lg">
-      {/* ---- Welcome banner ---- */}
       <Card
         withBorder
         radius="lg"
@@ -493,25 +381,12 @@ function TechHome({
         />
         <Group justify="space-between" align="center" wrap="wrap">
           <Box>
-            <Text size="sm" c="dimmed" fw={500}>
-              {greeting},
-            </Text>
-            <Title order={2} c="bright" style={{ letterSpacing: "-0.02em" }}>
-              {firstName}
-            </Title>
-            <Text size="xs" c="dimmed" mt={2}>
-              Personal workspace · team data is manager-only
-            </Text>
+            <Text size="sm" c="dimmed" fw={500}>{greeting},</Text>
+            <Title order={2} c="bright" style={{ letterSpacing: "-0.02em" }}>{firstName}</Title>
+            <Text size="xs" c="dimmed" mt={2}>Personal workspace · sections and widgets are fully customizable per template</Text>
           </Box>
           <Group gap="sm">
-            <Badge
-              size="lg"
-              variant="filled"
-              color={accentColor}
-              radius="md"
-            >
-              {ROLE_LABELS[role]}
-            </Badge>
+            <Badge size="lg" variant="filled" color={accentColor} radius="md">{ROLE_LABELS[role]}</Badge>
             <Text size="sm" c="dimmed" ff="monospace">
               {new Date().toLocaleDateString([], {
                 weekday: "long",
@@ -523,39 +398,68 @@ function TechHome({
         </Group>
       </Card>
 
-      {/* ---- News ticker ---- */}
       <NewsTicker />
 
-      {/* ---- Navigation sections ---- */}
+      {featuredWidgets.length > 0 && (
+        <Card withBorder radius="lg" p="lg">
+          <Stack gap="md">
+            <Box>
+              <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>
+                Live Overview
+              </Text>
+              <Divider mt="xs" />
+            </Box>
+            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
+              {featuredWidgets.map((widget) => {
+                const Tile = widget.Tile;
+                return <Tile key={widget.id} onExpand={() => onExpand(widget.id)} />;
+              })}
+            </SimpleGrid>
+          </Stack>
+        </Card>
+      )}
+
       {sections.map((section) => (
-        <Box key={section.title}>
-          <Text
-            size="xs"
-            fw={700}
-            c="dimmed"
-            tt="uppercase"
-            mb="sm"
-            style={{ letterSpacing: "0.08em", paddingLeft: 4 }}
-          >
-            {section.title}
-          </Text>
-          <SimpleGrid
-            cols={{ base: 1, xs: 2, sm: 3, md: section.items.length <= 3 ? section.items.length : 4 }}
-            spacing="md"
-          >
-            {section.items.map((item) => (
-              <NavButton key={item.id} item={item} onExpand={onExpand} />
-            ))}
-          </SimpleGrid>
-        </Box>
+        <DashboardSection
+          key={section.key}
+          section={section}
+          onExpand={onExpand}
+          columns={{ base: 1, xs: 2, sm: 2, md: section.items.length <= 3 ? section.items.length : 4 }}
+        />
       ))}
     </Stack>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Navigation button — clean, card-style button for each tool
-// ---------------------------------------------------------------------------
+function DashboardSection({
+  section,
+  onExpand,
+  columns,
+}: {
+  section: { title: string; items: NavItem[] };
+  onExpand: (id: string) => void;
+  columns: { base: number; xs?: number; sm?: number; md?: number; lg?: number };
+}) {
+  if (section.items.length === 0) return null;
+
+  return (
+    <Card withBorder radius="lg" p="lg">
+      <Stack gap="md">
+        <Box>
+          <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>
+            {section.title}
+          </Text>
+          <Divider mt="xs" />
+        </Box>
+        <SimpleGrid cols={columns} spacing="md">
+          {section.items.map((item) => (
+            <NavButton key={item.id} item={item} onExpand={onExpand} />
+          ))}
+        </SimpleGrid>
+      </Stack>
+    </Card>
+  );
+}
 
 function NavButton({
   item,
@@ -567,10 +471,7 @@ function NavButton({
   const accentVar = `var(--mantine-color-${item.color}-6)`;
 
   return (
-    <UnstyledButton
-      onClick={() => onExpand(item.id)}
-      style={{ width: "100%" }}
-    >
+    <UnstyledButton onClick={() => onExpand(item.id)} style={{ width: "100%" }}>
       <Card
         withBorder
         radius="md"
@@ -584,7 +485,6 @@ function NavButton({
         }}
         className="tech-nav-button"
       >
-        {/* Top accent stripe */}
         <Box
           style={{
             position: "absolute",
@@ -610,9 +510,14 @@ function NavButton({
             <item.icon size={20} />
           </ThemeIcon>
           <Box style={{ minWidth: 0 }}>
-            <Text size="sm" fw={600} c="bright" style={{ lineHeight: 1.3 }}>
-              {item.label}
-            </Text>
+            <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+              <Text size="sm" fw={600} c="bright" style={{ lineHeight: 1.3 }}>
+                {item.label}
+              </Text>
+              {typeof item.badgeCount === "number" && item.badgeCount > 0 && (
+                <Badge size="xs" color="red" variant="filled">{item.badgeCount}</Badge>
+              )}
+            </Group>
             <Text size="xs" c="dimmed" lineClamp={2} mt={2}>
               {item.description}
             </Text>

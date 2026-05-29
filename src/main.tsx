@@ -6,6 +6,7 @@ import "@mantine/dates/styles.css";
 import "./index.css";
 import App from "./App";
 import { IdentityProvider } from "./lib/identity";
+import { DashboardPreferencesProvider } from "./lib/dashboard-preferences";
 
 // Custom theme — built around AppDirect's official brand palette.
 // AppDirect's Base design-system documents `#006080` (deep petrol teal,
@@ -66,7 +67,9 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MantineProvider defaultColorScheme="light" theme={theme}>
       <IdentityProvider>
-        <App />
+        <DashboardPreferencesProvider>
+          <App />
+        </DashboardPreferencesProvider>
       </IdentityProvider>
     </MantineProvider>
   </StrictMode>,
