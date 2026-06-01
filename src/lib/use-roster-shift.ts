@@ -8,9 +8,17 @@
 
 import { useEffect, useState, useCallback } from "react";
 
+export interface ShiftWindow {
+  name: string;
+  start: number;
+  end: number;
+  cell: string;
+}
+
 export interface RosterShiftData {
   inShiftNow:  string[];
   allNames:    string[];
+  shiftWindows: ShiftWindow[];
   strategy:    string;
   sheetTitle:  string;
   fetchedAt:   string;
@@ -43,6 +51,11 @@ function nameMatch(a: string, b: string): boolean {
 export function useRosterShift() {
   const [data, setData]       = useState<RosterShiftData | null>(null);
   const [loading, setLoading] = useState(true);
+
+  function isRosterListed(name: string): boolean {
+    if (!data) return true;
+    return data.allNames.some((s) => nameMatch(name, s));
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -86,5 +99,5 @@ export function useRosterShift() {
 
   const configured = !!(data && data.strategy !== "unconfigured");
 
-  return { data, loading, refresh, isInShift, configured };
+  return { data, loading, refresh, isInShift, isRosterListed, configured };
 }

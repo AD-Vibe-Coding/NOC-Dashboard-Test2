@@ -116,7 +116,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Get matching queues
     const allQueues: any[] = await paginate(token, "/phone/call_queues", "call_queues");
-    const targetQueues = allQueues.filter((q) => isTargetQueue(String(q.name ?? "")));
+    const targetQueues = allQueues.filter((q) => isTargetOperator(String(q.name ?? "")));
 
     if (targetQueues.length === 0) {
       return res.status(200).json({

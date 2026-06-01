@@ -7,6 +7,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { getProvider } from "../_lib/oauth-providers.js";
 import { getOrigin, getRedirectUri } from "../_lib/redirect-uri.js";
 import { mintExchangeToken, setSession, type SessionPayload } from "../_lib/session.js";
+import { defaultRoleFor, lookupByEmail } from "../../_lib/roles.js";
+import { saveGoogleAccountTokens, upsertGoogleSessionRow } from "../../_lib/google-gmail.js";
 
 const STATE_COOKIE_PREFIX = "oauth_state_";
 const VERIFIER_COOKIE_PREFIX = "oauth_verifier_";
@@ -125,6 +127,28 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     exp: now + 60 * 60 * 24 * 7,
   };
   await setSession(res, payload);
+
+  try {
+    await upsertGoogleSessionRow({
+      name: profile.name,
+      email: profile.email,
+      picture: profile.picture,
+    });
+
+    await saveGoogleAccountTokens({
+      googleSub: profile.sub,
+      email: profile.email,
+      name: profile.name,
+      tokens,
+    });
+  } catch (error) {
+    return renderError(
+      res,
+      targetOrigin,
+      "google_token_save_failed",
+      error instanceof Error ? error.message : "Failed to save Google account tokens.",
+    );
+  }
 
   // Mint a short-lived HMAC-signed exchange token so the AppBuilder
   // iframe (which lives in a different cookie partition than this

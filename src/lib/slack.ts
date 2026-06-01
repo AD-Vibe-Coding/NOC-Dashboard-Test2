@@ -115,4 +115,6 @@ export const BREAK_TYPE_COLORS: Record<string, string> = {
   Restroom: "blue",
   Personal: "grape",
   Other: "gray",
+  "Meeting - Internal": "cyan",
+  "Meeting - External": "teal",
 };

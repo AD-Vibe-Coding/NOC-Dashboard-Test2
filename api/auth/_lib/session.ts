@@ -81,6 +81,7 @@ export type SessionPayload = {
   email?: string;
   name?: string;
   picture?: string;
+  role?: string;
   provider: string;
   iat: number;
   exp: number;

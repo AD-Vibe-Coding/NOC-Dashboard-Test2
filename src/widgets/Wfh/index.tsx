@@ -341,7 +341,6 @@ export function WfhWidget() {
                       // If end is before start, auto-set end = start
                       if (d && endDate && endDate < d) setEndDate(d);
                     }}
-                    minDate={new Date()}
                   />
                 </Grid.Col>
                 <Grid.Col span={{ base: 12, sm: 4 }}>

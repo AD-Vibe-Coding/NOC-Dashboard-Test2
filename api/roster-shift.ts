@@ -19,6 +19,11 @@ import crypto from "node:crypto";
 
 const SPREADSHEET_ID = "14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4";
 const TARGET_GID     = 1411338244;
+const TARGET_SHEET_TITLE = "May'26";
+const PUBLISHED_CSV_URL = buildPublishedCsvUrl(
+  "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUVf4cK8WTdKH47k61nmsDWmPq2Gxdw4J_j9WHxGoDEXqthtTdQ2zbKYJXa0zY8Q9blbaGm4lZH2c/pub?output=csv",
+  TARGET_GID,
+);
 
 // ── Service-account OAuth2 ────────────────────────────────────────────────────
 
@@ -128,6 +133,65 @@ async function fetchRows(token: string, sheetTitle: string): Promise<string[][]>
   return (j.values ?? []) as string[][];
 }
 
+function parseCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function buildPublishedCsvUrl(baseUrl: string, gid: number): string {
+  const url = new URL(baseUrl);
+  url.searchParams.set("output", "csv");
+  url.searchParams.set("gid", String(gid));
+  url.searchParams.set("single", "true");
+  return url.toString();
+}
+
+async function fetchPublishedCsvRows(csvUrl: string): Promise<{ rows: string[][]; sheetTitle: string }> {
+  const response = await fetch(csvUrl);
+  if (!response.ok) {
+    throw new Error(`Published roster CSV error: ${response.status}`);
+  }
+
+  const csv = await response.text();
+  const lines = csv
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0);
+
+  const rows = lines.map(parseCsvLine);
+  return {
+    rows,
+    sheetTitle: `Published roster CSV · ${TARGET_SHEET_TITLE}`,
+  };
+}
+
 // ── Shift detection ───────────────────────────────────────────────────────────
 
 /** Parse a time string → minutes since midnight (Pacific). Returns null on failure. */
@@ -165,43 +229,90 @@ function parseTime(str: string): number | null {
 
 /** Parse a cell like "8AM-5PM", "08:00-17:00", "OFF", "X" → shift window or OFF */
 function parseShiftCell(cell: string): { start: number; end: number } | "OFF" | null {
-  const s = cell.trim().toUpperCase();
-  if (!s || ["OFF", "X", "-", "NO"].includes(s)) return "OFF";
+  const s = cell.trim().toUpperCase().replace(/\s+/g, " ");
+  if (!s) return "OFF";
 
-  // Range with hyphen/dash e.g. "8AM-5PM", "8:00-17:00"
-  const parts = s.split(/\s*[-–—]\s*/);
-  if (parts.length === 2) {
+  const offMarkers = [
+    "OFF",
+    "WO",
+    "W/O",
+    "PTO",
+    "VACATION",
+    "HOLIDAY",
+    "SICK LEAVE",
+    "EMERGENCY LEAVE",
+    "BEREAVEMENT",
+    "LEAVE",
+    "LOA",
+    "X",
+    "-",
+    "NO",
+  ];
+  if (offMarkers.some((marker) => s === marker || s.includes(marker))) return "OFF";
+
+  const cleaned = s
+    .replace(/\(.*?\)/g, "")
+    .replace(/HALF DAY/gi, "")
+    .replace(/\bTO\b/g, "-")
+    .replace(/\s*[-–—]\s*/g, "-")
+    .trim();
+
+  // Range with hyphen/dash/to e.g. "8AM-5PM", "08:00 AM to 05:00 PM"
+  const parts = cleaned.split("-").map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 2) {
     const start = parseTime(parts[0]);
-    const end   = parseTime(parts[1]);
+    const end = parseTime(parts[1]);
     if (start !== null && end !== null) return { start, end };
   }
 
   // Single time means scheduled (assume 8h shift)
-  const t = parseTime(s);
+  const t = parseTime(cleaned);
   if (t !== null) return { start: t, end: t + 8 * 60 };
 
-  // Non-empty non-OFF cell = assumed scheduled (whole day)
-  return { start: 0, end: 23 * 60 + 59 };
+  return "OFF";
 }
 
 /** Current time of day in minutes, Pacific time */
+function isRealRosterName(name: string): boolean {
+  const value = name.trim();
+  if (!value) return false;
+  if (/required|status|count|pst time zone/i.test(value)) return false;
+  if (!/[A-Za-z]/.test(value)) return false;
+  return /\s/.test(value);
+}
+
 function nowMinutesPST(): number {
   const pst = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
   return pst.getHours() * 60 + pst.getMinutes();
 }
 
+function isWithinShift(nowMin: number, shift: { start: number; end: number }): boolean {
+  const { start, end } = shift;
+
+  if (start === end) return true;
+  if (end > start) return nowMin >= start && nowMin <= end;
+
+  // Overnight shift in PST, e.g. 10PM → 6AM.
+  return nowMin >= start || nowMin <= end;
+}
+
 /** Today metadata in Pacific time */
-function todayPST() {
-  const pst    = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
-  const days   = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dayMetaPST(offsetDays = 0) {
+  const pst = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  pst.setDate(pst.getDate() + offsetDays);
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   return {
-    dayName:  days[pst.getDay()],                                  // "Wednesday"
-    dayShort: days[pst.getDay()].slice(0, 3),                      // "Wed"
-    monthDay: `${pst.getMonth() + 1}/${pst.getDate()}`,            // "5/28"
-    monthName:`${months[pst.getMonth()]} ${pst.getDate()}`,        // "May 28"
-    isoDate:  pst.toISOString().slice(0, 10),                      // "2025-05-28"
+    dayName: days[pst.getDay()],
+    dayShort: days[pst.getDay()].slice(0, 3),
+    monthDay: `${pst.getMonth() + 1}/${pst.getDate()}`,
+    monthName: `${months[pst.getMonth()]} ${pst.getDate()}`,
+    isoDate: pst.toISOString().slice(0, 10),
   };
+}
+
+function todayPST() {
+  return dayMetaPST(0);
 }
 
 export interface ShiftResult {
@@ -214,6 +325,23 @@ export interface ShiftResult {
   error?:      string;
 }
 
+function findDateColumnIndex(headers: string[], day: ReturnType<typeof dayMetaPST>) {
+  const dayNumber = String(Number(day.monthDay.split("/")[1] ?? ""));
+  let colIdx = headers.findIndex((h, idx) => {
+    if (idx === 0 || !h) return false;
+    const normalized = h.toLowerCase();
+    return normalized === day.isoDate.toLowerCase()
+      || normalized.includes(day.monthName.toLowerCase())
+      || normalized === `${day.dayShort.toLowerCase()} ${day.monthDay.toLowerCase()}`;
+  });
+
+  if (colIdx < 0) {
+    colIdx = headers.findIndex((h, idx) => idx > 0 && h.trim().startsWith(`${dayNumber}-`));
+  }
+
+  return colIdx;
+}
+
 function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "fetchedAt"> {
   const base = { sheetTitle, rowCount: rows.length };
 
@@ -221,10 +349,18 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
     return { ...base, inShiftNow: [], allNames: [], strategy: "empty" };
   }
 
-  const headers  = rows[0].map((h) => (h ?? "").trim());
-  const dataRows = rows.slice(1);
-  const nowMin   = nowMinutesPST();
-  const today    = todayPST();
+  const headers = rows[0].map((h) => (h ?? "").trim());
+  const secondRow = rows[1]?.map((h) => (h ?? "").trim()) ?? [];
+  const nowMin = nowMinutesPST();
+  const today = todayPST();
+  const previousDay = dayMetaPST(-1);
+
+  // Published roster CSV shape:
+  // row 0 => date columns like 29-Jan
+  // row 1 => weekday labels
+  // row 2+ => names + shift cells
+  const hasPublishedCalendarHeader = /time zone/i.test(headers[0] ?? "") && secondRow.length > 0;
+  const dataRows = hasPublishedCalendarHeader ? rows.slice(2) : rows.slice(1);
 
   // Detect "Name" column
   const nameColIdx = (() => {
@@ -232,9 +368,41 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
     return idx >= 0 ? idx : 0;
   })();
 
-  const allNames = dataRows
+  const rosterRows = dataRows.filter((r) => isRealRosterName((r[nameColIdx] ?? "").trim()));
+  const allNames = rosterRows
     .map((r) => (r[nameColIdx] ?? "").trim())
     .filter(Boolean);
+
+  if (hasPublishedCalendarHeader) {
+    const todayColIdx = findDateColumnIndex(headers, today);
+    const previousColIdx = findDateColumnIndex(headers, previousDay);
+
+    if (todayColIdx > 0 || previousColIdx > 0) {
+      const inShiftNow: string[] = [];
+      const shiftWindows: ShiftWindow[] = [];
+      for (const row of rosterRows) {
+        const name = (row[nameColIdx] ?? "").trim();
+
+        const todayCell = todayColIdx > 0 ? (row[todayColIdx] ?? "").trim() : "";
+        const todayShift = parseShiftCell(todayCell);
+        if (todayShift && todayShift !== "OFF") {
+          shiftWindows.push({ name, start: todayShift.start, end: todayShift.end, cell: todayCell });
+          if (todayShift.end > todayShift.start && isWithinShift(nowMin, todayShift)) {
+            inShiftNow.push(name);
+            continue;
+          }
+        }
+
+        const previousCell = previousColIdx > 0 ? (row[previousColIdx] ?? "").trim() : "";
+        const previousShift = parseShiftCell(previousCell);
+        if (previousShift && previousShift !== "OFF" && previousShift.end < previousShift.start && nowMin <= previousShift.end) {
+          inShiftNow.push(name);
+          shiftWindows.push({ name, start: previousShift.start, end: previousShift.end, cell: previousCell });
+        }
+      }
+      return { ...base, inShiftNow, allNames, shiftWindows, strategy: "published-calendar-date-column" };
+    }
+  }
 
   // ── Strategy A: today's date appears in a header column ─────────────────
   const todayColIdx = headers.findIndex((h) => {
@@ -243,20 +411,18 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
       h.includes(today.monthDay) ||
       h.includes(today.isoDate) ||
       h.toLowerCase().includes(today.monthName.toLowerCase()) ||
-      // "Wed 5/28", "Wednesday", etc.
       h.toLowerCase().startsWith(today.dayShort.toLowerCase())
     );
   });
 
   if (todayColIdx > 0) {
     const inShiftNow: string[] = [];
-    for (const row of dataRows) {
+    for (const row of rosterRows) {
       const name = (row[nameColIdx] ?? "").trim();
-      if (!name) continue;
-      const cell  = (row[todayColIdx] ?? "").trim();
+      const cell = (row[todayColIdx] ?? "").trim();
       const shift = parseShiftCell(cell);
-      if (shift && shift !== "OFF") {
-        if (nowMin >= shift.start && nowMin <= shift.end) inShiftNow.push(name);
+      if (shift && shift !== "OFF" && isWithinShift(nowMin, shift)) {
+        inShiftNow.push(name);
       }
     }
     return { ...base, inShiftNow, allNames, strategy: "date-column" };
@@ -287,7 +453,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
                 daysStr === "-";
       }
 
-      if (dayOk && nowMin >= start && nowMin <= end) inShiftNow.push(name);
+      if (dayOk && isWithinShift(nowMin, { start, end })) inShiftNow.push(name);
     }
     return { ...base, inShiftNow, allNames, strategy: "start-end-columns" };
   }
@@ -299,20 +465,19 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 
   if (dowIdx >= 0) {
     const inShiftNow: string[] = [];
-    for (const row of dataRows) {
-      const name  = (row[nameColIdx] ?? "").trim();
+    for (const row of rosterRows) {
+      const name = (row[nameColIdx] ?? "").trim();
       if (!name) continue;
-      const cell  = (row[dowIdx] ?? "").trim();
+      const cell = (row[dowIdx] ?? "").trim();
       const shift = parseShiftCell(cell);
-      if (shift && shift !== "OFF") {
-        if (nowMin >= shift.start && nowMin <= shift.end) inShiftNow.push(name);
+      if (shift && shift !== "OFF" && isWithinShift(nowMin, shift)) {
+        inShiftNow.push(name);
       }
     }
     return { ...base, inShiftNow, allNames, strategy: "day-of-week-column" };
   }
 
-  // ── Fallback: return everyone listed ────────────────────────────────────
-  return { ...base, inShiftNow: allNames, allNames, strategy: "fallback-all-listed" };
+  return { ...base, inShiftNow: [], allNames, strategy: "published-csv-unmatched" };
 }
 
 // ── Response cache (5 min) ────────────────────────────────────────────────────
@@ -331,24 +496,37 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
     return res.end(JSON.stringify(_cache.data));
   }
 
-  const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-
-  if (!email || !privateKey) {
-    const fallback: ShiftResult = {
-      inShiftNow: [],
-      allNames:   [],
-      strategy:   "unconfigured",
-      sheetTitle: "(not loaded)",
-      fetchedAt:  new Date().toISOString(),
-      rowCount:   0,
-      error: "GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY not configured — " +
-             "add them via the Add Secret dialog and share the spreadsheet with the service account email.",
-    };
-    return res.end(JSON.stringify(fallback));
-  }
+  const csvUrl = process.env.ROSTER_PUBLISHED_CSV_URL?.trim() || PUBLISHED_CSV_URL;
 
   try {
+    if (csvUrl) {
+      const { rows, sheetTitle } = await fetchPublishedCsvRows(csvUrl);
+      const detected = detectShift(rows, sheetTitle);
+      const data: ShiftResult = {
+        ...detected,
+        strategy: `${detected.strategy}-published-csv`,
+        fetchedAt: new Date().toISOString(),
+      };
+      _cache = { data, at: Date.now() };
+      return res.end(JSON.stringify(data));
+    }
+
+    const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+    const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+
+    if (!email || !privateKey) {
+      const fallback: ShiftResult = {
+        inShiftNow: [],
+        allNames:   [],
+        strategy:   "unconfigured",
+        sheetTitle: "(not loaded)",
+        fetchedAt:  new Date().toISOString(),
+        rowCount:   0,
+        error: "Roster source is not configured. Set a published Google Sheet CSV URL or provide Google service account secrets.",
+      };
+      return res.end(JSON.stringify(fallback));
+    }
+
     const token      = await getAccessToken();
     const sheetTitle = await getSheetTitle(token);
     const rows       = await fetchRows(token, sheetTitle);
@@ -356,7 +534,7 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
 
     const data: ShiftResult = { ...detected, fetchedAt: new Date().toISOString() };
     _cache = { data, at: Date.now() };
-    res.end(JSON.stringify(data));
+    return res.end(JSON.stringify(data));
   } catch (err: any) {
     const data: ShiftResult = {
       inShiftNow: [],

@@ -20,6 +20,10 @@ import { supabaseAdmin } from "./supabase-admin.js";
 // against a typo causing a wide-open table query.
 const ALLOWED_TABLES = new Set([
   "breaks",
+  "break_schedules",
+  "reminder_events",
+  "one_on_one_notes",
+  "personal_action_items",
   "ticket_summaries",
   "escalation_drafts",
   "shift_handovers",

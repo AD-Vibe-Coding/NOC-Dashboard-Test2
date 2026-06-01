@@ -5,7 +5,6 @@ import {
   IconChartArea,
   IconChartBar,
   IconClipboardText,
-  IconCoffee,
   IconDeviceMobileMessage,
   IconFileText,
   IconGavel,
@@ -13,13 +12,13 @@ import {
   IconHome,
   IconMail,
   IconMailForward,
+  IconNotes,
   IconPhone,
   IconSchool,
   IconReportAnalytics,
   IconSearch,
   IconShield,
 } from "@tabler/icons-react";
-import { BreakTrackerWidget, BreakTrackerTile } from "./BreakTracker";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
 import { TicketSummaryWidget, TicketSummaryTile } from "./TicketSummary";
@@ -65,6 +64,10 @@ import {
   TrainingUpdatesWidget,
   TrainingUpdatesTile,
 } from "./TrainingUpdates";
+import {
+  MeetingNotesWidget,
+  MeetingNotesTile,
+} from "./MeetingNotes";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -124,25 +127,14 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "zoom-queue",
-    title: "Zoom Queue",
-    description: "Who's on a call and for how long",
+    title: "Team Availability",
+    description: "Queue availability, breaks, and meeting status",
     icon: IconHeadset,
     iconColor: "appdirect",
     tileSize: "lg",
     featured: true,
     Tile: ZoomQueueTile,
     Full: ZoomQueueWidget,
-  },
-  {
-    id: "break-tracker",
-    title: "Break Tracker",
-    description: "Team breaks via Slack + local",
-    icon: IconCoffee,
-    iconColor: "orange",
-    tileSize: "lg",
-    featured: true,
-    Tile: BreakTrackerTile,
-    Full: BreakTrackerWidget,
   },
   {
     id: "qs-escalations",
@@ -183,6 +175,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: TrainingUpdatesTile,
     Full: TrainingUpdatesWidget,
+  },
+  {
+    id: "meeting-notes",
+    title: "1:1 Notes",
+    description: "Manager meeting summaries, shared notes, and personal action items",
+    icon: IconNotes,
+    iconColor: "grape",
+    tileSize: "sm",
+    Tile: MeetingNotesTile,
+    Full: MeetingNotesWidget,
   },
   {
     id: "escalation-email",
@@ -248,8 +250,8 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "zoom-call-metrics",
-    title: "Zoom Call Metrics (Test)",
-    description: "Jan–Apr 2026 inbound call data pulled live from Zoom Phone API",
+    title: "Zoom Call Metrics",
+    description: "May 2026 Mobility + Network queue call data",
     icon: IconPhone,
     iconColor: "green",
     tileSize: "sm",

@@ -13,6 +13,58 @@ export const breaks = pgTable("breaks", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const break_schedules = pgTable("break_schedules", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  schedule_type: text("schedule_type").notNull(), // "fixed" | "override"
+  schedule_date: text("schedule_date"), // YYYY-MM-DD for override rows, null for fixed rows
+  start_time: text("start_time").notNull(), // HH:MM
+  end_time: text("end_time").notNull(),   // HH:MM
+  updated_by: text("updated_by"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const reminder_events = pgTable("reminder_events", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  reminder_type: text("reminder_type").notNull(),
+  dedupe_key: text("dedupe_key").notNull(),
+  sent_at: text("sent_at").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const one_on_one_notes = pgTable("one_on_one_notes", {
+  id: serial("id").primaryKey(),
+  manager_name: text("manager_name").notNull(),
+  employee_name: text("employee_name").notNull(),
+  title: text("title").notNull(),
+  meeting_date: text("meeting_date"),
+  source_type: text("source_type").notNull(), // gmail_gemini | pasted | manual
+  source_message_id: text("source_message_id"),
+  source_subject: text("source_subject"),
+  source_excerpt: text("source_excerpt"),
+  source_body: text("source_body"),
+  summary_markdown: text("summary_markdown").notNull(),
+  discussion_points_json: text("discussion_points_json"),
+  manager_action_items_json: text("manager_action_items_json"),
+  employee_action_items_json: text("employee_action_items_json"),
+  status: text("status").notNull(), // draft | shared
+  shared_at: text("shared_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const personal_action_items = pgTable("personal_action_items", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  note_id: integer("note_id"),
+  title: text("title").notNull(),
+  details: text("details"),
+  status: text("status").notNull(), // open | in_progress | done
+  due_date: text("due_date"),
+  created_by: text("created_by").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const ticket_summaries = pgTable("ticket_summaries", {
   id: serial("id").primaryKey(),
   file_name: text("file_name").notNull(),
@@ -198,6 +250,20 @@ export const user_sessions = pgTable("user_sessions", {
   sign_in_method: text("sign_in_method").notNull(), // "google" | "dev"
   picture: text("picture"),                  // Google profile picture URL
   last_sign_in: timestamp("last_sign_in").defaultNow().notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const google_account_tokens = pgTable("google_account_tokens", {
+  id: serial("id").primaryKey(),
+  google_sub: text("google_sub").notNull(),
+  email: text("email").notNull(),
+  name: text("name"),
+  access_token: text("access_token"),
+  refresh_token: text("refresh_token"),
+  token_type: text("token_type"),
+  granted_scopes: text("granted_scopes"),
+  expires_at: text("expires_at"),
+  updated_at: text("updated_at").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

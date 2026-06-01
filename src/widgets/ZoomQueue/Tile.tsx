@@ -16,8 +16,8 @@ export function ZoomQueueTile({ onExpand }: Props) {
 
   return (
     <WidgetTile
-      title="Zoom Queue"
-      description="Live queue availability"
+      title="Team Availability"
+      description="Queue availability + break / meeting status"
       icon={IconHeadset}
       iconColor="blue"
       status={

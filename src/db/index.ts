@@ -103,6 +103,10 @@ function tableClient<T>(name: string): TableClient<T> {
 // Row-type aliases — derived from the Drizzle schema so widgets keep
 // type safety without importing drizzle-orm directly.
 type BreakRow = typeof schema.breaks.$inferSelect;
+type BreakScheduleRow = typeof schema.break_schedules.$inferSelect;
+type ReminderEventRow = typeof schema.reminder_events.$inferSelect;
+type OneOnOneNoteRow = typeof schema.one_on_one_notes.$inferSelect;
+type PersonalActionItemRow = typeof schema.personal_action_items.$inferSelect;
 type TicketSummaryRow = typeof schema.ticket_summaries.$inferSelect;
 type EscalationDraftRow = typeof schema.escalation_drafts.$inferSelect;
 type ShiftHandoverRow = typeof schema.shift_handovers.$inferSelect;
@@ -114,6 +118,10 @@ type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
+  break_schedules: tableClient<BreakScheduleRow>("break_schedules"),
+  reminder_events: tableClient<ReminderEventRow>("reminder_events"),
+  one_on_one_notes: tableClient<OneOnOneNoteRow>("one_on_one_notes"),
+  personal_action_items: tableClient<PersonalActionItemRow>("personal_action_items"),
   ticket_summaries: tableClient<TicketSummaryRow>("ticket_summaries"),
   escalation_drafts: tableClient<EscalationDraftRow>("escalation_drafts"),
   shift_handovers: tableClient<ShiftHandoverRow>("shift_handovers"),
