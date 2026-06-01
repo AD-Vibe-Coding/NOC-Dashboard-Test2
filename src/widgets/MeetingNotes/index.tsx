@@ -4,7 +4,6 @@ import {
   ActionIcon,
   Alert,
   Badge,
-  Box,
   Button,
   Card,
   Divider,
@@ -445,6 +444,35 @@ export function MeetingNotesWidget() {
     void load();
   }, [identity?.name, isManager]);
 
+  useEffect(() => {
+    if (!contextMenu) return;
+
+    const handlePointerDown = (event: PointerEvent | MouseEvent) => {
+      const target = event.target;
+      if (contextMenuRef.current && target instanceof Node && !contextMenuRef.current.contains(target)) {
+        setContextMenu(null);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        setContextMenu(null);
+      }
+    };
+
+    window.addEventListener("pointerdown", handlePointerDown, true);
+    window.addEventListener("mousedown", handlePointerDown, true);
+    window.addEventListener("keydown", handleKeyDown, true);
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown, true);
+      window.removeEventListener("mousedown", handlePointerDown, true);
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [contextMenu]);
+
   const managerOwnedNotes = useMemo(() => {
     if (!identity?.name) return [] as NormalizedNote[];
     return notes.filter((note) => note.manager_name === identity.name);
@@ -602,19 +630,6 @@ export function MeetingNotesWidget() {
   const renamingSection = useMemo(() => sectionRecords.find((section) => section.key === renameSectionKey) ?? null, [sectionRecords, renameSectionKey]);
   const movingSection = useMemo(() => sectionRecords.find((section) => section.key === moveSectionKey) ?? null, [sectionRecords, moveSectionKey]);
   const contextMenuSection = useMemo(() => sectionRecords.find((section) => section.key === contextMenu?.sectionKey) ?? null, [sectionRecords, contextMenu]);
-  const contextMenuPosition = useMemo(() => {
-    if (!contextMenu) return null;
-    const menuWidth = 256;
-    const menuHeight = contextMenu.type === "section" ? 240 : 184;
-    const padding = 12;
-    if (typeof window === "undefined") {
-      return { left: contextMenu.x, top: contextMenu.y };
-    }
-    return {
-      left: Math.max(padding, Math.min(contextMenu.x, window.innerWidth - menuWidth - padding)),
-      top: Math.max(padding, Math.min(contextMenu.y, window.innerHeight - menuHeight - padding)),
-    };
-  }, [contextMenu]);
   const pageList = useMemo(() => activeSection?.notes ?? [], [activeSection]);
 
   useEffect(() => {
@@ -1702,8 +1717,15 @@ export function MeetingNotesWidget() {
                     />
                   ) : (
                     <>
-                      <Text fw={700} size="sm" truncate>{node.label}</Text>
-                      <Text size="xs" c="dimmed">{node.notes.length} pages{node.children.length > 0 ? ` · ${node.children.length} subfolders` : ""}</Text>
+                      <Text fw={600} size="sm" truncate>{node.label}</Text>
+                      <Group gap={6}>
+                        <Text size="xs" c="dimmed">{node.notes.length} {node.notes.length === 1 ? "page" : "pages"}</Text>
+                        {node.notes.length > 0 && (() => {
+                          const openActions = tasks.filter(t => t.created_by === identity?.name && t.status !== "done" && (t.section_name === node.fullLabel || t.section_name === node.label));
+                          if (openActions.length === 0) return null;
+                          return <Badge size="xs" variant="light" color="yellow">{openActions.length} open</Badge>;
+                        })()}
+                      </Group>
                     </>
                   )}
                 </div>
@@ -1803,57 +1825,24 @@ export function MeetingNotesWidget() {
           boxShadow: active ? "inset 0 0 0 1px rgba(0, 128, 166, 0.1)" : undefined,
         }}
       >
-        <Stack gap={8}>
-          <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
-            <Group gap="sm" wrap="nowrap" align="flex-start" style={{ flex: 1, minWidth: 0 }}>
-              <ThemeIcon size={34} radius="md" variant={active ? "filled" : "light"} color={notebookColor}>
-                <IconClipboardText size={16} />
-              </ThemeIcon>
-              <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-                <Text fw={700} size="sm" truncate>{note.title}</Text>
-                <Text size="xs" c="dimmed" lineClamp={2}>{note.summary_markdown || "No summary yet."}</Text>
-              </Stack>
+        <Group gap="sm" wrap="nowrap" align="flex-start">
+          <ThemeIcon size={30} radius="md" variant={active ? "filled" : "light"} color={notebookColor} style={{ flexShrink: 0, marginTop: 2 }}>
+            <IconClipboardText size={14} />
+          </ThemeIcon>
+          <Stack gap={3} style={{ flex: 1, minWidth: 0 }}>
+            <Group justify="space-between" wrap="nowrap" gap="xs">
+              <Text fw={600} size="sm" truncate style={{ flex: 1 }}>{note.title}</Text>
+              <Text size="xs" c="dimmed" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>{formatDate(note.meeting_date)}</Text>
             </Group>
-            <Badge variant="light" color={notebookColor}>{formatDate(note.meeting_date)}</Badge>
-          </Group>
-
-          <Group gap={6}>
-            <Badge variant="light" color={notebookColor}>{note.parent_note_id ? "Subpage" : "Page"}</Badge>
-            {note.is_archived && <Badge variant="light" color="gray">Archived</Badge>}
-            <Badge variant="dot" color="gray">{discussionCount} discussion points</Badge>
-            <Badge variant="dot" color="gray">{actionCount} actions</Badge>
-          </Group>
-
-          <Group justify="space-between" align="center" gap="xs">
-            <Text size="xs" c="dimmed" truncate>{note.section_name}</Text>
-            <Group gap={4}>
-              <Button
-                size="compact-xs"
-                variant="subtle"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setSelectedPageId(note.id);
-                  populateComposer(note);
-                  setOpenComposer(true);
-                }}
-              >
-                Edit
-              </Button>
-              <Button
-                size="compact-xs"
-                variant="subtle"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setSelectedPageId(note.id);
-                  setMoveDialogNoteId(note.id);
-                  setMoveTargetSectionKey(`${note.notebook_group}:${note.section_name}`);
-                }}
-              >
-                Move
-              </Button>
+            <Text size="xs" c="dimmed" lineClamp={1}>{note.summary_markdown || "No summary yet."}</Text>
+            <Group gap={6} mt={2}>
+              {note.is_archived && <Badge size="xs" variant="light" color="gray">Archived</Badge>}
+              {note.parent_note_id && <Badge size="xs" variant="dot" color={notebookColor}>Subpage</Badge>}
+              {discussionCount > 0 && <Text size="xs" c="dimmed">{discussionCount} topics</Text>}
+              {actionCount > 0 && <Badge size="xs" variant="light" color="yellow">{actionCount} actions</Badge>}
             </Group>
-          </Group>
-        </Stack>
+          </Stack>
+        </Group>
       </Card>
     );
   }
@@ -1866,15 +1855,15 @@ export function MeetingNotesWidget() {
 
   return (
     <WidgetFrame
-      title="Meeting Notes Notebook"
-      subtitle={isManager ? "OneNote-style workspace for 1:1s, management meetings, and nested pages" : "Shared notebook pages and personal follow-up tasks"}
+      title="Meeting Notes"
+      subtitle={isManager ? `${managerOwnedNotes.length} pages · ${tasks.filter(t => t.created_by === identity?.name && t.status !== "done").length} open actions` : "Your shared notes and follow-up tasks"}
       icon={IconNotes}
       iconColor="grape"
       loading={loading}
       onRefresh={load}
       headerActions={isManager ? (
         <Group gap="xs">
-          <Button size="xs" variant="light" color="grape" leftSection={<IconMailSpark size={14} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); void loadGmailNotes(); }} loading={gmailLoading}>Sync Gmail</Button>
+          <Button size="xs" variant="subtle" color="dimmed" leftSection={<IconMailSpark size={14} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); void loadGmailNotes(); }} loading={gmailLoading}>Sync Gmail</Button>
           <Button size="xs" variant="filled" color="grape" leftSection={<IconPlus size={14} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); }}>New page</Button>
         </Group>
       ) : undefined}
@@ -1894,157 +1883,154 @@ export function MeetingNotesWidget() {
                 { value: "actions", label: "Action center" },
               ]}
             />
-            <SimpleGrid cols={{ base: 1, md: 4 }} spacing="md">
-              <Card withBorder radius="lg" p="md"><Group justify="space-between"><Text fw={700}>Individual pages</Text><Badge variant="light" color="grape">{individualCount}</Badge></Group></Card>
-              <Card withBorder radius="lg" p="md"><Group justify="space-between"><Text fw={700}>Management pages</Text><Badge variant="light" color="blue">{managementCount}</Badge></Group></Card>
-              <Card
-                withBorder
-                radius="lg"
-                p="md"
-                onClick={() => {
-                  const firstOtherKey = otherSections[0]?.key ?? null;
-                  if (firstOtherKey) setActiveSectionKey(firstOtherKey);
-                }}
-                style={{ cursor: otherSections.length > 0 ? "pointer" : "default" }}
-              >
-                <Group justify="space-between">
-                  <Text fw={700}>Other pages</Text>
-                  <Badge variant="light" color="orange">{otherCount}</Badge>
+            <Card withBorder radius="lg" p="sm">
+              <Group gap="xl" wrap="wrap">
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="grape"><IconUser size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">1:1 pages</Text>
+                    <Text fw={700} size="sm">{individualCount}</Text>
+                  </Stack>
                 </Group>
-              </Card>
-              <Card withBorder radius="lg" p="md"><Group justify="space-between"><Text fw={700}>Archived pages</Text><Badge variant="light" color="gray">{archivedCount}</Badge></Group></Card>
-            </SimpleGrid>
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="blue"><IconUsersGroup size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Management</Text>
+                    <Text fw={700} size="sm">{managementCount}</Text>
+                  </Stack>
+                </Group>
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="orange"><IconBook size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Other</Text>
+                    <Text fw={700} size="sm">{otherCount}</Text>
+                  </Stack>
+                </Group>
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="gray"><IconClipboardText size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Archived</Text>
+                    <Text fw={700} size="sm">{archivedCount}</Text>
+                  </Stack>
+                </Group>
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="yellow"><IconChecklist size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Open actions</Text>
+                    <Text fw={700} size="sm">{tasks.filter(t => t.created_by === identity?.name && t.status !== "done").length}</Text>
+                  </Stack>
+                </Group>
+                <Group gap="xs">
+                  <ThemeIcon size={28} radius="md" variant="light" color="teal"><IconFolders size={14} /></ThemeIcon>
+                  <Stack gap={0}>
+                    <Text size="xs" c="dimmed">Sections</Text>
+                    <Text fw={700} size="sm">{sectionRecords.length}</Text>
+                  </Stack>
+                </Group>
+              </Group>
+            </Card>
 
             {managerView === "notebook" ? (
             <Stack gap="md">
-              <Card
-                withBorder
-                radius="xl"
-                p="lg"
-                style={{
-                  background: "linear-gradient(180deg, rgba(0, 96, 128, 0.12) 0%, rgba(0, 96, 128, 0.04) 100%)",
-                  borderColor: "rgba(0, 128, 166, 0.22)",
-                }}
-              >
-                <Group justify="space-between" align="flex-start" gap="md">
-                  <Group gap="md" align="flex-start" wrap="nowrap">
-                    <ThemeIcon size={42} radius="xl" variant="light" color="grape">
-                      <IconFolders size={22} />
-                    </ThemeIcon>
-                    <Stack gap={4}>
-                      <Text fw={800} size="lg">Notebook workspace</Text>
-                      <Text size="sm" c="dimmed" maw={720}>
-                        Organize sections, browse pages, and review meeting details in one focused workspace. Every folder now has proper actions for creating subfolders, pinning, moving, and deleting.
-                      </Text>
-                    </Stack>
-                  </Group>
-                  <Group gap="xs">
-                    <Badge variant="light" color="grape">{sectionRecords.length} sections</Badge>
-                    <Badge variant="light" color="blue">{pageList.length} pages</Badge>
-                  </Group>
-                </Group>
-              </Card>
-
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, 340px) minmax(320px, 380px) minmax(0, 1fr)", gap: 18, alignItems: "start" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, 320px) minmax(300px, 360px) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
                 <Card withBorder radius="xl" p="md">
-                  <Stack gap="md">
-                    <Group justify="space-between" align="flex-start">
-                      <Stack gap={2}>
-                        <Text fw={800}>Notebook sections</Text>
-                        <Text size="sm" c="dimmed">Browse notebooks by category and pin important folders.</Text>
-                      </Stack>
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="center">
+                      <Text fw={700} size="sm">Sections</Text>
                       <Button
-                        size="sm"
+                        size="xs"
                         radius="md"
                         variant="light"
-                        leftSection={<IconPlus size={14} />}
+                        leftSection={<IconPlus size={12} />}
                         onClick={() => { setCreateSectionGroup("individual"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}
                       >
-                        New section
+                        New
                       </Button>
                     </Group>
 
                     <TextInput
                       value={search}
                       onChange={(e) => setSearch(e.currentTarget.value)}
-                      placeholder="Search notes, sections, or content"
-                      leftSection={<IconSearch size={16} />}
+                      placeholder="Search sections or pages…"
+                      leftSection={<IconSearch size={14} />}
                       radius="md"
+                      size="sm"
                     />
 
                     <Accordion multiple value={accordionValues} onChange={setAccordionValues} chevronPosition="right" variant="separated" radius="md">
-                      <Accordion.Item value="favorites">
-                        <Accordion.Control icon={<IconStar size={16} />}>Favorites</Accordion.Control>
-                        <Accordion.Panel>
-                          <Stack gap="xs">
-                            {favoriteSections.length === 0 ? (
-                              <Card withBorder radius="lg" p="md" bg="transparent">
-                                <Text size="sm" c="dimmed">Pin your most-used sections to keep them at the top.</Text>
-                              </Card>
-                            ) : favoriteSections.map((section) => (
-                              <Card key={section.key} withBorder radius="lg" p="sm" style={{ cursor: "pointer", background: activeSectionKey === section.key ? "rgba(0, 96, 128, 0.12)" : undefined, borderColor: activeSectionKey === section.key ? "rgba(0, 128, 166, 0.45)" : undefined }} onClick={() => setActiveSectionKey(section.key)}>
-                                <Group justify="space-between" wrap="nowrap" align="flex-start">
-                                  <Group gap="sm" wrap="nowrap" align="flex-start" style={{ flex: 1 }}>
-                                    <ThemeIcon size="md" radius="md" variant="light" color="yellow"><IconStarFilled size={14} /></ThemeIcon>
-                                    <div style={{ flex: 1 }}>
-                                      <Text fw={700} size="sm">{section.label}</Text>
-                                      <Text size="xs" c="dimmed">{section.notes.length} pages</Text>
-                                    </div>
+                      {favoriteSections.length > 0 && (
+                        <Accordion.Item value="favorites">
+                          <Accordion.Control icon={<IconStar size={14} />}><Text size="sm">Pinned</Text></Accordion.Control>
+                          <Accordion.Panel>
+                            <Stack gap="xs">
+                              {favoriteSections.map((section) => (
+                                <Card key={section.key} withBorder radius="md" p="xs" style={{ cursor: "pointer", background: activeSectionKey === section.key ? "rgba(0, 96, 128, 0.12)" : undefined, borderColor: activeSectionKey === section.key ? "rgba(0, 128, 166, 0.45)" : undefined }} onClick={() => setActiveSectionKey(section.key)}>
+                                  <Group justify="space-between" wrap="nowrap">
+                                    <Group gap="xs" wrap="nowrap">
+                                      <ThemeIcon size={22} radius="sm" variant="light" color="yellow"><IconStarFilled size={11} /></ThemeIcon>
+                                      <div>
+                                        <Text fw={600} size="xs">{section.label}</Text>
+                                        <Text size="xs" c="dimmed">{section.notes.length} pages</Text>
+                                      </div>
+                                    </Group>
+                                    <ActionIcon size="xs" variant="subtle" color="yellow" onClick={(e) => { e.stopPropagation(); void toggleFavoriteSection(section); }}>
+                                      <IconStarFilled size={11} />
+                                    </ActionIcon>
                                   </Group>
-                                  <ActionIcon variant="subtle" color="yellow" onClick={(e) => { e.stopPropagation(); void toggleFavoriteSection(section); }}>
-                                    <IconStarFilled size={16} />
-                                  </ActionIcon>
-                                </Group>
-                              </Card>
-                            ))}
-                          </Stack>
-                        </Accordion.Panel>
-                      </Accordion.Item>
+                                </Card>
+                              ))}
+                            </Stack>
+                          </Accordion.Panel>
+                        </Accordion.Item>
+                      )}
 
                       <Accordion.Item value="individual">
-                        <Accordion.Control icon={<IconUser size={16} />}>Individual sections</Accordion.Control>
+                        <Accordion.Control icon={<IconUser size={14} />}>
+                          <Group justify="space-between" wrap="nowrap" pr="xs">
+                            <Text size="sm">1:1 sections</Text>
+                            <Badge size="xs" variant="light" color="grape">{individualTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
+                          </Group>
+                        </Accordion.Control>
                         <Accordion.Panel>
-                          <Stack gap="sm">
-                            <Group justify="space-between">
-                              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Employee folders</Text>
-                              <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={12} />} onClick={() => { setCreateSectionGroup("individual"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
-                            </Group>
-                            <Divider />
-                            <ScrollArea.Autosize mah={300} offsetScrollbars>
+                          <Stack gap="xs">
+                            <ScrollArea.Autosize mah={320} offsetScrollbars>
                               <Stack gap="xs">{renderSectionTree(individualTree)}</Stack>
                             </ScrollArea.Autosize>
+                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("individual"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
                           </Stack>
                         </Accordion.Panel>
                       </Accordion.Item>
 
                       <Accordion.Item value="management">
-                        <Accordion.Control icon={<IconUsersGroup size={16} />}>Management sections</Accordion.Control>
+                        <Accordion.Control icon={<IconUsersGroup size={14} />}>
+                          <Group justify="space-between" wrap="nowrap" pr="xs">
+                            <Text size="sm">Management</Text>
+                            <Badge size="xs" variant="light" color="blue">{managementTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
+                          </Group>
+                        </Accordion.Control>
                         <Accordion.Panel>
-                          <Stack gap="sm">
-                            <Group justify="space-between">
-                              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Leadership folders</Text>
-                              <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={12} />} onClick={() => { setCreateSectionGroup("management"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
-                            </Group>
-                            <Divider />
-                            <ScrollArea.Autosize mah={300} offsetScrollbars>
+                          <Stack gap="xs">
+                            <ScrollArea.Autosize mah={320} offsetScrollbars>
                               <Stack gap="xs">{renderSectionTree(managementTree)}</Stack>
                             </ScrollArea.Autosize>
+                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("management"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
                           </Stack>
                         </Accordion.Panel>
                       </Accordion.Item>
 
                       <Accordion.Item value="other">
-                        <Accordion.Control icon={<IconBook size={16} />}>Other sections</Accordion.Control>
+                        <Accordion.Control icon={<IconBook size={14} />}>
+                          <Group justify="space-between" wrap="nowrap" pr="xs">
+                            <Text size="sm">Other</Text>
+                            <Badge size="xs" variant="light" color="orange">{otherTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
+                          </Group>
+                        </Accordion.Control>
                         <Accordion.Panel>
-                          <Stack gap="sm">
-                            <Group justify="space-between">
-                              <Text size="xs" tt="uppercase" fw={700} c="dimmed">Reference folders</Text>
-                              <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={12} />} onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
-                            </Group>
-                            <Divider />
+                          <Stack gap="xs">
                             <ScrollArea.Autosize mah={260} offsetScrollbars>
                               <Stack gap="xs">{renderSectionTree(otherTree)}</Stack>
                             </ScrollArea.Autosize>
+                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
                           </Stack>
                         </Accordion.Panel>
                       </Accordion.Item>
@@ -2077,54 +2063,68 @@ export function MeetingNotesWidget() {
                 </Card>
 
                 <Card withBorder radius="xl" p="md">
-                  <Stack gap="md">
-                    <Group justify="space-between" align="flex-start">
-                      <Stack gap={2}>
-                        <Text fw={800}>{pagePanelTitle}</Text>
-                        <Text size="sm" c="dimmed">Pages are grouped by the selected section and shown as readable cards.</Text>
-                      </Stack>
-                      <Badge variant="light" size="lg">{pageList.length}</Badge>
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="center">
+                      <Text fw={700} size="sm" truncate style={{ maxWidth: 220 }}>{pagePanelTitle}</Text>
+                      {pageList.length > 0 && <Badge variant="light" size="sm">{pageList.length}</Badge>}
                     </Group>
-                    <ScrollArea.Autosize mah={640} offsetScrollbars>
-                      <Stack gap="sm">
-                        {visiblePageList.length === 0 ? (
+                    <ScrollArea.Autosize mah={660} offsetScrollbars>
+                      <Stack gap="xs">
+                        {!activeSection && !search.trim() ? (
+                          <Stack gap="xs">
+                            <Text size="xs" c="dimmed" tt="uppercase" fw={600} px={2}>Recent pages</Text>
+                            {[...managerOwnedNotes]
+                              .filter(n => !n.is_archived)
+                              .sort((a, b) => new Date(b.meeting_date ?? b.created_at ?? 0).getTime() - new Date(a.meeting_date ?? a.created_at ?? 0).getTime())
+                              .slice(0, 7)
+                              .map((note) => renderPageNode(note))}
+                          </Stack>
+                        ) : visiblePageList.length === 0 ? (
                           <Card withBorder radius="lg" p="lg" bg="transparent">
-                            <Text size="sm" c="dimmed">No pages match this section yet.</Text>
+                            <Stack align="center" gap="xs" py="sm">
+                              <ThemeIcon size={32} radius="md" variant="light" color="gray"><IconNotes size={16} /></ThemeIcon>
+                              <Text size="sm" c="dimmed" ta="center">No pages in this section yet.</Text>
+                              <Button size="xs" variant="light" color="grape" leftSection={<IconPlus size={12} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); }}>Add a page</Button>
+                            </Stack>
                           </Card>
                         ) : visiblePageList.map((note) => renderPageNode(note))}
-                        {pageList.length > visiblePageList.length && <Text size="xs" c="dimmed">Showing the first {visiblePageList.length} pages for stability.</Text>}
+                        {pageList.length > visiblePageList.length && <Text size="xs" c="dimmed" ta="center">Showing {visiblePageList.length} of {pageList.length}</Text>}
                       </Stack>
                     </ScrollArea.Autosize>
                   </Stack>
                 </Card>
 
-                <Stack gap="md">
+                <Stack gap="sm">
                   {selectedNote ? (
                     <>
-                      <Card withBorder radius="xl" p="md">
-                        <Group justify="space-between" align="center" gap="md">
-                          <Stack gap={2}>
-                            <Text fw={800}>Page details</Text>
-                            <Text size="sm" c="dimmed">Review the summary, action items, and note metadata.</Text>
+                      <Card withBorder radius="xl" p="sm">
+                        <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
+                          <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
+                            <Text fw={700} size="sm" truncate>{selectedNote.title}</Text>
+                            <Group gap={6}>
+                              <Badge size="xs" variant="light" color={selectedNote.notebook_group === "management" ? "blue" : selectedNote.notebook_group === "other" ? "orange" : "grape"}>{selectedNote.section_name}</Badge>
+                              {selectedNote.is_archived && <Badge size="xs" variant="light" color="gray">Archived</Badge>}
+                              {selectedNote.meeting_date && <Text size="xs" c="dimmed">{formatDate(selectedNote.meeting_date)}</Text>}
+                            </Group>
                           </Stack>
-                          <Group gap="xs">
-                            <Button size="sm" radius="md" variant="light" onClick={() => { populateComposer(selectedNote); setOpenComposer(true); }}>Edit</Button>
-                            <Button size="sm" radius="md" variant="light" onClick={() => { populateComposer(selectedNote, true); setOpenComposer(true); }}>New subpage</Button>
-                            <Button size="sm" radius="md" variant="subtle" color="gray" onClick={() => void archiveNote(selectedNote, !selectedNote.is_archived)}>{selectedNote.is_archived ? "Restore" : "Archive"}</Button>
-                            <ActionIcon color="red" variant="subtle" onClick={() => void deleteNote(selectedNote)}><IconTrash size={16} /></ActionIcon>
+                          <Group gap={4} wrap="nowrap">
+                            <Button size="xs" radius="md" variant="light" onClick={() => { populateComposer(selectedNote); setOpenComposer(true); }}>Edit</Button>
+                            <Button size="xs" radius="md" variant="subtle" onClick={() => { populateComposer(selectedNote, true); setOpenComposer(true); }}>+ Subpage</Button>
+                            <Button size="xs" radius="md" variant="subtle" color="gray" onClick={() => void archiveNote(selectedNote, !selectedNote.is_archived)}>{selectedNote.is_archived ? "Restore" : "Archive"}</Button>
+                            <ActionIcon size="sm" color="red" variant="subtle" onClick={() => void deleteNote(selectedNote)}><IconTrash size={14} /></ActionIcon>
                           </Group>
                         </Group>
                       </Card>
                       <DetailCard note={selectedNote} managerView />
                     </>
                   ) : (
-                    <Card withBorder radius="xl" p="xl">
-                      <Stack gap="sm" align="center" py="xl">
-                        <ThemeIcon size={48} radius="xl" variant="light" color="grape">
-                          <IconNotes size={24} />
+                    <Card withBorder radius="xl" p="xl" style={{ background: "transparent" }}>
+                      <Stack gap="xs" align="center" py="lg">
+                        <ThemeIcon size={40} radius="xl" variant="light" color="grape">
+                          <IconNotes size={20} />
                         </ThemeIcon>
-                        <Text fw={700}>Select a page</Text>
-                        <Text size="sm" c="dimmed" ta="center" maw={340}>Choose a section on the left, then pick a page to inspect its summary and action items.</Text>
+                        <Text fw={600} size="sm">Pick a page to view</Text>
+                        <Text size="xs" c="dimmed" ta="center">Select a section, then click any page card to see its summary and actions here.</Text>
                       </Stack>
                     </Card>
                   )}
@@ -2133,21 +2133,35 @@ export function MeetingNotesWidget() {
             </Stack>
             ) : managerView === "all_notes" ? (
               <Stack gap="md">
-                <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-                  <Select label="Notebook" data={[{ value: "all", label: "All notebooks" }, { value: "individual", label: "Individual" }, { value: "management", label: "Management" }, { value: "other", label: "Other" }]} value={noteGroupFilter} onChange={(value) => setNoteGroupFilter(value || "all")} allowDeselect={false} />
-                  <TextInput label="Find note" value={search} onChange={(e) => setSearch(e.currentTarget.value)} placeholder="Search title, summary, or actions" />
-                </SimpleGrid>
+                <Group gap="sm">
+                  <Select
+                    size="sm"
+                    placeholder="All notebooks"
+                    data={[{ value: "all", label: "All notebooks" }, { value: "individual", label: "1:1 notes" }, { value: "management", label: "Management" }, { value: "other", label: "Other" }]}
+                    value={noteGroupFilter}
+                    onChange={(value) => setNoteGroupFilter(value || "all")}
+                    allowDeselect={false}
+                    style={{ width: 180 }}
+                  />
+                  <TextInput
+                    size="sm"
+                    value={search}
+                    onChange={(e) => setSearch(e.currentTarget.value)}
+                    placeholder="Search notes…"
+                    leftSection={<IconSearch size={14} />}
+                    style={{ flex: 1 }}
+                  />
+                </Group>
                 <Card withBorder radius="lg" p={0}>
                   <Table highlightOnHover horizontalSpacing="md" verticalSpacing="sm">
                     <Table.Thead><Table.Tr><Table.Th>Note</Table.Th><Table.Th>Section</Table.Th><Table.Th>Date</Table.Th><Table.Th>Actions</Table.Th></Table.Tr></Table.Thead>
                     <Table.Tbody>
-                      {filteredAllNotes.length === 0 ? <Table.Tr><Table.Td colSpan={5}><Text size="sm" c="dimmed" ta="center">No notes matched your filters.</Text></Table.Td></Table.Tr> : filteredAllNotes.map((note) => (
+                      {filteredAllNotes.length === 0 ? <Table.Tr><Table.Td colSpan={4}><Text size="sm" c="dimmed" ta="center">No notes matched your filters.</Text></Table.Td></Table.Tr> : filteredAllNotes.map((note) => (
                         <Table.Tr key={note.id}>
-                          <Table.Td><Text fw={600}>{note.title}</Text><Text size="xs" c="dimmed" lineClamp={2}>{note.summary_markdown}</Text></Table.Td>
-                          <Table.Td><Badge variant="light" color={note.notebook_group === "management" ? "blue" : note.notebook_group === "other" ? "orange" : "grape"}>{note.section_name}</Badge></Table.Td>
-                          <Table.Td>{formatDate(note.meeting_date)}</Table.Td>
-                          <Table.Td>{note.source_type}</Table.Td>
-                          <Table.Td><Group gap="xs"><Button size="xs" variant="light" onClick={() => { setManagerView("notebook"); setActiveSectionKey(`${note.notebook_group}:${note.section_name}`); setSelectedPageId(note.id); }}>Open</Button><Button size="xs" variant="light" color="grape" onClick={() => void createTasksFromNote(note)}>Extract tasks</Button></Group></Table.Td>
+                          <Table.Td><Text fw={600} size="sm">{note.title}</Text><Text size="xs" c="dimmed" lineClamp={1}>{note.summary_markdown}</Text></Table.Td>
+                          <Table.Td><Badge variant="light" size="sm" color={note.notebook_group === "management" ? "blue" : note.notebook_group === "other" ? "orange" : "grape"}>{note.section_name}</Badge></Table.Td>
+                          <Table.Td><Text size="sm">{formatDate(note.meeting_date)}</Text></Table.Td>
+                          <Table.Td><Group gap="xs"><Button size="xs" variant="light" onClick={() => { setManagerView("notebook"); setActiveSectionKey(`${note.notebook_group}:${note.section_name}`); setSelectedPageId(note.id); }}>Open</Button><Button size="xs" variant="subtle" color="grape" onClick={() => void createTasksFromNote(note)}>Extract tasks</Button></Group></Table.Td>
                         </Table.Tr>
                       ))}
                     </Table.Tbody>
@@ -2156,26 +2170,78 @@ export function MeetingNotesWidget() {
               </Stack>
             ) : (
               <Stack gap="md">
-                <SimpleGrid cols={{ base: 1, md: 5 }} spacing="sm">
-                  <Select label="Owner" data={[{ value: "all", label: "All owners" }, ...Array.from(new Set(managerTaskRows.map((task) => task.owner_name ?? task.employee_name))).filter(Boolean).map((name) => ({ value: name, label: name }))]} value={taskOwnerFilter} onChange={(value) => setTaskOwnerFilter(value || "all")} searchable allowDeselect={false} />
-                  <Select label="Status" data={[{ value: "all", label: "All statuses" }, ...TASK_STATUS_OPTIONS]} value={taskStatusFilter} onChange={(value) => setTaskStatusFilter(value || "all")} allowDeselect={false} />
-                  <Select label="Priority" data={[{ value: "all", label: "All priorities" }, ...TASK_PRIORITY_OPTIONS]} value={taskPriorityFilter} onChange={(value) => setTaskPriorityFilter(value || "all")} allowDeselect={false} />
-                  <Select label="Section" data={[{ value: "all", label: "All sections" }, ...Array.from(new Set(managerTaskRows.map((task) => task.section_name ?? ""))).filter(Boolean).map((name) => ({ value: name, label: name }))]} value={taskSectionFilter} onChange={(value) => setTaskSectionFilter(value || "all")} searchable allowDeselect={false} />
-                  <TextInput label="Search tasks" value={search} onChange={(e) => setSearch(e.currentTarget.value)} placeholder="Search tasks" />
-                </SimpleGrid>
+                <Group gap="sm" wrap="wrap">
+                  <Select
+                    size="sm"
+                    placeholder="All owners"
+                    data={[{ value: "all", label: "All owners" }, ...Array.from(new Set(managerTaskRows.map((task) => task.owner_name ?? task.employee_name))).filter(Boolean).map((name) => ({ value: name, label: name }))]}
+                    value={taskOwnerFilter}
+                    onChange={(value) => setTaskOwnerFilter(value || "all")}
+                    searchable
+                    allowDeselect={false}
+                    style={{ width: 160 }}
+                  />
+                  <Select
+                    size="sm"
+                    placeholder="All statuses"
+                    data={[{ value: "all", label: "All statuses" }, ...TASK_STATUS_OPTIONS]}
+                    value={taskStatusFilter}
+                    onChange={(value) => setTaskStatusFilter(value || "all")}
+                    allowDeselect={false}
+                    style={{ width: 150 }}
+                  />
+                  <Select
+                    size="sm"
+                    placeholder="All priorities"
+                    data={[{ value: "all", label: "All priorities" }, ...TASK_PRIORITY_OPTIONS]}
+                    value={taskPriorityFilter}
+                    onChange={(value) => setTaskPriorityFilter(value || "all")}
+                    allowDeselect={false}
+                    style={{ width: 150 }}
+                  />
+                  <TextInput
+                    size="sm"
+                    value={search}
+                    onChange={(e) => setSearch(e.currentTarget.value)}
+                    placeholder="Search tasks…"
+                    leftSection={<IconSearch size={14} />}
+                    style={{ flex: 1, minWidth: 160 }}
+                  />
+                </Group>
                 <Card withBorder radius="lg" p={0}>
                   <Table highlightOnHover horizontalSpacing="md" verticalSpacing="sm">
-                    <Table.Thead><Table.Tr><Table.Th>Task</Table.Th><Table.Th>Owner</Table.Th><Table.Th>Priority</Table.Th><Table.Th>Status</Table.Th><Table.Th>Due</Table.Th><Table.Th>Section</Table.Th></Table.Tr></Table.Thead>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Task</Table.Th>
+                        <Table.Th>Owner</Table.Th>
+                        <Table.Th>Priority</Table.Th>
+                        <Table.Th>Status</Table.Th>
+                        <Table.Th>Due</Table.Th>
+                        <Table.Th>Section</Table.Th>
+                      </Table.Tr>
+                    </Table.Thead>
                     <Table.Tbody>
-                      {filteredManagerTasks.length === 0 ? <Table.Tr><Table.Td colSpan={6}><Text size="sm" c="dimmed" ta="center">No action items matched your filters.</Text></Table.Td></Table.Tr> : filteredManagerTasks.map((task) => (
+                      {filteredManagerTasks.length === 0 ? (
+                        <Table.Tr><Table.Td colSpan={6}><Text size="sm" c="dimmed" ta="center" py="md">No action items matched your filters.</Text></Table.Td></Table.Tr>
+                      ) : filteredManagerTasks.map((task) => (
                         <Table.Tr key={task.id}>
-                          <Table.Td><Text fw={600}>{task.title}</Text><Text size="xs" c="dimmed">{task.details || "—"}</Text></Table.Td>
-                          <Table.Td>{task.owner_name ?? task.employee_name}</Table.Td>
-                          <Table.Td><Select size="xs" data={TASK_PRIORITY_OPTIONS} value={task.priority ?? "medium"} onChange={(value) => void updateTask(task, { priority: value || "medium" })} allowDeselect={false} /></Table.Td>
-                          <Table.Td><Select size="xs" data={TASK_STATUS_OPTIONS} value={task.status} onChange={(value) => void updateTask(task, { status: value || "open" })} allowDeselect={false} /></Table.Td>
-                          <Table.Td><NumberInput size="xs" min={0} max={100} step={25} value={task.progress_percent ?? 0} onChange={(value) => void updateTask(task, { progress_percent: Number(value) || 0 })} suffix="%" /></Table.Td>
-                          <Table.Td><TextInput size="xs" type="date" value={task.due_date ?? ""} onChange={(e) => void updateTask(task, { due_date: e.currentTarget.value || null })} /></Table.Td>
-                          <Table.Td>{task.section_name || "—"}</Table.Td>
+                          <Table.Td>
+                            <Text fw={600} size="sm">{task.title}</Text>
+                            {task.details && <Text size="xs" c="dimmed" lineClamp={1}>{task.details}</Text>}
+                          </Table.Td>
+                          <Table.Td><Text size="sm">{task.owner_name ?? task.employee_name}</Text></Table.Td>
+                          <Table.Td>
+                            <Select size="xs" data={TASK_PRIORITY_OPTIONS} value={task.priority ?? "medium"} onChange={(value) => void updateTask(task, { priority: value || "medium" })} allowDeselect={false} style={{ width: 110 }} />
+                          </Table.Td>
+                          <Table.Td>
+                            <Select size="xs" data={TASK_STATUS_OPTIONS} value={task.status} onChange={(value) => void updateTask(task, { status: value || "open" })} allowDeselect={false} style={{ width: 120 }} />
+                          </Table.Td>
+                          <Table.Td>
+                            <TextInput size="xs" type="date" value={task.due_date ?? ""} onChange={(e) => void updateTask(task, { due_date: e.currentTarget.value || null })} style={{ width: 140 }} />
+                          </Table.Td>
+                          <Table.Td>
+                            {task.section_name ? <Badge variant="light" size="sm" color="gray">{task.section_name}</Badge> : <Text size="xs" c="dimmed">—</Text>}
+                          </Table.Td>
                         </Table.Tr>
                       ))}
                     </Table.Tbody>
@@ -2232,78 +2298,40 @@ export function MeetingNotesWidget() {
         )}
       </Stack>
 
-      {contextMenu && contextMenuPosition && (
-        <>
-          <Box
-            onMouseDown={() => setContextMenu(null)}
-            onClick={() => setContextMenu(null)}
-            style={{
-              position: "fixed",
-              inset: 0,
-              zIndex: 10040,
-              background: "transparent",
-            }}
-          />
-          <Card
-            ref={contextMenuRef}
-            withBorder
-            radius="xl"
-            p={6}
-            style={{
-              position: "fixed",
-              left: contextMenuPosition.left,
-              top: contextMenuPosition.top,
-              width: 256,
-              zIndex: 10050,
-              background: "rgba(17, 24, 39, 0.98)",
-              borderColor: "rgba(148, 163, 184, 0.18)",
-              boxShadow: "0 24px 70px rgba(0,0,0,0.42)",
-              backdropFilter: "blur(14px)",
-            }}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => event.stopPropagation()}
-            onContextMenu={(event) => event.preventDefault()}
-          >
-            <Stack gap={6}>
-              <Text size="xs" tt="uppercase" fw={700} c="dimmed" px="xs" pt={4}>
-                {contextMenu.type === "section" ? "Section actions" : "Area actions"}
-              </Text>
-
-              {contextMenu.type === "section" && contextMenuSection ? (
-                <>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconEdit size={16} />} onClick={() => { setRenameSectionKey(contextMenuSection.key); setRenameSectionName(splitSectionPath(contextMenuSection.label).slice(-1)[0] ?? contextMenuSection.label); setContextMenu(null); }}>
-                    Rename
-                  </Button>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconArrowsRight size={16} />} onClick={() => { setMoveSectionKey(contextMenuSection.key); setMoveSectionTargetParent(null); setMoveSectionOpen(true); setContextMenu(null); }}>
-                    Move
-                  </Button>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconClipboardText size={16} />} onClick={() => { void duplicateSectionFolder(contextMenuSection); setContextMenu(null); }}>
-                    Copy
-                  </Button>
-                  <Divider my={2} color="rgba(148, 163, 184, 0.16)" />
-                  <Text size="xs" tt="uppercase" fw={700} c="dimmed" px="xs" pt={2}>
-                    Danger zone
-                  </Text>
-                  <Button variant="subtle" justify="space-between" fullWidth color="red" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconTrash size={16} />} onClick={() => { void deleteSectionFolder(contextMenuSection); setContextMenu(null); }}>
-                    Delete
-                  </Button>
-                </>
-              ) : contextMenu.type === "area" && contextMenu.areaName ? (
-                <>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconEdit size={16} />} onClick={() => { const next = window.prompt("Rename notebook area", contextMenu.areaName ?? ""); if (next && contextMenu.areaName) void renameArea(contextMenu.areaName, next); setContextMenu(null); }}>
-                    Rename
-                  </Button>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconArrowsRight size={16} />} onClick={() => { const next = window.prompt("Move area into another area (leave blank for Other sections)", ""); if (contextMenu.areaName) void moveArea(contextMenu.areaName, next || null); setContextMenu(null); }}>
-                    Move
-                  </Button>
-                  <Button variant="subtle" justify="space-between" fullWidth color="gray" styles={{ root: { height: 40, borderRadius: 12 }, label: { width: "100%" } }} leftSection={<IconClipboardText size={16} />} onClick={() => { if (contextMenu.areaName) void copyArea(contextMenu.areaName); setContextMenu(null); }}>
-                    Copy
-                  </Button>
-                </>
-              ) : null}
-            </Stack>
-          </Card>
-        </>
+      {contextMenu && (
+        <Card
+          ref={contextMenuRef}
+          withBorder
+          radius="lg"
+          p="xs"
+          style={{
+            position: "fixed",
+            left: Math.min(contextMenu.x, window.innerWidth - 240),
+            top: Math.min(contextMenu.y, window.innerHeight - 220),
+            width: 220,
+            zIndex: 10050,
+            boxShadow: "0 18px 48px rgba(0,0,0,0.35)",
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <Stack gap={4}>
+            {contextMenu.type === "section" && contextMenuSection ? (
+              <>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconEdit size={14} />} onClick={() => { setRenameSectionKey(contextMenuSection.key); setRenameSectionName(splitSectionPath(contextMenuSection.label).slice(-1)[0] ?? contextMenuSection.label); setContextMenu(null); }}>Rename</Button>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconArrowsRight size={14} />} onClick={() => { setMoveSectionKey(contextMenuSection.key); setMoveSectionTargetParent(null); setMoveSectionOpen(true); setContextMenu(null); }}>Move</Button>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconClipboardText size={14} />} onClick={() => void duplicateSectionFolder(contextMenuSection)}>Copy</Button>
+                <Button variant="subtle" justify="flex-start" color="red" leftSection={<IconTrash size={14} />} onClick={() => void deleteSectionFolder(contextMenuSection)}>Delete</Button>
+              </>
+            ) : contextMenu.type === "area" && contextMenu.areaName ? (
+              <>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconEdit size={14} />} onClick={() => { const next = window.prompt("Rename notebook area", contextMenu.areaName ?? ""); if (next && contextMenu.areaName) void renameArea(contextMenu.areaName, next); setContextMenu(null); }}>Rename</Button>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconArrowsRight size={14} />} onClick={() => { const next = window.prompt("Move area into another area (leave blank for Other sections)", ""); void moveArea(contextMenu.areaName!, next || null); setContextMenu(null); }}>Move</Button>
+                <Button variant="subtle" justify="flex-start" leftSection={<IconClipboardText size={14} />} onClick={() => void copyArea(contextMenu.areaName!)}>Copy</Button>
+              </>
+            ) : null}
+          </Stack>
+        </Card>
       )}
 
       <Modal
