@@ -178,8 +178,8 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "meeting-notes",
-    title: "1:1 Notes",
-    description: "Manager meeting summaries, shared notes, and personal action items",
+    title: "Meeting Notes",
+    description: "OneNote-style individual and management meeting notebooks",
     icon: IconNotes,
     iconColor: "grape",
     tileSize: "sm",

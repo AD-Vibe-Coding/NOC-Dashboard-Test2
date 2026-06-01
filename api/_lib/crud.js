@@ -23,6 +23,7 @@ const ALLOWED_TABLES = new Set([
   "break_schedules",
   "reminder_events",
   "one_on_one_notes",
+  "notebook_section_preferences",
   "personal_action_items",
   "ticket_summaries",
   "escalation_drafts",

@@ -48,19 +48,42 @@ export const one_on_one_notes = pgTable("one_on_one_notes", {
   discussion_points_json: text("discussion_points_json"),
   manager_action_items_json: text("manager_action_items_json"),
   employee_action_items_json: text("employee_action_items_json"),
-  status: text("status").notNull(), // draft | shared
+  status: text("status").notNull(), // draft | shared | archived
+  notebook_group: text("notebook_group"), // individual | management
+  section_name: text("section_name"),
+  parent_note_id: integer("parent_note_id"),
+  sort_order: integer("sort_order"),
+  is_favorite: boolean("is_favorite"),
+  is_archived: boolean("is_archived"),
+  archived_at: text("archived_at"),
+  updated_at: text("updated_at"),
   shared_at: text("shared_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const notebook_section_preferences = pgTable("notebook_section_preferences", {
+  id: serial("id").primaryKey(),
+  owner_name: text("owner_name").notNull(),
+  notebook_group: text("notebook_group").notNull(),
+  section_key: text("section_key").notNull(),
+  section_label: text("section_label").notNull(),
+  is_favorite: boolean("is_favorite").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const personal_action_items = pgTable("personal_action_items", {
   id: serial("id").primaryKey(),
   employee_name: text("employee_name").notNull(),
+  owner_name: text("owner_name"),
   note_id: integer("note_id"),
   title: text("title").notNull(),
   details: text("details"),
-  status: text("status").notNull(), // open | in_progress | done
+  status: text("status").notNull(), // open | in_progress | blocked | done
+  priority: text("priority"), // low | medium | high | critical
+  progress_percent: integer("progress_percent"),
   due_date: text("due_date"),
+  section_name: text("section_name"),
+  notebook_group: text("notebook_group"),
   created_by: text("created_by").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });

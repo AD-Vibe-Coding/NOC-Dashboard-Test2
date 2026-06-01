@@ -43,6 +43,7 @@ import { db } from "../../db";
 import { emojiForBreak, formatBreakStartMessage, postSlackMessage } from "../../lib/slack";
 import { formatElapsedIso } from "../../lib/format";
 import { BreakScheduleModal } from "./BreakScheduleModal";
+import { defaultRoleFor } from "../../lib/roles";
 
 export { ZoomQueueTile } from "./Tile";
 
@@ -104,6 +105,12 @@ function normName(n: string) {
 function nowMinutesPacific(): number {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
   return now.getHours() * 60 + now.getMinutes();
+}
+
+function isWithinShiftWindow(nowMin: number, shift: ShiftWindow): boolean {
+  if (shift.end === shift.start) return true;
+  if (shift.end > shift.start) return nowMin >= shift.start && nowMin <= shift.end;
+  return nowMin >= shift.start || nowMin <= shift.end;
 }
 
 function getReminderWindow(shift: ShiftWindow) {
@@ -325,6 +332,15 @@ export function ZoomQueueWidget() {
     }
     return set;
   }, [rosterData]);
+  const nowMinPacific = nowMinutesPacific();
+
+  function isActuallyInShift(name: string, displayName?: string) {
+    const normalizedName = normName(name);
+    const normalizedDisplay = normName(displayName ?? name);
+    const shiftWindow = shiftWindowMap.get(normalizedName) ?? shiftWindowMap.get(normalizedDisplay);
+    if (shiftWindow) return isWithinShiftWindow(nowMinPacific, shiftWindow);
+    return inShiftNowSet.has(normalizedName) || inShiftNowSet.has(normalizedDisplay);
+  }
 
   // Build a map: canonical/normalised name → break_type for anyone currently on break
   const breakMap = new Map<string, string>(
@@ -353,14 +369,11 @@ export function ZoomQueueWidget() {
     const normalizedName = normName(name);
     const displayNormalized = normName(a.display_name);
     const hasBreak = breakMap.has(normalizedName) || breakMap.has(displayNormalized);
-    const isInShiftNow = inShiftNowSet.has(normalizedName) || inShiftNowSet.has(displayNormalized);
-    return a.status !== "in_queue" && isInShiftNow && !hasBreak;
+    return a.status !== "in_queue" && isActuallyInShift(name, a.display_name) && !hasBreak;
   });
   const currentShiftAgents = agents.filter((a) => {
     const name = a.rosterName ?? a.display_name;
-    const normalizedName = normName(name);
-    const displayNormalized = normName(a.display_name);
-    return inShiftNowSet.has(normalizedName) || inShiftNowSet.has(displayNormalized);
+    return isActuallyInShift(name, a.display_name);
   });
   const currentShiftCount = currentShiftAgents.length;
   const pct = currentShiftCount > 0 ? Math.round((inShiftAndInQueue.length / currentShiftCount) * 100) : 0;
@@ -517,7 +530,10 @@ export function ZoomQueueWidget() {
 
             if (!entry.reminded && elapsed >= threshold && !sentReminderKeys.has(breakDedupeKey)) {
               try {
-                await postSlackMessage(`${name} - If you are still on break, please update your status. If not, please turn on the call queue.`, {
+                const reminderText = defaultRoleFor(name) === "manager"
+                  ? `${name} - If you are still on break, please update your status.`
+                  : `${name} - If you are still on break, please update your status. If not, please turn on the call queue.`;
+                await postSlackMessage(reminderText, {
                   username: "Queue Reminder",
                   icon_emoji: ":coffee:",
                 });

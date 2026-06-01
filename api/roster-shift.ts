@@ -327,16 +327,26 @@ export interface ShiftResult {
 
 function findDateColumnIndex(headers: string[], day: ReturnType<typeof dayMetaPST>) {
   const dayNumber = String(Number(day.monthDay.split("/")[1] ?? ""));
+  const normalizedMonthName = day.monthName.toLowerCase();
+  const compactMonthName = normalizedMonthName.replace(/\s+/g, "");
+
   let colIdx = headers.findIndex((h, idx) => {
     if (idx === 0 || !h) return false;
-    const normalized = h.toLowerCase();
+    const normalized = h.toLowerCase().trim();
+    const compact = normalized.replace(/\s+/g, "");
+
     return normalized === day.isoDate.toLowerCase()
-      || normalized.includes(day.monthName.toLowerCase())
+      || normalized === normalizedMonthName
+      || compact === compactMonthName
       || normalized === `${day.dayShort.toLowerCase()} ${day.monthDay.toLowerCase()}`;
   });
 
   if (colIdx < 0) {
-    colIdx = headers.findIndex((h, idx) => idx > 0 && h.trim().startsWith(`${dayNumber}-`));
+    colIdx = headers.findIndex((h, idx) => {
+      if (idx === 0 || !h) return false;
+      const normalized = h.trim().toLowerCase();
+      return normalized === `${dayNumber}-${day.monthName.split(" ")[0].toLowerCase()}`;
+    });
   }
 
   return colIdx;

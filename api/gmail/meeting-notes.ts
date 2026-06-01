@@ -15,11 +15,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const max = Number(req.query?.max ?? 5);
-    const messages = await listGeminiNoteMessages(String(session.email ?? ""), Number.isFinite(max) ? max : 5);
+    const max = Number(req.query?.max ?? 500);
+    const startDate = typeof req.query?.start === "string" ? req.query.start : "2026-04-01";
+    const endDate = typeof req.query?.end === "string" ? req.query.end : "2026-06-01";
+    const messages = await listGeminiNoteMessages(
+      String(session.email ?? ""),
+      Number.isFinite(max) ? max : 500,
+      startDate,
+      endDate,
+    );
     return res.status(200).json({
       label: "gemini-notes",
-      query: "label:gemini-notes",
+      startDate,
+      endDate,
+      query: messages[0]?.labelQuery ?? `label:gemini-notes after:2026/04/01 before:2026/06/02`,
       count: messages.length,
       messages,
     });

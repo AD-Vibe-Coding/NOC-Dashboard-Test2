@@ -1,7 +1,11 @@
 import { supabaseAdmin } from "./supabase-admin.js";
 
-const GMAIL_QUERY = "label:gemini-notes";
+const GMAIL_LABEL_QUERY = "label:gemini-notes";
 const GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+
+function normalizeEmail(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -93,15 +97,17 @@ export async function saveGoogleAccountTokens({ googleSub, email, name, tokens }
 
 export async function upsertGoogleSessionRow({ name, email, picture }) {
   if (!name) return;
-  await supabaseAdmin.from("user_sessions").delete().eq("name", name);
+  const normalizedEmail = normalizeEmail(email);
+  const deleteResult = await supabaseAdmin.from("user_sessions").delete().eq("name", name);
+  if (deleteResult.error) throw new Error(normalizeSupabaseTableError(deleteResult.error, "user_sessions"));
   const { error } = await supabaseAdmin.from("user_sessions").insert({
     name,
-    email: email ?? null,
+    email: normalizedEmail || null,
     sign_in_method: "google",
     picture: picture ?? null,
     last_sign_in: nowIso(),
   });
-  if (error) throw new Error(error.message);
+  if (error) throw new Error(normalizeSupabaseTableError(error, "user_sessions"));
 }
 
 async function refreshAccessToken(row) {
@@ -162,16 +168,43 @@ export async function getValidGoogleAccessToken(email) {
   return refreshAccessToken(data);
 }
 
-export async function listGeminiNoteMessages(email, maxResults = 5) {
+export async function listGeminiNoteMessages(email, maxResults = 5, startDate = null, endDate = null) {
   const accessToken = await getValidGoogleAccessToken(email);
 
-  const listResponse = await fetch(`${GMAIL_BASE}/messages?maxResults=${Math.max(1, Math.min(maxResults, 10))}&q=${encodeURIComponent(GMAIL_QUERY)}`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const listPayload = await listResponse.json().catch(() => ({}));
-  if (!listResponse.ok) throw new Error(listPayload.error?.message || "Failed to query Gmail.");
+  const afterPart = startDate ? ` after:${String(startDate).replaceAll("-", "/")}` : "";
+  const beforeDate = endDate ? new Date(`${endDate}T00:00:00`) : null;
+  if (beforeDate && !Number.isNaN(beforeDate.getTime())) {
+    beforeDate.setDate(beforeDate.getDate() + 1);
+  }
+  const beforePart = beforeDate
+    ? ` before:${beforeDate.toISOString().slice(0, 10).replaceAll("-", "/")}`
+    : "";
+  const query = `${GMAIL_LABEL_QUERY}${afterPart}${beforePart}`.trim();
 
-  const ids = (listPayload.messages ?? []).map((m) => m.id).filter(Boolean);
+  const safeMaxResults = Math.max(1, Math.min(Number(maxResults) || 50, 500));
+  const ids = [];
+  let pageToken = null;
+
+  do {
+    const pageParams = new URLSearchParams({
+      maxResults: String(Math.min(100, safeMaxResults - ids.length || 100)),
+      q: query,
+    });
+    if (pageToken) pageParams.set("pageToken", pageToken);
+
+    const listResponse = await fetch(`${GMAIL_BASE}/messages?${pageParams.toString()}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const listPayload = await listResponse.json().catch(() => ({}));
+    if (!listResponse.ok) throw new Error(listPayload.error?.message || "Failed to query Gmail.");
+
+    for (const message of listPayload.messages ?? []) {
+      if (message?.id) ids.push(message.id);
+      if (ids.length >= safeMaxResults) break;
+    }
+    pageToken = ids.length >= safeMaxResults ? null : (listPayload.nextPageToken ?? null);
+  } while (pageToken);
+
   if (ids.length === 0) return [];
 
   const importedLookup = new Set();
@@ -183,31 +216,43 @@ export async function listGeminiNoteMessages(email, maxResults = 5) {
     if (row.source_message_id) importedLookup.add(row.source_message_id);
   }
 
-  const messages = await Promise.all(ids.map(async (id) => {
-    const detailResponse = await fetch(`${GMAIL_BASE}/messages/${id}?format=full`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const detail = await detailResponse.json().catch(() => ({}));
-    if (!detailResponse.ok) throw new Error(detail.error?.message || `Failed to fetch Gmail message ${id}.`);
+  const messages = [];
+  const batchSize = 8;
 
-    const subject = headerValue(detail, "Subject") ?? "Gemini notes";
-    const from = headerValue(detail, "From");
-    const date = headerValue(detail, "Date");
-    const body = extractBody(detail);
+  for (let index = 0; index < ids.length; index += batchSize) {
+    const batch = ids.slice(index, index + batchSize);
+    const batchMessages = await Promise.all(batch.map(async (id) => {
+      const detailResponse = await fetch(`${GMAIL_BASE}/messages/${id}?format=full`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const detail = await detailResponse.json().catch(() => ({}));
+      if (!detailResponse.ok) throw new Error(detail.error?.message || `Failed to fetch Gmail message ${id}.`);
 
-    return {
-      id,
-      threadId: detail.threadId ?? null,
-      subject,
-      from,
-      date,
-      snippet: String(detail.snippet ?? ""),
-      body,
-      imported: importedLookup.has(id),
-      internalDate: detail.internalDate ? new Date(Number(detail.internalDate)).toISOString() : null,
-      labelQuery: GMAIL_QUERY,
-    };
-  }));
+      const subject = headerValue(detail, "Subject") ?? "Gemini notes";
+      const from = headerValue(detail, "From");
+      const date = headerValue(detail, "Date");
+      const body = extractBody(detail);
 
-  return messages;
+      return {
+        id,
+        threadId: detail.threadId ?? null,
+        subject,
+        from,
+        date,
+        snippet: String(detail.snippet ?? ""),
+        body,
+        imported: importedLookup.has(id),
+        internalDate: detail.internalDate ? new Date(Number(detail.internalDate)).toISOString() : null,
+        labelQuery: query,
+      };
+    }));
+
+    messages.push(...batchMessages);
+  }
+
+  return messages.sort((a, b) => {
+    const aTime = a.internalDate ? new Date(a.internalDate).getTime() : 0;
+    const bTime = b.internalDate ? new Date(b.internalDate).getTime() : 0;
+    return bTime - aTime;
+  });
 }

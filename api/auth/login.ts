@@ -28,10 +28,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "openid email profile",
+    scope: "openid email profile https://www.googleapis.com/auth/gmail.readonly",
     access_type: "offline",
     state,
-    prompt: "select_account",
+    prompt: "consent select_account",
   });
 
   const url = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;

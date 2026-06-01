@@ -97,6 +97,7 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
   const expectedOrigin = typeof window !== "undefined" ? window.location.origin : null;
 
   return await new Promise<void>((resolve, reject) => {
+    let receivedTerminalMessage = false;
     const onMessage = async (event: MessageEvent) => {
       // Hard origin + source gate. Without it, ANY frame on the
       // page (a malicious ad, a sandboxed iframe of another origin
@@ -121,6 +122,7 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
       } | null;
       if (!data || typeof data !== "object") return;
       if (data.type === "appbuilder-oauth-success" && data.provider === providerId) {
+        receivedTerminalMessage = true;
         // Best-effort exchange call: redeems a short-lived HMAC
         // token for a Partitioned session cookie scoped to whatever
         // top-level site this iframe is embedded under. Without
@@ -150,6 +152,7 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
         cleanup();
         resolve();
       } else if (data.type === "appbuilder-oauth-error") {
+        receivedTerminalMessage = true;
         cleanup();
         reject(new Error(data.message ?? data.code ?? "Sign-in failed"));
       }
@@ -157,10 +160,11 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
     const interval = window.setInterval(() => {
       if (popup.closed) {
         cleanup();
-        // The popup may have already posted success; resolving here
-        // is the optimistic path. The caller should refetch
-        // /api/auth/me to confirm.
-        resolve();
+        if (receivedTerminalMessage) {
+          resolve();
+          return;
+        }
+        reject(new Error("Sign-in window closed before Google finished returning a result."));
       }
     }, 500);
     function cleanup() {

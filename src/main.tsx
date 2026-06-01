@@ -58,7 +58,31 @@ const theme = createTheme({
       defaultProps: { radius: "sm" },
     },
     Modal: {
-      defaultProps: { radius: "lg" },
+      defaultProps: { radius: "lg", zIndex: 10000 },
+    },
+    Menu: {
+      defaultProps: { withinPortal: true, zIndex: 10000 },
+    },
+    Popover: {
+      defaultProps: { withinPortal: true, zIndex: 10000 },
+    },
+    Tooltip: {
+      defaultProps: { withinPortal: true, zIndex: 10000 },
+    },
+    Select: {
+      defaultProps: {
+        comboboxProps: { withinPortal: true, zIndex: 10000 },
+      },
+    },
+    MultiSelect: {
+      defaultProps: {
+        comboboxProps: { withinPortal: true, zIndex: 10000 },
+      },
+    },
+    Autocomplete: {
+      defaultProps: {
+        comboboxProps: { withinPortal: true, zIndex: 10000 },
+      },
     },
   },
 });

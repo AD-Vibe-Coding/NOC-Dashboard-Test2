@@ -3,6 +3,7 @@ import { signJwt } from "../_lib/jwt.js";
 import { defaultRoleFor, lookupByEmail } from "../_lib/roles.js";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
 import { encryptAndSign, buildSessionSetCookie } from "./_lib/session.js";
+import { saveGoogleAccountTokens } from "../_lib/google-gmail.js";
 
 /**
  * GET /api/auth/callback?code=XXX&state=YYY
@@ -147,6 +148,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       last_sign_in: new Date().toISOString(),
     });
   } catch { /* non-fatal — user_sessions table may not exist yet */ }
+
+  // Persist Gmail-capable Google tokens for Meeting Notes import.
+  try {
+    await saveGoogleAccountTokens({
+      googleSub: String(userInfo.sub ?? email),
+      email,
+      name,
+      tokens: {
+        access_token: typeof tokenData.access_token === "string" ? tokenData.access_token : undefined,
+        refresh_token: typeof tokenData.refresh_token === "string" ? tokenData.refresh_token : undefined,
+        token_type: typeof tokenData.token_type === "string" ? tokenData.token_type : undefined,
+        scope: typeof tokenData.scope === "string" ? tokenData.scope : undefined,
+        expires_in:
+          typeof tokenData.expires_in === "number"
+            ? tokenData.expires_in
+            : typeof tokenData.expires_in === "string"
+              ? Number(tokenData.expires_in)
+              : undefined,
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "google_token_save_failed";
+    console.error("[auth/callback] google token save failed:", error);
+    res.statusCode = 302;
+    res.setHeader("Location", `/?auth_error=google_token_save_failed&auth_message=${encodeURIComponent(message)}`);
+    res.end();
+    return;
+  }
 
   // Write the new AES-GCM encrypted session cookie so the scaffold's
   // /api/auth/me endpoint (which reads __appbuilder_session) can resolve
