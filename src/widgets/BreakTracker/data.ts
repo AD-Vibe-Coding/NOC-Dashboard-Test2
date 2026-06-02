@@ -42,6 +42,11 @@ export function useBreakData() {
   useEffect(() => {
     if (!ready) return;
     refresh();
+    // Poll every 30 s so the manager's dashboard always sees fresh break state
+    // from other team members' sessions. Without this, the reminder tick reads
+    // stale data and fires queue reminders while someone is still on a break.
+    const id = setInterval(refresh, 30_000);
+    return () => clearInterval(id);
   }, [ready]);
 
   // 1-second tick for live duration counters on active breaks.

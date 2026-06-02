@@ -49,6 +49,9 @@ export const LOCKED_TEAM: TeamMember[] = [
   { name: "Mahalakshmi Samiti", tier: "tier1", team: "noc" },
   // ---- Tier 1 (Mobility) ----
   { name: "Akash Hanvate", tier: "tier1", team: "mobility" },
+  // ---- Group entries ----
+  { name: "Team", tier: "tier1", team: "noc" },
+  { name: "NOC Seniors", tier: "tier1", team: "noc" },
 ];
 
 export const LOCKED_TEAM_NAMES: string[] = LOCKED_TEAM.map((m) => m.name);

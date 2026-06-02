@@ -16,14 +16,21 @@ export interface ShiftWindow {
 }
 
 export interface RosterShiftData {
-  inShiftNow:  string[];
-  allNames:    string[];
+  inShiftNow:   string[];
+  allNames:     string[];
   shiftWindows: ShiftWindow[];
-  strategy:    string;
-  sheetTitle:  string;
-  fetchedAt:   string;
-  rowCount:    number;
-  error?:      string;
+  strategy:     string;
+  sheetTitle:   string;
+  fetchedAt:    string;
+  rowCount:     number;
+  error?:       string;
+  diagnostics?: {
+    currentTimePST: string;
+    currentMinPST:  number;
+    todayLabel:     string;
+    matchedCol:     number;
+    headersPreview: string[];
+  };
 }
 
 const POLL_MS = 5 * 60_000; // 5 minutes
@@ -81,9 +88,10 @@ export function useRosterShift() {
    * Returns true if `name` is currently in shift.
    *
    * Graceful fallback rules:
-   *   - Not configured / error / fallback-all strategy → everyone is "in shift"
-   *   - Empty inShiftNow list → everyone is "in shift" (avoid blank widget)
-   *   - Otherwise: fuzzy match against inShiftNow
+   *   - Still loading → show all
+   *   - Roster not configured / hard error → show all
+   *   - "no-column-match" (roster read OK but date column not found) → show all
+   *   - Strategy worked → only show people in inShiftNow
    */
   function isInShift(name: string): boolean {
     if (!data) return true; // still loading → show all
@@ -92,7 +100,10 @@ export function useRosterShift() {
       data.strategy === "unconfigured" ||
       data.strategy === "error" ||
       data.strategy === "fallback-all-listed" ||
-      data.inShiftNow.length === 0;
+      data.strategy === "no-column-match" ||
+      data.strategy === "published-calendar-no-column" ||
+      data.strategy === "published-csv-unmatched" ||
+      data.strategy === "empty";
     if (unconstrained) return true;
     return data.inShiftNow.some((s) => nameMatch(name, s));
   }

@@ -85,6 +85,7 @@ export const personal_action_items = pgTable("personal_action_items", {
   section_name: text("section_name"),
   notebook_group: text("notebook_group"),
   created_by: text("created_by").notNull(),
+  blocked_by_id: integer("blocked_by_id"), // FK → personal_action_items.id (dependency)
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

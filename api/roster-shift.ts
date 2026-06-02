@@ -18,34 +18,55 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import crypto from "node:crypto";
 
 const SPREADSHEET_ID = "14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4";
-const TARGET_GID     = 1411338244;
-const TARGET_SHEET_TITLE = "May'26";
-const PUBLISHED_CSV_URL = buildPublishedCsvUrl(
-  "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUVf4cK8WTdKH47k61nmsDWmPq2Gxdw4J_j9WHxGoDEXqthtTdQ2zbKYJXa0zY8Q9blbaGm4lZH2c/pub?output=csv",
-  TARGET_GID,
-);
+
+/**
+ * Auto-derive the current month's tab name in Pacific time.
+ * e.g. "Jun'26", "Jul'26", "Aug'26" — no hardcoding, no GID needed.
+ */
+function currentMonthTabName(): string {
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const month = now.toLocaleString("en-US", { month: "short" }); // "Jun"
+  const year2 = String(now.getFullYear()).slice(2);               // "26"
+  return `${month}'${year2}`;                                     // "Jun'26"
+}
+
+const PUBLISHED_CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUVf4cK8WTdKH47k61nmsDWmPq2Gxdw4J_j9WHxGoDEXqthtTdQ2zbKYJXa0zY8Q9blbaGm4lZH2c/pub?output=csv&single=true";
 
 // ── Service-account OAuth2 ────────────────────────────────────────────────────
 
 let _tokenCache: { value: string; expiresAt: number } | null = null;
 
 function normalizeServiceAccountKey(rawKey: string): string {
-  const trimmed = rawKey.trim();
-  const unquoted =
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-      ? trimmed.slice(1, -1)
-      : trimmed;
-
-  const withRealNewlines = unquoted.replace(/\\n/g, "\n").trim();
-
-  if (withRealNewlines.includes("BEGIN PRIVATE KEY") || withRealNewlines.includes("BEGIN RSA PRIVATE KEY")) {
-    return withRealNewlines;
+  // 1. Strip surrounding quotes
+  let key = rawKey.trim();
+  if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+    key = key.slice(1, -1);
   }
 
-  throw new Error(
-    "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY is not a valid PEM private key. Save the full key including BEGIN/END lines, and keep newline escapes as \\n in the secret dialog.",
-  );
+  // 2. Normalise all newline representations → real newlines
+  //    Order matters: handle \\n (double-escaped) before \n (single-escaped)
+  key = key.replace(/\\\\n/g, "\n"); // \\n  →  \n
+  key = key.replace(/\\n/g,   "\n"); // \n   →  real newline
+  key = key.replace(/\r\n/g,  "\n"); // CRLF → LF
+
+  // 3. Validate header presence
+  if (!key.includes("BEGIN PRIVATE KEY") && !key.includes("BEGIN RSA PRIVATE KEY")) {
+    throw new Error(
+      "GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY must be a PEM key. Copy the entire 'private_key' value from the service-account JSON, including the BEGIN/END header lines.",
+    );
+  }
+
+  // 4. Reconstruct PEM with strict 64-char line wrapping.
+  //    This fixes any corruption introduced by storage or copy-paste.
+  const match = key.match(/-----BEGIN ([^-]+)-----\s*([\s\S]+?)\s*-----END [^-]+-----/);
+  if (match) {
+    const keyType = match[1]; // e.g. "PRIVATE KEY"
+    const body    = match[2].replace(/\s+/g, ""); // strip ALL whitespace
+    const wrapped = (body.match(/.{1,64}/g) ?? [body]).join("\n");
+    return `-----BEGIN ${keyType}-----\n${wrapped}\n-----END ${keyType}-----\n`;
+  }
+
+  return key;
 }
 
 async function getAccessToken(): Promise<string> {
@@ -105,30 +126,16 @@ async function getAccessToken(): Promise<string> {
 
 // ── Sheets API helpers ────────────────────────────────────────────────────────
 
-let _sheetTitle: string | null = null;
-
-async function getSheetTitle(token: string): Promise<string> {
-  if (_sheetTitle) return _sheetTitle;
-
-  const r = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}?fields=sheets.properties`,
-    { headers: { Authorization: `Bearer ${token}` } },
-  );
-  if (!r.ok) throw new Error(`Spreadsheet metadata error: ${r.status}`);
-  const j: any = await r.json();
-  const sheet = (j.sheets ?? []).find((s: any) => s.properties?.sheetId === TARGET_GID);
-  if (!sheet) throw new Error(`Sheet with GID ${TARGET_GID} not found in spreadsheet`);
-  _sheetTitle = sheet.properties.title as string;
-  return _sheetTitle;
-}
-
 async function fetchRows(token: string, sheetTitle: string): Promise<string[][]> {
   const range = encodeURIComponent(sheetTitle);
   const r = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values/${range}?majorDimension=ROWS`,
     { headers: { Authorization: `Bearer ${token}` } },
   );
-  if (!r.ok) throw new Error(`Sheet values error: ${r.status}`);
+  if (!r.ok) {
+    const body = await r.text().catch(() => "");
+    throw new Error(`Sheet values error: ${r.status} — ${body.slice(0, 200)}`);
+  }
   const j: any = await r.json();
   return (j.values ?? []) as string[][];
 }
@@ -188,7 +195,7 @@ async function fetchPublishedCsvRows(csvUrl: string): Promise<{ rows: string[][]
   const rows = lines.map(parseCsvLine);
   return {
     rows,
-    sheetTitle: `Published roster CSV · ${TARGET_SHEET_TITLE}`,
+    sheetTitle: `Published roster CSV · ${currentMonthTabName()}`,
   };
 }
 
@@ -316,40 +323,80 @@ function todayPST() {
 }
 
 export interface ShiftResult {
-  inShiftNow:  string[];
-  allNames:    string[];
-  strategy:    string;
-  sheetTitle:  string;
-  fetchedAt:   string;
-  rowCount:    number;
-  error?:      string;
+  inShiftNow:    string[];
+  allNames:      string[];
+  shiftWindows?: { name: string; start: number; end: number; cell: string }[];
+  strategy:      string;
+  sheetTitle:    string;
+  fetchedAt:     string;
+  rowCount:      number;
+  error?:        string;
+  diagnostics?: {
+    currentTimePST: string;     // e.g. "14:32 PST"
+    currentMinPST:  number;     // minutes since midnight
+    todayLabel:     string;     // what date we searched for
+    matchedCol:     number;     // -1 = not found
+    headersPreview: string[];   // first 8 headers for debugging
+  };
 }
 
 function findDateColumnIndex(headers: string[], day: ReturnType<typeof dayMetaPST>) {
-  const dayNumber = String(Number(day.monthDay.split("/")[1] ?? ""));
-  const normalizedMonthName = day.monthName.toLowerCase();
-  const compactMonthName = normalizedMonthName.replace(/\s+/g, "");
+  const dayNumber    = String(Number(day.monthDay.split("/")[1] ?? ""));
+  const dayNumberPad = dayNumber.padStart(2, "0");                // "02"
+  const monthNum     = day.monthDay.split("/")[0];                // "6"
+  const monthNumPad  = monthNum.padStart(2, "0");                 // "06"
+  const monthShort   = day.monthName.split(" ")[0].toLowerCase(); // "jun"
+  const normalizedMonthName = day.monthName.toLowerCase();        // "jun 2"
+  const compactMonthName    = normalizedMonthName.replace(/\s+/g, ""); // "jun2"
 
-  let colIdx = headers.findIndex((h, idx) => {
+  return headers.findIndex((h, idx) => {
     if (idx === 0 || !h) return false;
     const normalized = h.toLowerCase().trim();
-    const compact = normalized.replace(/\s+/g, "");
+    const compact    = normalized.replace(/\s+/g, "");
 
-    return normalized === day.isoDate.toLowerCase()
+    return (
+      // ISO: "2026-06-02"
+      normalized === day.isoDate.toLowerCase()
+      // "Jun 2" / "jun 2"
       || normalized === normalizedMonthName
+      // "Jun2"
       || compact === compactMonthName
-      || normalized === `${day.dayShort.toLowerCase()} ${day.monthDay.toLowerCase()}`;
+      // "Tue 6/2"
+      || normalized === `${day.dayShort.toLowerCase()} ${day.monthDay.toLowerCase()}`
+      // "2-Jun"  ← most common format in this roster
+      || normalized === `${dayNumber}-${monthShort}`
+      // "02-Jun"  (zero-padded)
+      || normalized === `${dayNumberPad}-${monthShort}`
+      // "Jun-2"
+      || normalized === `${monthShort}-${dayNumber}`
+      // "Jun-02"
+      || normalized === `${monthShort}-${dayNumberPad}`
+      // "June 2"
+      || normalized === `june ${dayNumber}`
+      // "6/2" or "6/02"
+      || normalized === `${monthNum}/${dayNumber}`
+      || normalized === `${monthNum}/${dayNumberPad}`
+      // "06/02"
+      || normalized === `${monthNumPad}/${dayNumberPad}`
+      // "2/6" (day/month EU style)
+      || normalized === `${dayNumber}/${monthNum}`
+    );
   });
+}
 
-  if (colIdx < 0) {
-    colIdx = headers.findIndex((h, idx) => {
-      if (idx === 0 || !h) return false;
-      const normalized = h.trim().toLowerCase();
-      return normalized === `${dayNumber}-${day.monthName.split(" ")[0].toLowerCase()}`;
-    });
-  }
-
-  return colIdx;
+/** Returns true if a header cell looks like a calendar date (e.g. "2-Jun", "29-Jan", "Jun 2", "6/2") */
+function looksLikeDateHeader(h: string): boolean {
+  if (!h) return false;
+  const s = h.trim().toLowerCase();
+  // "2-jun", "29-jan", "01-dec"
+  if (/^\d{1,2}-[a-z]{3}$/.test(s)) return true;
+  // "jun 2", "jan 29"
+  if (/^[a-z]{3}\s+\d{1,2}$/.test(s)) return true;
+  // "6/2", "12/31", "6/2/2026"
+  if (/^\d{1,2}\/\d{1,2}/.test(s)) return true;
+  // "2026-06-02"
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
+  return false;
 }
 
 function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "fetchedAt"> {
@@ -365,11 +412,20 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
   const today = todayPST();
   const previousDay = dayMetaPST(-1);
 
+  // Build diagnostics
+  const nowPST = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+  const diagTimePST = `${String(nowPST.getHours()).padStart(2, "0")}:${String(nowPST.getMinutes()).padStart(2, "0")} PST`;
+
   // Published roster CSV shape:
   // row 0 => date columns like 29-Jan
   // row 1 => weekday labels
   // row 2+ => names + shift cells
-  const hasPublishedCalendarHeader = /time zone/i.test(headers[0] ?? "") && secondRow.length > 0;
+  //
+  // Detect calendar-style header: either has "time zone" in first cell OR
+  // the majority of non-first cells look like date headers.
+  const dateLikeCount = headers.slice(1).filter(looksLikeDateHeader).length;
+  const hasPublishedCalendarHeader =
+    (/time zone/i.test(headers[0] ?? "") || dateLikeCount >= 2) && secondRow.length > 0;
   const dataRows = hasPublishedCalendarHeader ? rows.slice(2) : rows.slice(1);
 
   // Detect "Name" column
@@ -384,58 +440,78 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
     .filter(Boolean);
 
   if (hasPublishedCalendarHeader) {
-    const todayColIdx = findDateColumnIndex(headers, today);
+    const todayColIdx    = findDateColumnIndex(headers, today);
     const previousColIdx = findDateColumnIndex(headers, previousDay);
+
+    const diag = {
+      currentTimePST: diagTimePST,
+      currentMinPST:  nowMin,
+      todayLabel:     `${today.monthName} (${today.isoDate})`,
+      matchedCol:     todayColIdx,
+      headersPreview: headers.slice(0, 10),
+    };
 
     if (todayColIdx > 0 || previousColIdx > 0) {
       const inShiftNow: string[] = [];
       const shiftWindows: ShiftWindow[] = [];
       for (const row of rosterRows) {
         const name = (row[nameColIdx] ?? "").trim();
+        if (!name) continue;
 
-        const todayCell = todayColIdx > 0 ? (row[todayColIdx] ?? "").trim() : "";
+        const todayCell  = todayColIdx > 0 ? (row[todayColIdx] ?? "").trim() : "";
         const todayShift = parseShiftCell(todayCell);
         if (todayShift && todayShift !== "OFF") {
           shiftWindows.push({ name, start: todayShift.start, end: todayShift.end, cell: todayCell });
-          if (todayShift.end > todayShift.start && isWithinShift(nowMin, todayShift)) {
+          if (isWithinShift(nowMin, todayShift)) {
             inShiftNow.push(name);
             continue;
           }
         }
 
-        const previousCell = previousColIdx > 0 ? (row[previousColIdx] ?? "").trim() : "";
+        const previousCell  = previousColIdx > 0 ? (row[previousColIdx] ?? "").trim() : "";
         const previousShift = parseShiftCell(previousCell);
         if (previousShift && previousShift !== "OFF" && previousShift.end < previousShift.start && nowMin <= previousShift.end) {
           inShiftNow.push(name);
           shiftWindows.push({ name, start: previousShift.start, end: previousShift.end, cell: previousCell });
         }
       }
-      return { ...base, inShiftNow, allNames, shiftWindows, strategy: "published-calendar-date-column" };
+      return { ...base, inShiftNow, allNames, shiftWindows, strategy: "published-calendar-date-column", diagnostics: diag };
     }
+
+    // Calendar header detected but date column not found for today
+    return {
+      ...base,
+      inShiftNow: [],
+      allNames,
+      strategy: "published-calendar-no-column",
+      diagnostics: diag,
+    };
   }
 
   // ── Strategy A: today's date appears in a header column ─────────────────
-  const todayColIdx = headers.findIndex((h) => {
-    if (!h) return false;
-    return (
-      h.includes(today.monthDay) ||
-      h.includes(today.isoDate) ||
-      h.toLowerCase().includes(today.monthName.toLowerCase()) ||
-      h.toLowerCase().startsWith(today.dayShort.toLowerCase())
-    );
-  });
+  // Use the same comprehensive findDateColumnIndex used for published CSV
+  const todayColIdx = findDateColumnIndex(headers, today);
+
+  const diagA = {
+    currentTimePST: diagTimePST,
+    currentMinPST:  nowMin,
+    todayLabel:     `${today.monthName} (${today.isoDate})`,
+    matchedCol:     todayColIdx,
+    headersPreview: headers.slice(0, 10),
+  };
 
   if (todayColIdx > 0) {
     const inShiftNow: string[] = [];
     for (const row of rosterRows) {
       const name = (row[nameColIdx] ?? "").trim();
-      const cell = (row[todayColIdx] ?? "").trim();
+      if (!name) continue;
+      const cell  = (row[todayColIdx] ?? "").trim();
       const shift = parseShiftCell(cell);
       if (shift && shift !== "OFF" && isWithinShift(nowMin, shift)) {
         inShiftNow.push(name);
       }
     }
-    return { ...base, inShiftNow, allNames, strategy: "date-column" };
+    return { ...base, inShiftNow, allNames, strategy: "date-column", diagnostics: diagA };
   }
 
   // ── Strategy B: "Shift Start" + "Shift End" columns ─────────────────────
@@ -487,12 +563,24 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
     return { ...base, inShiftNow, allNames, strategy: "day-of-week-column" };
   }
 
-  return { ...base, inShiftNow: [], allNames, strategy: "published-csv-unmatched" };
+  return {
+    ...base,
+    inShiftNow: [],
+    allNames,
+    strategy: "no-column-match",
+    diagnostics: {
+      currentTimePST: diagTimePST,
+      currentMinPST:  nowMin,
+      todayLabel:     `${today.monthName} (${today.isoDate})`,
+      matchedCol:     -1,
+      headersPreview: headers.slice(0, 10),
+    },
+  };
 }
 
-// ── Response cache (5 min) ────────────────────────────────────────────────────
+// ── Response cache (5 min, month-aware) ──────────────────────────────────────
 
-let _cache: { data: ShiftResult; at: number } | null = null;
+let _cache: { data: ShiftResult; at: number; month: string } | null = null;
 const CACHE_TTL = 5 * 60_000;
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -501,14 +589,34 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
 
-  // Serve from cache
-  if (_cache && Date.now() - _cache.at < CACHE_TTL) {
+  const tabName = currentMonthTabName(); // e.g. "Jun'26"
+
+  // Invalidate cache if the month changed or TTL expired
+  if (_cache && _cache.month === tabName && Date.now() - _cache.at < CACHE_TTL) {
     return res.end(JSON.stringify(_cache.data));
   }
 
-  const csvUrl = process.env.ROSTER_PUBLISHED_CSV_URL?.trim() || PUBLISHED_CSV_URL;
+  const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim();
+  const csvUrl     = process.env.ROSTER_PUBLISHED_CSV_URL?.trim();
 
   try {
+    // ── Path 1: Service account (preferred) ──────────────────────────────
+    // Uses the tab name directly — no GID needed, auto-follows monthly tabs.
+    if (email && privateKey) {
+      const token    = await getAccessToken();
+      const rows     = await fetchRows(token, tabName);
+      const detected = detectShift(rows, tabName);
+      const data: ShiftResult = { ...detected, fetchedAt: new Date().toISOString() };
+      _cache = { data, at: Date.now(), month: tabName };
+      return res.end(JSON.stringify(data));
+    }
+
+    // ── Path 2: Published CSV override ───────────────────────────────────
+    // Only used when the user sets ROSTER_PUBLISHED_CSV_URL explicitly.
+    // Note: the built-in published URL only covers the originally-published tab.
+    // This path is kept for compatibility but won't auto-follow monthly tabs
+    // unless ROSTER_PUBLISHED_CSV_URL is also updated each month.
     if (csvUrl) {
       const { rows, sheetTitle } = await fetchPublishedCsvRows(csvUrl);
       const detected = detectShift(rows, sheetTitle);
@@ -517,40 +625,28 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
         strategy: `${detected.strategy}-published-csv`,
         fetchedAt: new Date().toISOString(),
       };
-      _cache = { data, at: Date.now() };
+      _cache = { data, at: Date.now(), month: tabName };
       return res.end(JSON.stringify(data));
     }
 
-    const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-    const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+    // ── Path 3: Unconfigured ─────────────────────────────────────────────
+    const fallback: ShiftResult = {
+      inShiftNow: [],
+      allNames:   [],
+      strategy:   "unconfigured",
+      sheetTitle: "(not configured)",
+      fetchedAt:  new Date().toISOString(),
+      rowCount:   0,
+      error: "Set GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY to enable roster shift detection.",
+    };
+    return res.end(JSON.stringify(fallback));
 
-    if (!email || !privateKey) {
-      const fallback: ShiftResult = {
-        inShiftNow: [],
-        allNames:   [],
-        strategy:   "unconfigured",
-        sheetTitle: "(not loaded)",
-        fetchedAt:  new Date().toISOString(),
-        rowCount:   0,
-        error: "Roster source is not configured. Set a published Google Sheet CSV URL or provide Google service account secrets.",
-      };
-      return res.end(JSON.stringify(fallback));
-    }
-
-    const token      = await getAccessToken();
-    const sheetTitle = await getSheetTitle(token);
-    const rows       = await fetchRows(token, sheetTitle);
-    const detected   = detectShift(rows, sheetTitle);
-
-    const data: ShiftResult = { ...detected, fetchedAt: new Date().toISOString() };
-    _cache = { data, at: Date.now() };
-    return res.end(JSON.stringify(data));
   } catch (err: any) {
     const data: ShiftResult = {
       inShiftNow: [],
       allNames:   [],
       strategy:   "error",
-      sheetTitle: "(error)",
+      sheetTitle: tabName,
       fetchedAt:  new Date().toISOString(),
       rowCount:   0,
       error: String(err?.message ?? err),

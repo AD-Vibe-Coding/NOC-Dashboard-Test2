@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "noc-dashboard-1",
+  "private_key_id": "b778e7be678d7f388ede8ee7b7618523f0bbfa75",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDO+8kJJTRe8Uli\nI1nWiAZNt1Ec5sqhMrBDGUx1XNlhuPiJmPJNQ0NF0C1tE7oOzNpgmb1KjJeDnjgM\neAkUTWHjUdFHH1TlHsRhYAROS72ouTcs503uTkngd1gkUlvMPQu1FxY40z5Rj9yT\ncnQS5EV+YmJ3SjODTTxIyJxbh+6jSstpSFAOD6aB8m3fzjw4sdDNpYJ1cn571Nfe\n7EeXpzXm2JdrLcl4R0YyaiI2XBpnwTPi1DM0ZQFI/1Z7TxBr9/DgGFHcab+EYTjQ\nPGtgMIRp13HVTZzLJtVLblQEUTjyTRYd9pR8oOL2HFwSHfL/Dtz2LSVzAPIATn28\n0DxgxboBAgMBAAECggEAXyNdav42XcODav/7vb+lQhiWSHYOwlxlp1ncCoAEjUXz\nu29ZREk8BT1ke+Qa282uPMO9vaP0yrMxaQ3Ngo71BQMo8guFPpFPS8DSCdkHkqOb\nqGCjMfu7Olkw4vUWK8ENfg3gEXuLg/rftMhhcQOKq8Z2IwWwutQH9x56vBm1h0k3\n5UmlbG+8JxrVLBYrl2uQICA4OQsE8fFF5j6+iGFLCD2mBHTo7+yFXTQvPeAmWomK\n+iioLE6ssnpq1AHLMtqmc6MEPnKxK7+IPTWAIzr3BRGUmf4UYmAna/i26KlrFnQI\n1iPWhB3SFXSsSiZpEsfnoc63c1guj5ZbebYRaYwkLwKBgQD6xoLZSHABHof6nyTa\nGXfPWgUp6JeIJcIoMEJOhAS3F61nwI38UO26dCHWD15hInkutOgWRe+Yz2p9IqlC\nd2HlSRKpxEAkZef5kYVA2HL8+azEpkHfnvmESWpLDBXiqOJYz+80ijRBjpbp89Gm\nJabq2zOk93qUV54zBM++aflJrwKBgQDTS7bCkFRBpho8duQViLpfci/sKyXTBYuH\npXrzAOoT4xH+saG5EKWVGAQchuz2iJxBeB2ys9JBu+Fdk7S2juaBSiRdzVf2ok6I\n0laYsT7TNqC2fjtfjQcy5awwSc8UJ1rCltuxI/zztWKc+zToFkI2u2LwTrmFwHnp\nEEuOkaATTwKBgQCIWUCxxTno0eHbOYY+81P6MJbYJ3ekdeswELUsnYk2x6/n1oEc\nrB/lndj721VUePrskz4RRis0qanbqenfkqtukCGOnn7Fi4bqYd3S2R0EQPhX35G3\ndWdzLruVXFfV6j9PTJdhuLca4d1aDNBzhstPrKlSy6AhYdZJJReTD2mUTwJ/Qtqx\n+N2xyxPDOV5kzGt2jLyUbSU50orumvzA6iJf7erqxqttgCDEQ2hV5LDMSTTwO8bF\nnsVGwYWwyOrzQs/0HvRWjVdrfZ3dO21R+P4b4rhmIVfPcWwt2uzQjnbMDpRlIyyY\nVnQMlQ/PI9xX4Rcp3CduJprCGI/OAvAk9/cbrwKBgQDVRbhMO+948B1fQNaVVYBB\nB78EVxJNUzL+ln25IUQJJ6dXkSkumVQPrFmQPukkeodLxgh96bqWtvF321/jTjOz\n/vuXK0t8Vgxlu7O8Zha0ac32qoz6izVOlHeCrBCoask8jL5OsBxv/tWJVbGZn+z2\ntGs5bS62GJMfddcscg6UXw==\n-----END PRIVATE KEY-----\n",
+  "client_email": "noc-dashboard-sheets@noc-dashboard-1.iam.gserviceaccount.com",
+  "client_id": "102487511929074718660",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/noc-dashboard-sheets%40noc-dashboard-1.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
