@@ -159,18 +159,51 @@ export function BreakScheduleModal({ opened, onClose, identityName, isManager }:
     }
   }
 
+  const MANAGER_NAMES = new Set(["Anirudh Kukudala", "Perry Cox", "Matt Marquez"]);
+
+  // Convert "HH:MM" to minutes-since-midnight for overlap math
+  function toMins(t: string | null | undefined): number | null {
+    if (!t) return null;
+    const [h, m] = t.split(":").map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
+  }
+
   const allRows = LOCKED_TEAM_NAMES.map((name) => {
     const key = norm(name);
     const fixed = rowMaps.fixed.get(key);
     const today = rowMaps.overrides.get(key);
+    const effectiveStart = today?.start_time ?? fixed?.start_time ?? null;
+    const effectiveEnd   = today?.end_time   ?? fixed?.end_time   ?? null;
+    const isManager = MANAGER_NAMES.has(name);
     return {
       name,
-      fixed: formatWindow(fixed?.start_time, fixed?.end_time),
-      today: formatWindow(today?.start_time, today?.end_time),
-      effective: formatWindow(today?.start_time ?? fixed?.start_time, today?.end_time ?? fixed?.end_time),
+      isManager,
+      fixed:   formatWindow(fixed?.start_time, fixed?.end_time),
+      today:   formatWindow(today?.start_time, today?.end_time),
+      effective: formatWindow(effectiveStart, effectiveEnd),
       hasOverride: !!today,
+      startMins: toMins(effectiveStart),
+      endMins:   toMins(effectiveEnd),
+      sortKey: isManager ? "zz" : (effectiveStart ?? "99:99"),
     };
-  });
+  }).sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+
+  // Detect overlapping breaks among non-managers
+  const nonManagerRows = allRows.filter((r) => !r.isManager && r.startMins != null);
+  const overlappingNames = new Set<string>();
+  for (let i = 0; i < nonManagerRows.length; i++) {
+    for (let j = i + 1; j < nonManagerRows.length; j++) {
+      const a = nonManagerRows[i];
+      const b = nonManagerRows[j];
+      if (a.startMins == null || a.endMins == null || b.startMins == null || b.endMins == null) continue;
+      // Overlap if one starts before the other ends
+      if (a.startMins < b.endMins && b.startMins < a.endMins) {
+        overlappingNames.add(a.name);
+        overlappingNames.add(b.name);
+      }
+    }
+  }
 
   return (
     <Modal opened={opened} onClose={onClose} title="Break times" centered size="xl">
@@ -256,19 +289,44 @@ export function BreakScheduleModal({ opened, onClose, identityName, isManager }:
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                  {allRows.map((row) => (
-                    <Table.Tr key={row.name}>
-                      <Table.Td>
-                        <Group gap="xs">
-                          <Text size="sm">{row.name}</Text>
-                          {row.hasOverride && <Badge size="xs" color="blue" variant="light">Today override</Badge>}
-                        </Group>
-                      </Table.Td>
-                      <Table.Td>{row.fixed}</Table.Td>
-                      <Table.Td>{row.today}</Table.Td>
-                      <Table.Td>{row.effective}</Table.Td>
-                    </Table.Tr>
-                  ))}
+                  {allRows.map((row, idx) => {
+                    const isOverlap = overlappingNames.has(row.name);
+                    // Insert a faint divider before the first manager row
+                    const prevIsNonManager = idx > 0 && !allRows[idx - 1].isManager;
+                    return (
+                      <>
+                        {row.isManager && prevIsNonManager && (
+                          <Table.Tr key={`divider-${row.name}`}>
+                            <Table.Td colSpan={4} style={{ padding: 0 }}>
+                              <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "4px 0" }} />
+                            </Table.Td>
+                          </Table.Tr>
+                        )}
+                        <Table.Tr
+                          key={row.name}
+                          style={{
+                            background: isOverlap
+                              ? "rgba(255, 100, 60, 0.10)"
+                              : row.isManager
+                                ? "rgba(255,255,255,0.02)"
+                                : undefined,
+                          }}
+                        >
+                          <Table.Td>
+                            <Group gap="xs">
+                              <Text size="sm" c={row.isManager ? "dimmed" : undefined}>{row.name}</Text>
+                              {row.hasOverride && <Badge size="xs" color="blue" variant="light">Today override</Badge>}
+                              {isOverlap && <Badge size="xs" color="orange" variant="filled">Overlap</Badge>}
+                              {row.isManager && <Badge size="xs" color="gray" variant="outline">Manager</Badge>}
+                            </Group>
+                          </Table.Td>
+                          <Table.Td><Text size="sm" c={row.isManager ? "dimmed" : undefined}>{row.fixed}</Text></Table.Td>
+                          <Table.Td><Text size="sm" c={row.isManager ? "dimmed" : undefined}>{row.today}</Text></Table.Td>
+                          <Table.Td><Text size="sm" c={row.isManager ? "dimmed" : undefined}>{row.effective}</Text></Table.Td>
+                        </Table.Tr>
+                      </>
+                    );
+                  })}
                 </Table.Tbody>
               </Table>
             </Stack>

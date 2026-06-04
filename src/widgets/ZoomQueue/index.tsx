@@ -85,7 +85,7 @@ type Toast = {
   body?: string;
 };
 
-const REMINDER_DELAY_MS = 10 * 60_000; // 10 min — gives time for short bio/restroom breaks before reminding
+const REMINDER_DELAY_MS = 5 * 60_000; // 5 min timer; combined with 10 min grace = 15 min total before first queue reminder
 const SHIFT_GRACE_MINUTES = 10; // Don't remind in first/last 10 min of shift; combined with 5-min timer = 15 min total before first reminder
 const REMINDER_STORAGE_KEY = "team-availability-queue-reminders-v1";
 const MEETING_REMINDER_STORAGE_KEY = "team-availability-meeting-reminders-v1";
@@ -220,6 +220,19 @@ export function ZoomQueueWidget() {
         body: `${trimmed} already has an active "${alreadyActive.break_type}" status. End it first before starting a new one.`,
       });
       return;
+    }
+
+    // Lunch break limit — max 2 non-managers on Lunch at a time
+    if (statusType === "Lunch") {
+      const lunchCount = activeBreaks.filter((b) => b.break_type === "Lunch" && defaultRoleFor(b.employee_name) !== "manager").length;
+      if (lunchCount >= 2) {
+        showToast({
+          color: "red",
+          title: "Lunch limit reached",
+          body: `${lunchCount} people are already on Lunch. Max 2 allowed at a time. Please wait for someone to return before going on Lunch.`,
+        });
+        return;
+      }
     }
 
     setPosting(true);
@@ -390,9 +403,9 @@ export function ZoomQueueWidget() {
     // We only show agents who are in shift, actively in queue, or on an active break.
     return isInShift(name) || a.status === "in_queue" || breakMap.has(normName(name));
   });
-  // People from the Zoom roster who are on break
+  // All people on break — used for DISPLAY only (includes managers so they show in the break section)
   const onBreakFromZoom = agents.filter((a) => breakMap.has(normName(a.rosterName ?? a.display_name)));
-  // People tracked in Break Tracker who may NOT be in the Zoom agent list
+  // Break Tracker entries not in Zoom — for display only (includes managers)
   const onBreakExtraNames = activeBreaks
     .filter((b) => {
       const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
@@ -400,6 +413,19 @@ export function ZoomQueueWidget() {
     })
     .map((b) => b.employee_name);
   const onBreak = onBreakFromZoom;
+
+  // Non-manager break lists — used for ALL logic (lunch limit, break count badge, reminders)
+  const onBreakNonManager = onBreakFromZoom.filter((a) => {
+    const name = a.rosterName ?? a.display_name;
+    return defaultRoleFor(name) !== "manager";
+  });
+  const onBreakExtraNonManager = activeBreaks
+    .filter((b) => {
+      const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
+      if (defaultRoleFor(resolveTeamMember(b.employee_name) ?? b.employee_name) === "manager") return false;
+      return !onBreakFromZoom.some((a) => normName(a.rosterName ?? a.display_name) === resolved);
+    })
+    .map((b) => b.employee_name);
   const inShiftAndInQueue = agents.filter((a) => {
     const name = a.rosterName ?? a.display_name;
     return a.status === "in_queue" && (isInShift(name) || isRosterListed(name));
@@ -455,7 +481,8 @@ export function ZoomQueueWidget() {
     allQueues.map((q) => [q, agents.filter((a) => a.queue_opt_in?.[q] === true).length]),
   );
 
-  const onBreakCount = onBreak.length;
+  // Break count for badges/logic uses non-manager list only
+  const onBreakCount = onBreakNonManager.length + onBreakExtraNonManager.length;
 
   const myBreakRows = useMemo(() => {
     if (!identity?.name) return [] as ActiveStatusRow[];
@@ -601,20 +628,25 @@ export function ZoomQueueWidget() {
             : null;
           const inBreakStartCooldown = activeBreakAgeMs !== null && activeBreakAgeMs < BREAK_START_QUEUE_COOLDOWN_MS;
 
-          // Post-break cooldown: find the most recent ended break for this person.
-          // If a break ended within POST_BREAK_COOLDOWN_MS, suppress the queue reminder.
-          // This guards against the case where a brief break ends before the next
-          // 30s break-data poll fires — without this, the tick would see no active
-          // break and immediately start the eligibility timer.
-          const POST_BREAK_COOLDOWN_MS = 5 * 60_000; // 5 min after break ends
-          const lastEndedBreak = brkHistory
+          // Post-break cooldown: only count breaks that ended TODAY and within the last 5 min.
+          // Without the today-filter, a break from a previous day at the same clock time
+          // would silently suppress reminders every morning.
+          const POST_BREAK_COOLDOWN_MS = 5 * 60_000;
+          const lastEndedBreakToday = brkHistory
             .filter((b) => {
+              if (!b.end_time) return false;
               const bName = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
-              return bName === normalized && b.end_time;
+              if (bName !== normalized) return false;
+              // Must be today (Pacific)
+              const endPacific = new Intl.DateTimeFormat("en-CA", {
+                timeZone: "America/Los_Angeles",
+                year: "numeric", month: "2-digit", day: "2-digit",
+              }).format(new Date(b.end_time));
+              return endPacific === todayKey;
             })
             .sort((a, b) => new Date(b.end_time!).getTime() - new Date(a.end_time!).getTime())[0];
-          const inPostBreakCooldown = lastEndedBreak
-            ? (now - new Date(lastEndedBreak.end_time!).getTime()) < POST_BREAK_COOLDOWN_MS
+          const inPostBreakCooldown = lastEndedBreakToday
+            ? (now - new Date(lastEndedBreakToday.end_time!).getTime()) < POST_BREAK_COOLDOWN_MS
             : false;
 
           // Determine if the person is currently "in shift":

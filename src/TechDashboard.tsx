@@ -32,7 +32,6 @@ import {
   IconAddressBook,
   IconAdjustmentsHorizontal,
   IconChartArea,
-  IconClipboardText,
   IconCoffee,
   IconDeviceMobileMessage,
   IconFileText,
@@ -41,9 +40,16 @@ import {
   IconMail,
   IconMailForward,
   IconMoon,
+  IconNotes,
   IconReportAnalytics,
   IconSearch,
+  IconSchool,
+  IconStar,
+  IconBook,
+
+  IconClipboardList,
   IconSun,
+  IconWorldPin,
 } from "@tabler/icons-react";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { IdentityBadge } from "./widgets/IdentityBadge";
@@ -88,6 +94,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "My Work",
     items: [
       { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets & calls" },
+      { id: "meeting-notes", label: "Meeting Notes", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
       { id: "performance-tracker", label: "My Metrics", icon: IconReportAnalytics, color: "green", description: "Performance & disputes" },
       { id: "break-tracker", label: "Breaks", icon: IconCoffee, color: "orange", description: "Start & track breaks" },
     ],
@@ -108,6 +115,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: "ticket-summary", label: "Ticket Summary", icon: IconFileText, color: "indigo", description: "Summarize .mhtml tickets" },
       { id: "noc-troubleshooter", label: "NOC Troubleshooter", icon: IconActivityHeartbeat, color: "cyan", description: "Network & circuit help" },
       { id: "mobility-troubleshooter", label: "Mobility Troubleshooter", icon: IconDeviceMobileMessage, color: "violet", description: "Wireless & device help" },
+      { id: "timezone-helper", label: "Timezone Helper", icon: IconWorldPin, color: "cyan", description: "Convert customer time → PST/PT" },
     ],
   },
   {
@@ -116,7 +124,7 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: "escalation-email", label: "Escalation Email", icon: IconMail, color: "teal", description: "Draft ESC-MGR alerts" },
       { id: "email-polisher", label: "Email Polisher", icon: IconMailForward, color: "lime", description: "Polish any draft email" },
-      { id: "shift-handover", label: "Shift Handover", icon: IconClipboardText, color: "blue", description: "Create handover message" },
+
       { id: "qs-escalations", label: "Escalation Contacts", icon: IconAddressBook, color: "grape", description: "Carrier contact lists" },
     ],
   },
@@ -126,6 +134,17 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: "wfh", label: "WFH Request", icon: IconHome, color: "appdirect", description: "Apply for work-from-home" },
       { id: "training-updates", label: "Training Updates", icon: IconFileText, color: "blue", description: "Submit and track training requests" },
+      { id: "training-progress", label: "Training Progress", icon: IconSchool, color: "grape", description: "Track training completion" },
+    ],
+  },
+  {
+    key: "team",
+    title: "Team",
+    items: [
+      { id: "kudos-board", label: "Kudos Board", icon: IconStar, color: "yellow", description: "Peer recognition & shoutouts" },
+      { id: "shift-checklist", label: "Shift Checklist", icon: IconClipboardList, color: "teal", description: "End-of-shift handover checklist" },
+      { id: "kb-gap-finder", label: "KB Gap Finder", icon: IconBook, color: "indigo", description: "Ask questions · Flag missing docs" },
+
     ],
   },
 ];

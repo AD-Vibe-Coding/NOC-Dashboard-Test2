@@ -50,6 +50,7 @@ import {
   IconStar,
   IconStarFilled,
   IconTrash,
+  IconRefresh,
   IconUser,
   IconUsersGroup,
 } from "@tabler/icons-react";
@@ -166,6 +167,12 @@ const MANAGEMENT_PREFIX = "Management · ";
 const OTHER_PREFIX = "Other · ";
 const DEFAULT_OTHER_SECTION = "Others";
 const SECTION_PATH_SEPARATOR = " / ";
+
+/** Case/space-insensitive name comparison — handles trimming and casing variants */
+function samePerson(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
 
 function safeJsonArray(text: string | null | undefined): string[] {
   if (!text) return [];
@@ -529,6 +536,7 @@ export function MeetingNotesWidget() {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [extractDebug, setExtractDebug] = useState<string | null>(null);
   const [gmailLoading, setGmailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -657,9 +665,7 @@ export function MeetingNotesWidget() {
       // Load notes + prefs first (needed for notebook view), tasks in parallel
       const notePromise = db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } });
       const taskPromise = db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
-      const prefPromise = isManager
-        ? db.notebook_section_preferences.list({ filter: { owner_name: identity.name } }).catch(() => [] as NotebookSectionPreference[])
-        : Promise.resolve([] as NotebookSectionPreference[]);
+      const prefPromise = db.notebook_section_preferences.list({ filter: { owner_name: identity.name } }).catch(() => [] as NotebookSectionPreference[]);
 
       // Notes + prefs unblock the notebook view as soon as they're ready
       const [noteRows, prefRows] = await Promise.all([notePromise, prefPromise]);
@@ -777,7 +783,7 @@ export function MeetingNotesWidget() {
 
   const receivedNotes = useMemo(() => {
     if (!identity?.name) return [] as NormalizedNote[];
-    return notes.filter((note) => note.notebook_group === "individual" && note.employee_name === identity.name && note.status === "shared" && !note.is_archived);
+    return notes.filter((note) => note.notebook_group === "individual" && samePerson(note.employee_name ?? "", identity.name) && note.status === "shared" && !note.is_archived);
   }, [identity?.name, notes]);
 
   const managerNotesVisible = useMemo(() => managerOwnedNotes.filter((note) => showArchived || !note.is_archived), [managerOwnedNotes, showArchived]);
@@ -925,8 +931,9 @@ export function MeetingNotesWidget() {
   );
 
   useEffect(() => {
-    if (!isManager) return;
-    const firstKey = favoriteSections[0]?.key ?? individualSections[0]?.key ?? managementSections[0]?.key ?? null;
+    const firstKey = isManager
+      ? (favoriteSections[0]?.key ?? individualSections[0]?.key ?? managementSections[0]?.key ?? null)
+      : (sectionRecords.find((s) => s.notebook_group === "other")?.key ?? null);
     if (!activeSectionKey) {
       setActiveSectionKey(firstKey);
       return;
@@ -967,27 +974,36 @@ export function MeetingNotesWidget() {
       .map((section) => ({ value: section.label, label: section.label }));
   }, [movingSection, sectionRecords]);
 
-  // Tasks I created myself (personal follow-up tasks)
-  const myOwnTasks = useMemo(() => {
-    if (!identity?.name) return [] as PersonalActionItem[];
-    return tasks.filter((task) =>
-      task.created_by === identity.name &&
-      (task.owner_name === identity.name || task.employee_name === identity.name),
-    );
-  }, [identity?.name, tasks]);
-
   // Tasks assigned TO me by a manager (extracted from their meeting notes)
+  // Uses samePerson() for fuzzy name matching — handles case/spacing variants
+  // e.g. "Hamza Rahmani" vs "hamza rahmani", trimmed section names, etc.
+  // A task is "assigned to me" if owner/employee matches me AND it has a note_id
+  // (i.e. it was extracted from a meeting note, not self-created)
   const tasksAssignedToMe = useMemo(() => {
     if (!identity?.name) return [] as PersonalActionItem[];
     return tasks.filter((task) =>
-      task.created_by !== identity.name &&
-      (task.owner_name === identity.name || task.employee_name === identity.name),
+      (samePerson(task.owner_name ?? "", identity.name) || samePerson(task.employee_name ?? "", identity.name)) &&
+      !!task.note_id,
+    );
+  }, [identity?.name, tasks]);
+
+  // My own tasks = assigned to me but WITHOUT a note_id (self-created)
+  const myOwnTasks = useMemo(() => {
+    if (!identity?.name) return [] as PersonalActionItem[];
+    return tasks.filter((task) =>
+      (samePerson(task.owner_name ?? "", identity.name) || samePerson(task.employee_name ?? "", identity.name)) &&
+      !task.note_id,
     );
   }, [identity?.name, tasks]);
 
 
 
-  const managerTaskRows = useMemo(() => tasks.filter((task) => task.created_by === identity?.name), [tasks, identity?.name]);
+  // Manager's own tasks = tasks where the OWNER is the manager (not just created_by).
+  // This excludes tasks extracted for employees (e.g. Hamza's items assigned to Hamza).
+  const managerTaskRows = useMemo(() => tasks.filter((task) =>
+    samePerson(task.owner_name ?? "", identity?.name ?? "") ||
+    samePerson(task.employee_name ?? "", identity?.name ?? ""),
+  ), [tasks, identity?.name]);
 
   // Use the explicitly stored owner field for the My/Team split.
   // resolveTaskOwner() uses the title prefix heuristic which is a legacy
@@ -1129,9 +1145,22 @@ export function MeetingNotesWidget() {
       return;
     }
     setError(null);
+    const managerName = identity?.name ?? "the manager";
+    const employeeName = selectedEmployee ?? "the employee";
     const prompt = notebookMode === "management"
       ? `Turn these management meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Focus on leadership decisions, risks, owners, and follow-ups. Notes:\n\n${sourceNotes}`
-      : `Turn these 1:1 meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Keep each bullet concise and factual. Notes:\n\n${sourceNotes}`;
+      : `Turn these 1:1 meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}.
+
+CRITICAL RULES for action item assignment:
+- The MANAGER in this meeting is: ${managerName}
+- The EMPLOYEE in this meeting is: ${employeeName}
+- "managerActionItems" must contain ONLY action items owned by the MANAGER (${managerName}) — things the manager will do. This includes any action items assigned to other managers (${managerName}, Perry Cox, Anirudh Kukudala, Matt Marquez).
+- "employeeActionItems" must contain ONLY action items owned by the EMPLOYEE (${employeeName}) — things the employee will do.
+- If an action item mentions ${managerName} or another manager's name as the owner, it belongs in managerActionItems, NOT employeeActionItems.
+- If an action item mentions ${employeeName} as the owner, it belongs in employeeActionItems.
+- Do NOT mix up who owns what. The employee cannot own the manager's tasks.
+
+Keep each bullet concise and factual. Notes:\n\n${sourceNotes}`;
     const raw = await complete(prompt);
     const parsed = parseJsonSummary(raw);
     if (!parsed) {
@@ -1171,13 +1200,33 @@ export function MeetingNotesWidget() {
 
   function buildAutoOrganizePrompt(message: GmailNoteMessage, mode: NotebookMode) {
     const noteText = message.body || message.snippet || "";
+    const managerName = identity?.name ?? "the manager";
+    const MANAGER_NAMES = ["Anirudh Kukudala", "Perry Cox", "Matt Marquez"];
+
     if (mode === "management") {
       return `Turn these management meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Focus on leadership decisions, risks, owners, and follow-ups. Notes:\n\n${noteText}`;
     }
     if (mode === "other") {
       return `Turn these general meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Focus on the topic, decisions, owners, and follow-ups. Notes:\n\n${noteText}`;
     }
-    return `Turn these 1:1 meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Keep each bullet concise and factual. Notes:\n\n${noteText}`;
+
+    // For individual 1:1 notes — extract the employee name from the message subject
+    const subject = String(message.subject ?? "");
+    const oneOnOneMatch = subject.match(/^Bi-Weekly One on One\s*-\s*(.+)$/i);
+    const employeeName = oneOnOneMatch ? oneOnOneMatch[1].trim() : "the employee";
+
+    return `Turn these 1:1 meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}.
+
+CRITICAL RULES for action item assignment:
+- The MANAGER in this meeting is: ${managerName} (also consider these as managers: ${MANAGER_NAMES.join(", ")})
+- The EMPLOYEE in this meeting is: ${employeeName}
+- "managerActionItems" must contain ONLY action items owned by the MANAGER — things ${managerName} or any other manager (${MANAGER_NAMES.join(", ")}) will do.
+- "employeeActionItems" must contain ONLY action items owned by the EMPLOYEE (${employeeName}) — things ${employeeName} will do.
+- If an action item mentions ${managerName} or another manager name as the owner/assignee, it MUST go in managerActionItems.
+- If an action item mentions ${employeeName} as the owner/assignee, it MUST go in employeeActionItems.
+- Do NOT put manager-owned tasks in employeeActionItems.
+
+Keep each bullet concise and factual. Notes:\n\n${noteText}`;
   }
 
   async function autoOrganizeLoadedNotes() {
@@ -1608,6 +1657,87 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
     }
   }
 
+  /** Directly patches owner_name/employee_name on every DB task that came from
+   *  an individual 1:1 note. Uses resolveTeamMember so short names like "Hamza"
+   *  resolve to the canonical "Hamza Rahmani". Safe to run multiple times. */
+  async function fixAllOwners() {
+    if (!identity?.name) return;
+    setSaving(true);
+    try {
+      const MANAGER_NAMES = ["Anirudh Kukudala", "Perry Cox", "Matt Marquez"];
+
+      function managerPrefix(title: string): string | null {
+        const m = title.match(/^([A-Z][a-z]+(?: [A-Z][a-z]+)+):\s*(.+)$/);
+        if (m) {
+          const found = MANAGER_NAMES.find((n) => samePerson(n, m[1].trim()));
+          if (found) return found;
+        }
+        const b = title.match(/^\[([^\]]+)\]/);
+        if (b) {
+          const found = MANAGER_NAMES.find((n) => samePerson(n, b[1].trim()));
+          if (found) return found;
+        }
+        return null;
+      }
+
+      // Fetch everything fresh from DB
+      const [freshTasks, freshNotes] = await Promise.all([
+        db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } }),
+        db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } }),
+      ]);
+
+      const noteById = new Map(freshNotes.map((n) => [n.id, n]));
+      const noteByTitle = new Map(freshNotes.map((n) => [String(n.title ?? "").trim().toLowerCase(), n]));
+
+      let fixed = 0;
+      const debugLines: string[] = [];
+
+      for (const task of freshTasks) {
+        // Find the note this task came from
+        let note = task.note_id != null ? noteById.get(task.note_id) : undefined;
+        if (!note && task.details) note = noteByTitle.get(String(task.details).trim().toLowerCase());
+        if (!note) continue;
+
+        // Only fix individual 1:1 notes
+        const group = note.notebook_group ?? (
+          String(note.employee_name ?? "").startsWith("Management · ") ? "management"
+          : String(note.employee_name ?? "").startsWith("Other · ") ? "other"
+          : "individual"
+        );
+        if (group !== "individual") continue;
+
+        // Resolve the canonical employee name
+        const rawSection = note.section_name ?? note.employee_name ?? "";
+        const canonicalEmployee = resolveTeamMember(rawSection) ?? rawSection;
+
+        // Determine correct owner
+        const managerOwner = managerPrefix(task.title ?? "");
+        const correctOwner = managerOwner ?? canonicalEmployee;
+
+        const currentOwner = task.owner_name ?? task.employee_name ?? "";
+        if (!samePerson(currentOwner, correctOwner)) {
+          debugLines.push(`"${String(task.title ?? "").slice(0, 45)}" : ${currentOwner} → ${correctOwner}`);
+          await db.personal_action_items.updateById(task.id, {
+            owner_name: correctOwner,
+            employee_name: correctOwner,
+          });
+          fixed++;
+        }
+      }
+
+      await load();
+      setExtractDebug(
+        fixed === 0
+          ? `✅ All ${freshTasks.length} tasks already have correct owners.\n${debugLines.slice(0, 10).join("\n") || "No changes needed."}`
+          : `✅ Fixed ${fixed} tasks.\n${debugLines.slice(0, 20).join("\n")}`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function extractAllTasks() {
     if (!identity?.name) return;
     const notesWithActions = managerOwnedNotes.filter((note) => {
@@ -1620,61 +1750,133 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
     }
     setSaving(true);
     let inserted = 0;
+
+    const MANAGER_NAMES = ["Anirudh Kukudala", "Perry Cox", "Matt Marquez"];
+
+    // Only match a name prefix if the candidate IS a known manager.
+    // Never parses "Update Meeting Status:" as a name.
+    function parseManagerName(raw: string): { managerName: string; title: string } | null {
+      const colonMatch = raw.match(/^([A-Z][a-z]+(?: [A-Z][a-z]+)+):\s*(.+)$/);
+      if (colonMatch) {
+        const found = MANAGER_NAMES.find((m) => samePerson(m, colonMatch[1].trim()));
+        if (found) return { managerName: found, title: colonMatch[2].trim() };
+      }
+      const bracketMatch = raw.match(/^\[([^\]]+)\]\s*(.+)$/);
+      if (bracketMatch) {
+        const found = MANAGER_NAMES.find((m) => samePerson(m, bracketMatch[1].trim()));
+        if (found) return { managerName: found, title: bracketMatch[2].trim() };
+      }
+      return null;
+    }
+
     try {
+      // Fetch ALL tasks fresh from DB — never rely on stale React state for deletions.
+      const freshTasks = await db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
+
+      // Build set of all note IDs we're processing (as strings for safe comparison)
+      const noteIds = new Set(notesWithActions.map((n) => String(n.id)));
+      const noteTitleToNote = new Map(notesWithActions.map((n) => [n.title?.trim().toLowerCase(), n]));
+      const noteSectionToNote = new Map(notesWithActions.map((n) => [n.section_name?.trim().toLowerCase(), n]));
+
+      // Delete ALL old extracted tasks — match by note_id OR by (details=note.title) for legacy tasks without note_id
+      const toDelete = freshTasks.filter((t) => {
+        if (t.note_id != null && noteIds.has(String(t.note_id))) return true;
+        if (t.note_id == null && t.details && noteTitleToNote.has(t.details.trim().toLowerCase())) return true;
+        if (t.note_id == null && t.section_name && noteSectionToNote.has(t.section_name.trim().toLowerCase())) return true;
+        return false;
+      });
+      console.log(`[Extract] Deleting ${toDelete.length} old tasks (${toDelete.filter(t => t.note_id != null).length} by note_id, ${toDelete.filter(t => t.note_id == null).length} legacy)`);
+      for (const t of toDelete) {
+        await db.personal_action_items.deleteById(t.id);
+      }
+
       for (const note of notesWithActions) {
-        // For individual 1:1 notes, the section_name IS the team member.
-        // Manager action items belong to the manager; employee action items belong to the team member.
         const isIndividual = note.notebook_group === "individual";
+        // teamMember = the employee's name for 1:1 notes (e.g. "Hamza Rahmani")
         const teamMember = isIndividual ? note.section_name : identity.name;
 
         const managerItems = safeJsonArray(note.manager_action_items_json).map((i) => i.trim()).filter(Boolean);
         const employeeItems = safeJsonArray(note.employee_action_items_json).map((i) => i.trim()).filter(Boolean);
 
-        const existing = tasks.filter((t) => t.note_id === note.id).map((t) => t.title.trim().toLowerCase());
+        console.log(`[Extract] note "${note.title}" | group="${note.notebook_group}" | section="${note.section_name}" | teamMember="${teamMember}" | mgr=${managerItems.length} emp=${employeeItems.length}`);
 
-        // Manager-owned tasks (always belong to the manager)
-        for (const item of managerItems.filter((i) => !existing.includes(i.toLowerCase()))) {
-          await db.personal_action_items.insert({
-            employee_name: identity.name,
-            owner_name: identity.name,
-            note_id: note.id,
-            title: item,
-            details: note.title,
-            status: "open",
-            priority: "medium",
-            progress_percent: 0,
-            due_date: null,
-            section_name: note.section_name,
-            notebook_group: note.notebook_group,
-            created_by: identity.name,
-          });
-          inserted++;
-        }
-
-        // Employee-owned tasks (belong to the team member for individual notes,
-        // or parsed from [Name] prefix for management notes)
-        for (const item of employeeItems.filter((i) => !existing.includes(i.toLowerCase()))) {
-          // Parse [Name] prefix from title if present (management notes format)
-          const prefixMatch = item.match(/^\[([^\]]+)\]/);
-          const resolvedOwner = prefixMatch ? prefixMatch[1].trim() : teamMember;
-          await db.personal_action_items.insert({
-            employee_name: resolvedOwner,
-            owner_name: resolvedOwner,
-            note_id: note.id,
-            title: item,
-            details: note.title,
-            status: "open",
-            priority: "medium",
-            progress_percent: 0,
-            due_date: null,
-            section_name: note.section_name,
-            notebook_group: note.notebook_group,
-            created_by: identity.name,
-          });
-          inserted++;
+        if (isIndividual) {
+          // Combine BOTH AI buckets — old AI runs may have misclassified items.
+          // Rule: manager-prefixed items → that manager. Everything else → teamMember.
+          const allItems = [...managerItems, ...employeeItems];
+          console.log(`[Extract] individual note — ${allItems.length} items, teamMember="${teamMember}"`);
+          for (const item of allItems) {
+            const parsed = parseManagerName(item);
+            const owner = parsed?.managerName ?? teamMember;
+            const title = parsed?.title ?? item;
+            console.log(`[Extract]   "${title}" → owner="${owner}"`);
+            await db.personal_action_items.insert({
+              employee_name: owner,
+              owner_name: owner,
+              note_id: note.id,
+              title,
+              details: note.title,
+              status: "open",
+              priority: "medium",
+              progress_percent: 0,
+              due_date: null,
+              section_name: note.section_name,
+              notebook_group: note.notebook_group,
+              created_by: identity.name,
+            });
+            inserted++;
+          }
+        } else {
+          // For management / other notes: use buckets as-is.
+          // Manager items → the named manager (or logged-in manager as fallback).
+          for (const item of managerItems.filter(Boolean)) {
+            const parsed = parseManagerName(item);
+            const managerOwner = parsed?.managerName ?? identity.name;
+            const title = parsed?.title ?? item;
+            await db.personal_action_items.insert({
+              employee_name: managerOwner,
+              owner_name: managerOwner,
+              note_id: note.id,
+              title,
+              details: note.title,
+              status: "open",
+              priority: "medium",
+              progress_percent: 0,
+              due_date: null,
+              section_name: note.section_name,
+              notebook_group: note.notebook_group,
+              created_by: identity.name,
+            });
+            inserted++;
+          }
+          // Employee items → teamMember (section name or logged-in manager).
+          for (const item of employeeItems.filter(Boolean)) {
+            await db.personal_action_items.insert({
+              employee_name: teamMember,
+              owner_name: teamMember,
+              note_id: note.id,
+              title: item,
+              details: note.title,
+              status: "open",
+              priority: "medium",
+              progress_percent: 0,
+              due_date: null,
+              section_name: note.section_name,
+              notebook_group: note.notebook_group,
+              created_by: identity.name,
+            });
+            inserted++;
+          }
         }
       }
       await load();
+      // Show a visible debug summary so we can verify ownership without DevTools
+      const freshAfter = await db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
+      const debugLines = notesWithActions.map((n) => {
+        const noteTasks = freshAfter.filter((t) => t.note_id != null && String(t.note_id) === String(n.id));
+        return `"${n.section_name}" (${n.notebook_group}): ${noteTasks.map(t => `${t.owner_name}`).join(", ") || "no tasks"}`;
+      });
+      setExtractDebug(`Inserted ${inserted} tasks.\n${debugLines.join("\n")}`);
       if (inserted === 0) setError("All action items are already in the action center — nothing new to extract.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -2826,9 +3028,15 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                       {actionSubView === "tasks" && (
                         <Stack gap="xl">
                           {/* ── Toolbar ── */}
+                          {extractDebug && (
+                            <Alert color="teal" variant="light" radius="md" withCloseButton onClose={() => setExtractDebug(null)}>
+                              <Text size="xs" style={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}>{extractDebug}</Text>
+                            </Alert>
+                          )}
                           <Group justify="space-between" align="center" wrap="wrap" gap="xs">
                             <Group gap="xs" wrap="wrap">
                               <Button size="sm" variant="light" color="grape" leftSection={<IconSparkles size={14} />} onClick={() => void extractAllTasks()} loading={saving}>Extract all</Button>
+                              <Button size="sm" variant="filled" color="orange" leftSection={<IconRefresh size={14} />} onClick={() => void fixAllOwners()} loading={saving}>Fix owners</Button>
                               <Button size="sm" variant="light" color="teal" leftSection={<IconBrandSlack size={14} />} onClick={() => void sendSlackDigest()} loading={digestSending}>Send digest</Button>
                               <Button size="sm" variant={dueThisWeek ? "filled" : "light"} color="orange" leftSection={<IconCalendar size={14} />} onClick={() => setDueThisWeek(v => !v)}>
                                 Due this week
@@ -3350,11 +3558,91 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
             )}
           </>
         ) : (
-          <Tabs defaultValue="received">
+          <Tabs defaultValue="notebook">
             <Tabs.List>
-              <Tabs.Tab value="received" leftSection={<IconNotes size={14} />}>My notebook</Tabs.Tab>
+              <Tabs.Tab value="notebook" leftSection={<IconNotes size={14} />}>My notebook</Tabs.Tab>
+              <Tabs.Tab value="received" leftSection={<IconMailSpark size={14} />}>
+                Received
+                {receivedNotes.length > 0 && <Badge size="xs" variant="filled" color="grape" ml={6}>{receivedNotes.length}</Badge>}
+              </Tabs.Tab>
               <Tabs.Tab value="tasks" leftSection={<IconChecklist size={14} />}>My action items</Tabs.Tab>
             </Tabs.List>
+
+            {/* ── Personal Notebook ── */}
+            <Tabs.Panel value="notebook" pt="md">
+              <Stack gap="md">
+                <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 16, alignItems: "start" }}>
+                  {/* Sidebar */}
+                  <Card withBorder radius="xl" p="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between" align="center">
+                        <Text fw={700} size="sm">My sections</Text>
+                        <Button size="xs" radius="md" variant="light" leftSection={<IconPlus size={12} />}
+                          onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
+                          New
+                        </Button>
+                      </Group>
+                      <TextInput value={search} onChange={(e) => setSearch(e.currentTarget.value)} placeholder="Search…" leftSection={<IconSearch size={14} />} radius="md" size="xs" />
+                      <ScrollArea.Autosize mah={400} offsetScrollbars>
+                        <Stack gap={4}>
+                          {otherSections.length === 0 ? (
+                            <Text size="xs" c="dimmed" ta="center" py="sm">No sections yet — create one above</Text>
+                          ) : otherSections.map((section) => (
+                            <Card key={section.key} withBorder radius="md" p="xs"
+                              style={{ cursor: "pointer", background: activeSectionKey === section.key ? "rgba(255,140,0,0.12)" : undefined, borderColor: activeSectionKey === section.key ? "rgba(255,140,0,0.45)" : undefined }}
+                              onClick={() => setActiveSectionKey(section.key)}>
+                              <Group gap="xs" wrap="nowrap">
+                                <ThemeIcon size={22} radius="sm" variant="light" color="orange"><IconNotes size={11} /></ThemeIcon>
+                                <div style={{ minWidth: 0 }}>
+                                  <Text fw={600} size="xs" truncate>{section.label}</Text>
+                                  <Text size="xs" c="dimmed">{section.notes.length} pages</Text>
+                                </div>
+                              </Group>
+                            </Card>
+                          ))}
+                        </Stack>
+                      </ScrollArea.Autosize>
+                    </Stack>
+                  </Card>
+
+                  {/* Main content */}
+                  {activeSection ? (
+                    <Stack gap="md">
+                      <Group justify="space-between" align="center">
+                        <Text fw={700} size="sm">{activeSection.label}</Text>
+                        <Button size="xs" variant="filled" color="orange" leftSection={<IconPlus size={12} />}
+                          onClick={() => { resetComposer("other"); setManagementSection(activeSection.label); setOpenComposer(true); }}>
+                          New page
+                        </Button>
+                      </Group>
+                      {activeSection.notes.filter((n) => noteMatchesSearch(n, search)).length === 0 ? (
+                        <Text size="sm" c="dimmed" ta="center" py="xl">No pages in this section yet. Click "New page" to start writing.</Text>
+                      ) : (
+                        <Stack gap="sm">
+                          {activeSection.notes.filter((n) => noteMatchesSearch(n, search)).map((note) => (
+                            <DetailCard key={note.id} note={note} managerView={false} />
+                          ))}
+                        </Stack>
+                      )}
+                    </Stack>
+                  ) : (
+                    <Card withBorder radius="xl" p="xl">
+                      <Stack align="center" gap="sm" py="xl">
+                        <ThemeIcon size={48} radius="xl" variant="light" color="orange"><IconNotes size={24} /></ThemeIcon>
+                        <Text fw={600}>Your personal notebook</Text>
+                        <Text size="sm" c="dimmed" ta="center">Create sections to organize your notes — meeting prep, follow-ups, personal logs.</Text>
+                        <Button variant="filled" color="orange" leftSection={<IconPlus size={14} />}
+                          onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
+                          Create first section
+                        </Button>
+                      </Stack>
+                    </Card>
+                  )}
+                </div>
+              </Stack>
+            </Tabs.Panel>
+
+            {/* ── Notes shared by manager ── */}
             <Tabs.Panel value="received" pt="md">
               <Stack gap="md">
                 <TextInput leftSection={<IconSearch size={14} />} placeholder="Search my notes" value={search} onChange={(e) => setSearch(e.currentTarget.value)} />
@@ -3429,7 +3717,7 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                 </Stack>
 
                 {/* ── Action items assigned to me by manager ── */}
-                {tasksAssignedToMe.length > 0 && (
+                {(true) && (
                   <Stack gap="sm">
                     <Group justify="space-between" align="center">
                       <Stack gap={2}>
@@ -3450,9 +3738,16 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                           </Table.Tr>
                         </Table.Thead>
                         <Table.Tbody>
+                          {tasksAssignedToMe.length === 0 && (
+                            <Table.Tr>
+                              <Table.Td colSpan={5}>
+                                <Text size="sm" c="dimmed" ta="center" py="sm">No action items assigned to you yet — your manager will push them after your next 1:1.</Text>
+                              </Table.Td>
+                            </Table.Tr>
+                          )}
                           {tasksAssignedToMe.map((task) => {
                             const od = isOverdue(task);
-                            const sourceNote = task.note_id ? managerOwnedNotes.find(n => n.id === task.note_id) : null;
+                            const sourceNote = task.note_id ? [...managerOwnedNotes, ...notes].find(n => n.id === task.note_id) : null;
                             return (
                               <Table.Tr key={task.id} style={od ? { background: "rgba(250,82,82,0.07)" } : undefined}>
                                 <Table.Td>

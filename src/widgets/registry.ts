@@ -4,7 +4,6 @@ import {
   IconAddressBook,
   IconChartArea,
   IconChartBar,
-  IconClipboardText,
   IconDeviceMobileMessage,
   IconFileText,
   IconGavel,
@@ -18,6 +17,12 @@ import {
   IconReportAnalytics,
   IconSearch,
   IconShield,
+  IconWorldPin,
+  IconStar,
+  IconClipboardList,
+  IconBook,
+
+  IconSchool as IconSchoolReg,
 } from "@tabler/icons-react";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
@@ -25,7 +30,7 @@ import { TicketSummaryWidget, TicketSummaryTile } from "./TicketSummary";
 import { WfhWidget, WfhTile } from "./Wfh";
 import { EscalationEmailWidget, EscalationEmailTile } from "./EscalationEmail";
 import { WorkActivityWidget, WorkActivityTile } from "./WorkActivity";
-import { ShiftHandoverWidget, ShiftHandoverTile } from "./ShiftHandover";
+
 import { EmailPolisherWidget, EmailPolisherTile } from "./EmailPolisher";
 import { LogicMonitorWidget, LogicMonitorTile } from "./LogicMonitor";
 import {
@@ -68,6 +73,14 @@ import {
   MeetingNotesWidget,
   MeetingNotesTile,
 } from "./MeetingNotes";
+import {
+  TimezoneHelperWidget,
+  TimezoneHelperTile,
+} from "./TimezoneHelper";
+import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
+import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
+import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
+import { TrainingProgressWidget, TrainingProgressTile } from "./TrainingProgress";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -197,16 +210,6 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: EscalationEmailWidget,
   },
   {
-    id: "shift-handover",
-    title: "Shift Handover",
-    description: "AI structures your ticket notes into a handover message",
-    icon: IconClipboardText,
-    iconColor: "blue",
-    tileSize: "sm",
-    Tile: ShiftHandoverTile,
-    Full: ShiftHandoverWidget,
-  },
-  {
     id: "email-polisher",
     title: "Email Polisher",
     description: "Polish a draft for customer, internal, or carrier",
@@ -279,5 +282,55 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: TicketAuditTile,
     Full: TicketAuditWidget,
+  },
+  {
+    id: "timezone-helper",
+    title: "NOC Timezone Helper",
+    description: "Convert customer location to PST/PT — DST-aware, support hours indicator",
+    icon: IconWorldPin,
+    iconColor: "cyan",
+    tileSize: "sm",
+    Tile: TimezoneHelperTile,
+    Full: TimezoneHelperWidget,
+  },
+  {
+    id: "kudos-board",
+    title: "Kudos Board",
+    description: "Peer recognition & team shoutouts",
+    icon: IconStar,
+    iconColor: "yellow",
+    tileSize: "sm",
+    Tile: KudosBoardTile,
+    Full: KudosBoardWidget,
+  },
+  {
+    id: "shift-checklist",
+    title: "Shift Handover Checklist",
+    description: "Structured end-of-shift handover with P1/P2 tickets, bridges, AI summary and manager view",
+    icon: IconClipboardList,
+    iconColor: "teal",
+    tileSize: "sm",
+    Tile: ShiftChecklistTile,
+    Full: ShiftChecklistWidget,
+  },
+  {
+    id: "kb-gap-finder",
+    title: "NOC Knowledge Base",
+    description: "Search Confluence KB · Runbook AI · Quick links · Flag missing docs",
+    icon: IconBook,
+    iconColor: "indigo",
+    tileSize: "sm",
+    Tile: KbGapFinderTile,
+    Full: KbGapFinderWidget,
+  },
+  {
+    id: "training-progress",
+    title: "Training Progress",
+    description: "Track training completions per agent — manager overview included",
+    icon: IconSchoolReg,
+    iconColor: "grape",
+    tileSize: "sm",
+    Tile: TrainingProgressTile,
+    Full: TrainingProgressWidget,
   },
 ];

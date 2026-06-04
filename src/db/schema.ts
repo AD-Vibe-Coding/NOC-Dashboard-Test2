@@ -102,7 +102,7 @@ export const ticket_summaries = pgTable("ticket_summaries", {
 
 export const shift_handovers = pgTable("shift_handovers", {
   id: serial("id").primaryKey(),
-  // Structured inputs
+  // Header
   shift_name: text("shift_name").notNull(),
   shift_date: text("shift_date").notNull(),
   handoff_style: text("handoff_style"),
@@ -111,8 +111,21 @@ export const shift_handovers = pgTable("shift_handovers", {
   owner_in_threads: text("owner_in_threads"),
   summary_in_ticket: text("summary_in_ticket"),
   raw_notes: text("raw_notes").notNull(),
-  // Per-ticket structured entries (JSON-encoded TicketEntry[])
-  tickets_json: text("tickets_json"),
+  // Structured sections (JSON arrays)
+  tickets_json: text("tickets_json"),       // TicketEntry[]
+  bridges_json: text("bridges_json"),       // BridgeEntry[]
+  // Notes sections
+  active_service_note: text("active_service_note"),
+  rolling_handoff_note: text("rolling_handoff_note"),
+  // Weekend / holiday extras
+  is_weekend_holiday: boolean("is_weekend_holiday"),
+  new_tickets_count: integer("new_tickets_count"),
+  p1_p2_count: integer("p1_p2_count"),
+  shift_occupancy: text("shift_occupancy"),
+  idle_time_note: text("idle_time_note"),
+  // Status
+  submitted: boolean("submitted"),
+  // Generated output
   subject: text("subject"),
   body_markdown: text("body_markdown").notNull(),
   ticket_count: integer("ticket_count"),
@@ -417,6 +430,61 @@ export const app_events = pgTable("app_events", {
 // =============================================================================
 // Metric Disputes — techs can challenge KPI values affected by outages
 // =============================================================================
+
+// =============================================================================
+// Kudos Board — peer recognition posts
+// =============================================================================
+export const kudos = pgTable("kudos", {
+  id: serial("id").primaryKey(),
+  from_name: text("from_name").notNull(),
+  to_name: text("to_name").notNull(),
+  message: text("message").notNull(),
+  category: text("category").notNull(), // teamwork | problem-solving | customer-service | above-beyond | mentorship
+  is_pinned: boolean("is_pinned").notNull().default(false),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// Shift Handover Checklist — structured end-of-shift items per agent
+// =============================================================================
+export const shift_checklist_items = pgTable("shift_checklist_items", {
+  id: serial("id").primaryKey(),
+  agent_name: text("agent_name").notNull(),
+  shift_date: text("shift_date").notNull(),     // YYYY-MM-DD
+  category: text("category").notNull(),          // tickets | escalations | outages | notes
+  item_text: text("item_text").notNull(),
+  is_done: boolean("is_done").notNull().default(false),
+  sort_order: integer("sort_order").notNull().default(0),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// Knowledge Base Gaps — questions flagged as missing from the KB
+// =============================================================================
+export const kb_gaps = pgTable("kb_gaps", {
+  id: serial("id").primaryKey(),
+  question: text("question").notNull(),
+  reported_by: text("reported_by").notNull(),
+  ai_response: text("ai_response"),              // what the AI answered (may be incomplete)
+  status: text("status").notNull(),              // open | in_review | resolved
+  resolved_by: text("resolved_by"),
+  resolution_note: text("resolution_note"),      // e.g. "Added to Confluence page XYZ"
+  confluence_url: text("confluence_url"),         // link to the new/updated page
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// Training completions — agent-level status per upcoming_training row
+// =============================================================================
+export const training_completions = pgTable("training_completions", {
+  id: serial("id").primaryKey(),
+  training_id: integer("training_id").notNull(), // FK → upcoming_trainings.id
+  agent_name: text("agent_name").notNull(),
+  status: text("status").notNull(),              // not_started | in_progress | completed
+  completed_at: text("completed_at"),            // ISO timestamp
+  note: text("note"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
 
 export const metric_disputes = pgTable("metric_disputes", {
   id: serial("id").primaryKey(),

@@ -116,6 +116,19 @@ type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
 type TeamMemberRow = typeof schema.team_members.$inferSelect;
 type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
+type KudosRow = typeof schema.kudos.$inferSelect;
+type ShiftChecklistItemRow = typeof schema.shift_checklist_items.$inferSelect;
+type KbGapRow = typeof schema.kb_gaps.$inferSelect;
+type TrainingCompletionRow = typeof schema.training_completions.$inferSelect;
+type UpcomingTrainingRow = typeof schema.upcoming_trainings.$inferSelect;
+type TrainingRequestRow = typeof schema.training_requests.$inferSelect;
+type WfhRequestRow = typeof schema.wfh_requests.$inferSelect;
+type UserRoleRow = typeof schema.user_roles.$inferSelect;
+type UserSessionRow = typeof schema.user_sessions.$inferSelect;
+type TicketAuditRow = typeof schema.ticket_audits.$inferSelect;
+type MetricDisputeRow = typeof schema.metric_disputes.$inferSelect;
+type AppEventRow = typeof schema.app_events.$inferSelect;
+type ZoomQueueSnapshotRow = typeof schema.zoom_queue_snapshots.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
@@ -132,4 +145,17 @@ export const db = {
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
   team_members: tableClient<TeamMemberRow>("team_members"),
   manager_updates: tableClient<ManagerUpdateRow>("manager_updates"),
+  kudos: tableClient<KudosRow>("kudos"),
+  shift_checklist_items: tableClient<ShiftChecklistItemRow>("shift_checklist_items"),
+  kb_gaps: tableClient<KbGapRow>("kb_gaps"),
+  training_completions: tableClient<TrainingCompletionRow>("training_completions"),
+  upcoming_trainings: tableClient<UpcomingTrainingRow>("upcoming_trainings"),
+  training_requests: tableClient<TrainingRequestRow>("training_requests"),
+  wfh_requests: tableClient<WfhRequestRow>("wfh_requests"),
+  user_roles: tableClient<UserRoleRow>("user_roles"),
+  user_sessions: tableClient<UserSessionRow>("user_sessions"),
+  ticket_audits: tableClient<TicketAuditRow>("ticket_audits"),
+  metric_disputes: tableClient<MetricDisputeRow>("metric_disputes"),
+  app_events: tableClient<AppEventRow>("app_events"),
+  zoom_queue_snapshots: tableClient<ZoomQueueSnapshotRow>("zoom_queue_snapshots"),
 };

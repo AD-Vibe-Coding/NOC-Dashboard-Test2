@@ -12,7 +12,7 @@ export type DashboardTemplate =
   | "minimalist"
   | "trainer"
   | "escalation-desk";
-export type DashboardSectionKey = "my-work" | "queue-monitoring" | "ai-tools" | "communication" | "requests";
+export type DashboardSectionKey = "my-work" | "queue-monitoring" | "ai-tools" | "communication" | "requests" | "team";
 
 export interface DashboardLayoutSectionState {
   key: DashboardSectionKey;
@@ -44,92 +44,102 @@ export const DASHBOARD_TEMPLATES: Array<{
 const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   classic: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "meeting-notes", "break-tracker"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter"] },
-      { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-handover", "qs-escalations"] },
-      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
+      { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-checklist", "qs-escalations"] },
+      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-progress"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
   focus: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "break-tracker", "performance-tracker"] },
-      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-progress"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "communication", hidden: true, itemIds: ["shift-handover", "escalation-email", "email-polisher", "qs-escalations"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter"] },
+      { key: "communication", hidden: true, itemIds: ["shift-checklist", "escalation-email", "email-polisher", "qs-escalations"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board"] },
     ],
   },
   operations: {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-handover", "qs-escalations", "email-polisher"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "break-tracker", "performance-tracker"] },
-      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "mobility-troubleshooter", "smart-search", "ticket-summary"] },
-      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates"] },
+      { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-checklist", "qs-escalations", "email-polisher"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "mobility-troubleshooter", "smart-search", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
+      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-progress"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
   learning: {
     sections: [
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter"] },
-      { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
-      { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-handover", "escalation-email", "qs-escalations"] },
-      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "my-day", "break-tracker"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
+      { key: "requests", hidden: false, itemIds: ["training-updates", "training-progress", "wfh"] },
+      { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
+      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "meeting-notes", "my-day", "break-tracker"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
   "command-center": {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "break-tracker"] },
-      { key: "communication", hidden: false, itemIds: ["shift-handover", "escalation-email", "qs-escalations", "email-polisher"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "noc-troubleshooter", "mobility-troubleshooter", "ticket-summary"] },
-      { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "meeting-notes", "break-tracker"] },
+      { key: "communication", hidden: false, itemIds: ["shift-checklist", "escalation-email", "qs-escalations", "email-polisher"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "noc-troubleshooter", "mobility-troubleshooter", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
+      { key: "requests", hidden: false, itemIds: ["training-updates", "training-progress", "wfh"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
   velocity: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "zoom-queue", "break-tracker", "performance-tracker"] },
-      { key: "communication", hidden: false, itemIds: ["shift-handover", "email-polisher", "escalation-email", "qs-escalations"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "zoom-queue", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "communication", hidden: false, itemIds: ["shift-checklist", "email-polisher", "escalation-email", "qs-escalations"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["logic-monitor"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter"] },
-      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
+      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-progress"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board"] },
     ],
   },
   "night-shift": {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["logic-monitor", "zoom-queue"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "break-tracker", "performance-tracker"] },
-      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter"] },
-      { key: "communication", hidden: true, itemIds: ["shift-handover", "qs-escalations", "escalation-email", "email-polisher"] },
-      { key: "requests", hidden: true, itemIds: ["training-updates", "wfh"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
+      { key: "communication", hidden: false, itemIds: ["shift-checklist", "qs-escalations", "escalation-email", "email-polisher"] },
+      { key: "requests", hidden: true, itemIds: ["training-updates", "training-progress", "wfh"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board"] },
     ],
   },
   minimalist: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "zoom-queue", "break-tracker"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary"] },
-      { key: "communication", hidden: true, itemIds: ["email-polisher", "shift-handover", "escalation-email", "qs-escalations"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "zoom-queue", "break-tracker"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "timezone-helper"] },
+      { key: "communication", hidden: true, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["logic-monitor"] },
-      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates"] },
+      { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-progress"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board"] },
     ],
   },
   trainer: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "my-day", "break-tracker"] },
-      { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
-      { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-handover", "escalation-email", "qs-escalations"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "mobility-troubleshooter", "noc-troubleshooter"] },
+      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "meeting-notes", "my-day", "break-tracker"] },
+      { key: "requests", hidden: false, itemIds: ["training-updates", "training-progress", "wfh"] },
+      { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
+      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "mobility-troubleshooter", "noc-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
   "escalation-desk": {
     sections: [
-      { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-handover", "qs-escalations", "email-polisher"] },
+      { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-checklist", "qs-escalations", "email-polisher"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "break-tracker"] },
-      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter"] },
-      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "performance-tracker", "break-tracker"] },
+      { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
+      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-progress"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board"] },
     ],
   },
 };
@@ -149,7 +159,7 @@ type DashboardPreferencesContextValue = {
   resetCurrentTemplateLayout: () => void;
 };
 
-const STORAGE_KEY_PREFIX = "dashboard-preferences";
+const STORAGE_KEY_PREFIX = "dashboard-preferences-v4";
 const DashboardPreferencesContext = createContext<DashboardPreferencesContextValue | null>(null);
 
 function isTemplate(value: string | null | undefined): value is DashboardTemplate {
@@ -169,6 +179,35 @@ function getStorageKey(viewer: string | null | undefined) {
   return `${STORAGE_KEY_PREFIX}:${viewer ?? "anonymous"}`;
 }
 
+/** Widgets that must always appear in a specific section — injected into stored
+ *  layouts if missing (one-time forward-migration for users with old saved prefs). */
+const REQUIRED_WIDGETS: Array<{ id: string; section: DashboardSectionKey; afterId?: string }> = [
+  { id: "meeting-notes", section: "my-work", afterId: "my-day" },
+  { id: "timezone-helper", section: "ai-tools" },
+];
+
+function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>): Record<DashboardTemplate, DashboardLayoutState> {
+  const result = { ...layouts };
+  // Check per-template (NOT globally) — a widget present in one template's stored
+  // layout must not prevent injection into another template that's missing it.
+  for (const tmpl of Object.keys(result) as DashboardTemplate[]) {
+    for (const { id, section, afterId } of REQUIRED_WIDGETS) {
+      const idsInTemplate = result[tmpl].sections.flatMap((s) => s.itemIds);
+      if (idsInTemplate.includes(id)) continue; // already present in THIS template
+      result[tmpl] = {
+        sections: result[tmpl].sections.map((s) => {
+          if (s.key !== section) return s;
+          const idx = afterId ? s.itemIds.indexOf(afterId) : -1;
+          const newIds = [...s.itemIds];
+          newIds.splice(idx >= 0 ? idx + 1 : newIds.length, 0, id);
+          return { ...s, itemIds: newIds };
+        }),
+      };
+    }
+  }
+  return result;
+}
+
 function readStoredPreferences(viewer: string) {
   if (typeof window === "undefined") {
     return { template: "classic" as DashboardTemplate, layouts: cloneLayouts() };
@@ -178,12 +217,13 @@ function readStoredPreferences(viewer: string) {
     const raw = window.localStorage.getItem(getStorageKey(viewer));
     if (!raw) return { template: "classic" as DashboardTemplate, layouts: cloneLayouts() };
     const parsed = JSON.parse(raw) as Partial<StoredPreferences>;
+    const merged = {
+      ...cloneLayouts(),
+      ...(parsed.layouts ?? {}),
+    };
     return {
       template: isTemplate(parsed.template) ? parsed.template : "classic",
-      layouts: {
-        ...cloneLayouts(),
-        ...(parsed.layouts ?? {}),
-      },
+      layouts: migrateLayouts(merged),
     };
   } catch {
     return { template: "classic" as DashboardTemplate, layouts: cloneLayouts() };
