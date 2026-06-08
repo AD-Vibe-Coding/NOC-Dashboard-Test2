@@ -4,6 +4,7 @@ import {
   IconAddressBook,
   IconChartArea,
   IconChartBar,
+  IconDatabase,
   IconDeviceMobileMessage,
   IconFileText,
   IconGavel,
@@ -30,6 +31,7 @@ import { TicketSummaryWidget, TicketSummaryTile } from "./TicketSummary";
 import { WfhWidget, WfhTile } from "./Wfh";
 import { EscalationEmailWidget, EscalationEmailTile } from "./EscalationEmail";
 import { WorkActivityWidget, WorkActivityTile } from "./WorkActivity";
+import { DataHealthWidget, DataHealthTile } from "./DataHealth";
 
 import { EmailPolisherWidget, EmailPolisherTile } from "./EmailPolisher";
 import { LogicMonitorWidget, LogicMonitorTile } from "./LogicMonitor";
@@ -250,6 +252,17 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: AppUsageTile,
     Full: AppUsageWidget,
+  },
+  {
+    id: "data-health",
+    title: "Data Health",
+    description: "Read-only table row counts across all app data",
+    icon: IconDatabase,
+    iconColor: "orange",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: DataHealthTile,
+    Full: DataHealthWidget,
   },
   {
     id: "zoom-call-metrics",

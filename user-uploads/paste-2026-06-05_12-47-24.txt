@@ -1,0 +1,479 @@
+✅ WHAT TO UPDATE
+Replace the full "TICKET AUDITOR — MASTER PROMPT & RULES" with the condensed prompt (TSP removed) I provided above.
+
+Current size estimate: ~9,000 tokens
+New size estimate: ~3,040 tokens
+Savings: ~5,960 tokens per audit (66% reduction)
+
+Changes to make:
+typescript
+
+// api/audit/analyze.ts
+
+const SYSTEM_PROMPT = `You are Ticket Auditor, an agent responsible for auditing vCom NOC support tickets.
+
+OBJECTIVE: Audit tickets accurately, double-check findings. When multiple people worked 
+a ticket, score each person separately based ONLY on their own actions.
+
+OUTPUT: Markdown format with tables. Do NOT use "Ticket Auditor:" prefix.
+
+[INSERT CONDENSED PROMPT HERE]
+`;
+⚠️ CRITICAL: The prompt currently says:
+
+txt
+
+OUTPUT: Markdown format with tables. Do NOT use "Ticket Auditor:" prefix.
+But your parser in src/widgets/TicketAudit/data.ts expects JSON-only output per the comment "expects structured individuals[]".
+
+You need to decide:
+
+Option A: Keep the condensed prompt as Markdown-only (current instruction), then update the parser to handle Markdown tables instead of JSON.
+
+Option B: Update the condensed prompt to output structured JSON instead of Markdown.
+
+I recommend Option B — your parser is already built for JSON. Here's the updated output section:
+
+RECOMMENDED: Updated Output Format (for JSON parsing)
+Replace the "AUDIT OUTPUT FORMAT" section in the condensed prompt with:
+
+txt
+
+════════════════════════════════════════════════════
+AUDIT OUTPUT FORMAT — JSON STRUCTURED
+════════════════════════════════════════════════════
+
+Return a single JSON object with this structure:
+
+{
+  "ticket_number": "string",
+  "audit_date": "ISO 8601 timestamp",
+  "ticket_summary": {
+    "owner": "string (name or email)",
+    "contributors": ["string (names/emails)"],
+    "priority": "string",
+    "service_type": "string",
+    "issue_summary": "string (brief)"
+  },
+  "individuals": [
+    {
+      "name": "string",
+      "role": "Owner | Contributor | Contributor - AS",
+      "scores": {
+        "response_timeliness": { "max": 20, "earned": number, "notes": "string" },
+        "data_quality": { "max": 16, "earned": number, "notes": "string" },
+        "communication_quality": { "max": 25, "earned": number, "notes": "string" },
+        "process_workflow": { "max": 14, "earned": number, "notes": "string" },
+        "technical_handling": { "max": 13, "earned": number, "notes": "string" },
+        "closure_documentation": { "max": 12, "earned": number, "notes": "string" }
+      },
+      "total_score": number,
+      "audit_result": "Pass | Review | Fail",
+      "what_you_did_well": ["string (2-3 positive findings with evidence)"],
+      "what_you_missed": ["string (gaps with timestamps/evidence)"],
+      "recommended_corrections": ["string"]
+    }
+  ],
+  "pending_access_reopen_analysis": {
+    "applicable": boolean,
+    "responsible_individual": "string",
+    "time_elapsed_minutes": number,
+    "finding": "string"
+  },
+  "customer_email_response_analysis": {
+    "applicable": boolean,
+    "response_time_minutes": number,
+    "finding": "string"
+  }
+}
+Expand code
+2) Audit Chat Prompt in api/audit/chat.ts
+✅ WHAT TO UPDATE
+The chat prompt (buildAuditChatSystemPrompt(...)) injects completed audit context.
+
+Current recommendation: Keep this as-is — it's designed to explain completed audits to users and doesn't need the condensed rules since it receives the audit output as context.
+
+However, ensure it includes:
+
+Reference to the scoring categories (20, 16, 25, 14, 13, 12)
+Role distinction (Owner vs. Contributor logic)
+Mention that score deductions were evidence-based
+Example update pattern:
+
+typescript
+
+function buildAuditChatSystemPrompt(auditContext) {
+  return `You are the Audit Assistant, explaining a completed ticket audit.
+
+The ticket has been scored across 6 categories (max 100 points):
+- Response & Timeliness (max 20)
+- Data Quality (max 16)
+- Communication Quality (max 25)
+- Process & Workflow (max 14)
+- Technical Handling (max 13)
+- Closure & Documentation (max 12)
+
+Audit Context: ${JSON.stringify(auditContext, null, 2)}
+
+Your role:
+1. Answer user questions about why specific deductions were made
+2. Provide coaching guidance based on findings
+3. Reference evidence from the ticket
+4. Distinguish between Owner and Contributor actions
+5. Explain N/A items where scoring didn't apply
+
+Do NOT re-score the ticket. Use the completed audit as source of truth.`;
+}
+3) Parsing/Format Expectations in src/widgets/TicketAudit/data.ts
+✅ WHAT TO UPDATE
+Your existing parser expects:
+
+typescript
+
+individuals[] with role, scores, totals, etc.
+Verify the parser handles:
+
+typescript
+
+// src/widgets/TicketAudit/data.ts
+
+// ✅ CONFIRM these role values are supported:
+type IndividualRole = "Owner" | "Contributor" | "Contributor - AS";
+
+// ✅ CONFIRM score clamping logic accounts for:
+const CATEGORY_MAXES = {
+  response_timeliness: 20,
+  data_quality: 16,
+  communication_quality: 25,
+  process_workflow: 14,
+  technical_handling: 13,
+  closure_documentation: 12
+};
+
+// ✅ CONFIRM total recomputation:
+total_score = sum of all category.earned values (max 100)
+Expand code
+If your parser currently expects different field names or structure, map the JSON output above to your parser's expected format.
+
+4) Optional Rules Endpoint in api/audit/rules.ts
+✅ RECOMMENDATION
+If you expose rules to the UI or want to support dynamic rule updates, create a rules endpoint that returns:
+
+typescript
+
+// api/audit/rules.ts
+
+export const AUDIT_RULES = {
+  scoring_categories: {
+    response_timeliness: { max: 20, description: "..." },
+    data_quality: { max: 16, description: "..." },
+    communication_quality: { max: 25, description: "..." },
+    process_workflow: { max: 14, description: "..." },
+    technical_handling: { max: 13, description: "..." },
+    closure_documentation: { max: 12, description: "..." }
+  },
+  sla_services: {
+    data: ["DIA", "MPLS", "VPLS", "Point to Point", "MPLS VPN", "Dark Fiber"],
+    voice: ["Local DS1", "LD DS1", "LD Switched", "ISDN-PRI", "ISDN-BRI", "SIP Call Path"]
+  },
+  valid_stages: [
+    "New",
+    "Pending Access / Test Results",
+    "Pending Carrier Action / Update",
+    "Pending Carrier Information",
+    "Customer Confirming Resolution",
+    "Pending Complete",
+    "Completed"
+  ],
+  do_not_penalize: [
+    "Root Cause field blank",
+    "MTTR field blank",
+    "Blank internal notes",
+    "Auto-timer closure",
+    "Missing carrier ticket number",
+    "RFO in shorthand or abbreviation",
+    "LCON blank if customer never provided info",
+    "Pending Access after Pending Complete",
+    "Optional/non-functional system fields",
+    "An individual for an action they didn't perform",
+    "SLA escalation for non-SLA services",
+    "Resolution code blank when RFO documented in Next Step field"
+  ]
+};
+
+export function getRules() {
+  return AUDIT_RULES;
+}
+This allows you to:
+
+Display rules in a UI reference section
+Update rules without redeploying the prompt
+Validate ticket data against rules pre-audit
+Summary of Required Changes
+File
+Change
+Impact
+Priority
+api/audit/analyze.ts	Replace SYSTEM_PROMPT with condensed version; update output format to JSON	-5,960 tokens/audit (66% savings)	HIGH
+api/audit/chat.ts	Verify chat prompt references correct score categories & roles	No token impact; improves UX	MEDIUM
+src/widgets/TicketAudit/data.ts	Verify parser handles new JSON structure & all role types	Prevents parse errors	HIGH
+api/audit/rules.ts	Create optional rules endpoint (if needed for UI)	Enables dynamic rule display	LOW
+No matching rows found...
+Critical Decision Point
+JSON vs. Markdown Output
+Your current parser expects JSON, but the condensed prompt I provided outputs Markdown.
+
+Choose one:
+
+Option
+Pros
+Cons
+Keep Markdown	More human-readable for chat users; audit context is text	Parser must be rewritten; larger post-processing step
+Switch to JSON (Recommended)	Parser already built for it; structured data; smaller tokens	Requires prompt update to enforce JSON output only
+No matching rows found...
+If you want to support BOTH:
+
+typescript
+
+// In prompt, request Markdown first, then JSON:
+OUTPUT: Provide findings in Markdown narrative format, then append a JSON 
+structured block marked as: 
+
+```json
+{ ... JSON structure ... }
+Then in parser, extract both the Markdown (for display) and JSON (for scoring).
+
+txt
+
+---
+
+## **Final Recommendation**
+
+1. **Update `api/audit/analyze.ts`** with condensed prompt + JSON output format
+2. **Verify `src/widgets/TicketAudit/data.ts` parser** matches the JSON structure above
+3. **Test with 2-3 tickets** to confirm parsing works correctly
+4. **Keep `api/audit/chat.ts` as-is** (it receives parsed audit context)
+5. **Create `api/audit/rules.ts`** only if you need to expose rules to the UI
+
+**Expected outcome:** 66% token reduction per audit (~5,960 tokens) with no loss of functionality.
+
+Would you like me to create the exact JSON structure mapping for your parser, or provide a sample prompt update for `api/audit/analyze.ts`?
+I do not want the output on the google sheets anymore. I want the output to be on the application 
+09:36 AM
+
+Removing Google Sheets Output
+Perfect — since you want output only in your application (not Google Sheets), here's what needs to change:
+
+What to Remove from the Prompt
+The condensed prompt I provided doesn't include Google Sheets instructions, so you're already good there.
+
+However, check if your current api/audit/analyze.ts has any code that:
+
+Creates/updates Google Sheets
+Exports audit results to Google Drive
+References Sheets API calls
+What to Update in Your Application Code
+1) Remove Google Sheets Integration from api/audit/analyze.ts
+Look for and remove/comment out any code like:
+
+typescript
+
+// ❌ DELETE THIS:
+import { google } from 'googleapis';
+import { updateSheetValues } from '@/lib/sheets';
+
+// ❌ DELETE THIS:
+async function exportAuditToSheets(auditResult) {
+  const sheets = google.sheets({ version: 'v4', auth: ... });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: ...,
+    range: ...,
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: [...] }
+  });
+}
+
+// ❌ DELETE THIS call at end of audit:
+await exportAuditToSheets(auditResult);
+2) Ensure Output Goes Only to Your App
+Your api/audit/analyze.ts should:
+
+typescript
+
+// ✅ KEEP THIS:
+export async function analyzeTicket(ticketData: TicketInput) {
+  // Run the audit
+  const auditResult = await runAudit(ticketData);
+  
+  // Return JSON to application (NOT to Sheets)
+  return {
+    success: true,
+    data: auditResult  // This goes to your app UI only
+  };
+}
+The JSON structure flows like this:
+
+txt
+
+User Input (App) 
+  ↓
+api/audit/analyze.ts (runs audit)
+  ↓
+Returns JSON audit result
+  ↓
+App displays in UI (TicketAudit widget)
+  ↓
+Chat prompt uses audit context for follow-up questions
+  ↓
+No Sheets export anywhere
+Files to Check & Update
+File
+What to Look For
+Action
+api/audit/analyze.ts	Google Sheets imports, exportAuditToSheets() calls	Remove/Comment out
+api/audit/index.ts (if exists)	Route handlers that post to Sheets	Remove
+src/widgets/TicketAudit/data.ts	Functions calling Sheets APIs	Remove
+src/lib/sheets.ts (if exists)	Sheets helper functions	Can delete if unused elsewhere
+.env or config files	Google Sheets API keys, spreadsheet IDs	Can remove
+No matching rows found...
+Updated Data Flow
+Here's what your application flow looks like after removing Sheets:
+
+txt
+
+┌─────────────────────────────────────────────────────┐
+│            User submits ticket data                  │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│   api/audit/analyze.ts                              │
+│   - Receives ticket data                            │
+│   - Sends to LLM with condensed system prompt       │
+│   - LLM returns structured JSON audit               │
+│   - NO Google Sheets call                           │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│   Application displays audit results                │
+│   - Parses JSON with src/widgets/data.ts parser    │
+│   - Renders in TicketAudit widget                   │
+│   - Shows scores, findings, tables                  │
+└─────────────────────────────────────────────────────┘
+                        ↓
+┌─────────────────────────────────────────────────────┐
+│   User asks follow-up questions in chat             │
+│   - Chat prompt gets audit context                  │
+│   - LLM explains deductions/findings                │
+│   - Results display in app (no Sheets export)       │
+└─────────────────────────────────────────────────────┘
+Code Example: Clean api/audit/analyze.ts
+typescript
+
+// api/audit/analyze.ts
+
+import { Anthropic } from "@anthropic-ai/sdk";
+import { SYSTEM_PROMPT } from "./prompts"; // Your condensed prompt
+import { parseAuditJson } from "@/src/widgets/TicketAudit/data";
+
+const client = new Anthropic();
+
+export interface TicketInput {
+  ticket_number: string;
+  owner: string;
+  contributors?: string[];
+  priority: string;
+  service_type: string;
+  issue_summary: string;
+  full_ticket_content: string;
+  // ... other ticket fields
+}
+
+export async function analyzeTicket(ticketData: TicketInput) {
+  try {
+    // Call LLM with condensed prompt
+    const response = await client.messages.create({
+      model: "claude-3-5-sonnet-20241022",
+      max_tokens: 4000,
+      system: SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Please audit the following ticket:\n\n${formatTicketForAudit(ticketData)}`
+        }
+      ]
+    });
+
+    // Extract JSON from response
+    const auditJson = response.content[0].type === "text" 
+      ? response.content[0].text 
+      : "";
+
+    // Parse and validate
+    const auditResult = parseAuditJson(auditJson);
+
+    // Return to application only (NO Sheets export)
+    return {
+      success: true,
+      data: auditResult,
+      timestamp: new Date().toISOString()
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+function formatTicketForAudit(ticketData: TicketInput): string {
+  return `
+Ticket #: ${ticketData.ticket_number}
+Owner: ${ticketData.owner}
+Contributors: ${ticketData.contributors?.join(", ") || "None"}
+Priority: ${ticketData.priority}
+Service Type: ${ticketData.service_type}
+
+Issue Summary:
+${ticketData.issue_summary}
+
+Full Ticket Content:
+${ticketData.full_ticket_content}
+  `;
+}
+Database Storage (Optional)
+If you want to persist audit results in your application database:
+
+typescript
+
+// In api/audit/analyze.ts, after successful audit:
+
+import { db } from "@/lib/db"; // Your database client
+
+export async function analyzeTicket(ticketData: TicketInput) {
+  const auditResult = await runAudit(ticketData);
+
+  // Save to database (not Sheets)
+  await db.auditResults.create({
+    ticket_number: ticketData.ticket_number,
+    audit_data: auditResult,
+    created_at: new Date(),
+    created_by: getCurrentUser().id
+  });
+
+  return {
+    success: true,
+    data: auditResult,
+    timestamp: new Date().toISOString()
+  };
+}
+Checklist: Removing Sheets
+ Remove @google-cloud/sheets or similar imports
+ Delete Google Sheets API initialization code
+ Remove .env variables for Sheets (GOOGLE_SHEETS_ID, etc.)
+ Delete any exportToSheets() or updateSheets() functions
+ Remove Sheets-related routes from api/audit/index.ts
+ Verify api/audit/analyze.ts returns JSON only
+ Test audit flow end-to-end in application
+ Confirm audit results display in TicketAudit widget
+ Verify chat context loads correctly after audit

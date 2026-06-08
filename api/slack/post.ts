@@ -5,7 +5,7 @@
  * Supports chat:write.customize — sends username + icon_emoji so each
  * team member's break posts appear under their own name in Slack.
  *
- * Body: { text, username?, icon_emoji?, thread_ts? }
+ * Body: { text, username?, icon_emoji?, thread_ts?, target_user_id? }
  *
  * Strategy:
  *   1. Try with username + icon_emoji (requires chat:write.customize scope)
@@ -42,7 +42,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const text       = String(body.text ?? "").trim();
   const username   = body.username   ? String(body.username).trim()   : undefined;
   const icon_emoji = body.icon_emoji ? String(body.icon_emoji).trim() : undefined;
-  const thread_ts  = body.thread_ts  ? String(body.thread_ts)         : undefined;
+  const thread_ts      = body.thread_ts      ? String(body.thread_ts)      : undefined;
+  const target_user_id = body.target_user_id ? String(body.target_user_id) : undefined;
 
   if (!text) return res.status(400).json({ posted: false, error: "text is required" });
 
@@ -70,9 +71,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const wantCustomize = !!(username || icon_emoji);
   const fallbackText  = username ? `${username}: ${text}` : text;
 
-  async function postOnce(withCustomize: boolean) {
+  async function openDmChannel(userId: string) {
+    const r = await fetch("https://slack.com/api/conversations.open", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ users: userId }),
+    });
+    return r.json() as Promise<{ ok: boolean; error?: string; channel?: { id?: string } }>;
+  }
+
+  async function postOnce(withCustomize: boolean, channelId: string) {
     const msgText = withCustomize ? text : fallbackText;
-    const payload: Record<string, unknown> = { channel: CHANNEL_ID, text: msgText };
+    const payload: Record<string, unknown> = { channel: channelId, text: msgText };
     if (thread_ts) payload.thread_ts = thread_ts;
     if (withCustomize) {
       if (username)   payload.username   = username;
@@ -87,14 +97,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    let j = await postOnce(wantCustomize);
+    let targetChannelId = CHANNEL_ID;
+    let targetLabel = CHANNEL_NAME;
+
+    if (target_user_id) {
+      const dm = await openDmChannel(target_user_id);
+      if (!dm.ok || !dm.channel?.id) {
+        return res.status(502).json({
+          posted: false,
+          error: dm.error ?? "Could not open DM channel",
+          warning: `Failed to open DM with user ${target_user_id}. No channel fallback was used.`,
+        });
+      }
+      targetChannelId = dm.channel.id;
+      targetLabel = `dm:${target_user_id}`;
+    }
+
+    let j = await postOnce(wantCustomize, targetChannelId);
     let customizeDenied = false;
 
     // If scope missing, retry with name in text body
     if (!j.ok && wantCustomize && j.error && SCOPE_ERRORS.has(j.error)) {
       console.warn(`[slack/post] chat:write.customize denied (${j.error}) — retrying with prefixed text. Reinstall the Slack app to activate the scope.`);
       customizeDenied = true;
-      j = await postOnce(false);
+      j = await postOnce(false, targetChannelId);
     }
 
     if (!j.ok) {
@@ -106,11 +132,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       posted: true,
       demo: false,
       ts: j.ts,
-      channel: CHANNEL_NAME,
+      channel: targetLabel,
       text: customizeDenied ? fallbackText : text,
       thread_ts: thread_ts ?? null,
       warning: customizeDenied
-        ? "Bot lacks chat:write.customize — name prefixed in message body. Reinstall the Slack app to fix."
+        ? "Bot lacks chat:write.customize — emoji/name prefixed in message body. Reinstall the Slack app to restore custom avatar/name."
         : undefined,
     });
   } catch (err) {

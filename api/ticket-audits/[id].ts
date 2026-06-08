@@ -30,6 +30,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).json(data);
   }
 
+  if (req.method === "GET") {
+    const { data, error } = await supabaseAdmin
+      .from("ticket_audits")
+      .select("*")
+      .eq("id", id)
+      .single();
+    if (error) return res.status(500).json({ error: error.message });
+    return res.status(200).json(data);
+  }
+
   if (req.method === "DELETE") {
     const { error } = await supabaseAdmin
       .from("ticket_audits")

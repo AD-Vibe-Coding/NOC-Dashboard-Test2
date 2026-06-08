@@ -9,6 +9,7 @@ export interface TicketAudit {
   ticket_date?: string | null;
   agent_name: string | null;
   agent_name_raw: string | null;
+  audit_role?: string | null;
   overall_score: number | null;
   grade: string | null;
   criteria_json: string | null;
@@ -95,7 +96,7 @@ export interface AuditScoreDetail {
 export interface AuditIndividual {
   name: string;
   party?: string;
-  role: "Owner" | "Contributor" | string;
+  role: "Owner" | "Contributor" | "Contributor - AS" | string;
   scores: Record<string, AuditScoreDetail>;
   total_score: number;
   grade: string;
@@ -119,6 +120,61 @@ export interface ParsedAuditResult {
   individuals: AuditIndividual[];
 }
 
+export function normalizeAuditOwners(individuals: AuditIndividual[]): AuditIndividual[] {
+  const ownerIndexes = individuals
+    .map((ind, index) => ({ ind, index }))
+    .filter(({ ind }) => ind.role === "Owner");
+
+  if (ownerIndexes.length <= 1) return individuals;
+
+  const keeper = ownerIndexes.reduce((best, current) => {
+    const bestScore = typeof best.ind.total_score === "number" ? best.ind.total_score : -1;
+    const currentScore = typeof current.ind.total_score === "number" ? current.ind.total_score : -1;
+    return currentScore > bestScore ? current : best;
+  });
+
+  return individuals.map((ind, index) => {
+    if (ind.role !== "Owner") return ind;
+    if (index === keeper.index) return ind;
+    return { ...ind, role: "Contributor" };
+  });
+}
+
+export function deriveAuditSummaries(criteriaJson: string | null | undefined): {
+  whatDidWell: string | null;
+  whatMissed: string | null;
+} {
+  if (!criteriaJson) return { whatDidWell: null, whatMissed: null };
+
+  try {
+    const raw = JSON.parse(criteriaJson) as Record<string, any>;
+    const criteriaEntries = Object.entries(raw).filter(([key, value]) => {
+      if (["total_score", "grade", "what_did_well", "what_missed"].includes(key)) return false;
+      return value && typeof value === "object" && typeof value.score === "number";
+    });
+
+    const strengths = criteriaEntries
+      .filter(([, value]) => (value.points_deducted ?? 0) === 0)
+      .slice(0, 2)
+      .map(([key]) => key);
+
+    const misses = criteriaEntries
+      .filter(([, value]) => (value.points_deducted ?? 0) > 0)
+      .sort((a, b) => (b[1].points_deducted ?? 0) - (a[1].points_deducted ?? 0))
+      .slice(0, 2)
+      .map(([, value]) => String(value.deduction_reason ?? "").trim())
+      .filter(Boolean)
+      .filter((reason) => !["full marks", "n/a"].includes(reason.toLowerCase()));
+
+    return {
+      whatDidWell: strengths.length > 0 ? `Strong in ${strengths.join(" and ")}.` : null,
+      whatMissed: misses.length > 0 ? misses.join(" ") : null,
+    };
+  } catch {
+    return { whatDidWell: null, whatMissed: null };
+  }
+}
+
 /**
  * Parse the structured JSON block the agent returns.
  * Returns null if no valid JSON block found.
@@ -140,14 +196,32 @@ function extractJsonString(text: string): string | null {
     return (first !== -1 && last > first) ? s.slice(first, last + 1) : null;
   }
 
-  // Case 1 — find ALL fence pairs and try each one until JSON.parse succeeds.
-  // This handles: ```json...```, ```...```, and nested/repeated fences.
+  const trimmed = text.trim();
+
+  // Case 1 — response starts with an opening fence, but the model may omit the
+  // closing fence if it gets truncated. Strip the opener and recover the JSON
+  // body from the remaining text.
+  if (trimmed.startsWith("```")) {
+    const withoutFence = trimmed.replace(/^```(?:json)?\s*/i, "");
+    const json = firstToLast(withoutFence.replace(/\s*```\s*$/, ""));
+    if (json) {
+      try { JSON.parse(json); return json; } catch { /* keep trying */ }
+    }
+  }
+
+  // Case 2 — find ALL fence pairs and try each one until JSON.parse succeeds.
   const fenceOpenRe = /```(?:json)?\s*\n/gi;
   let match: RegExpExecArray | null;
   while ((match = fenceOpenRe.exec(text)) !== null) {
     const contentStart = match.index + match[0].length;
     const fenceEnd = text.indexOf("```", contentStart);
-    if (fenceEnd === -1) continue;
+    if (fenceEnd === -1) {
+      const json = firstToLast(text.slice(contentStart));
+      if (json) {
+        try { JSON.parse(json); return json; } catch { /* try next strategy */ }
+      }
+      continue;
+    }
     const between = text.slice(contentStart, fenceEnd);
     const json = firstToLast(between);
     if (json) {
@@ -155,10 +229,8 @@ function extractJsonString(text: string): string | null {
     }
   }
 
-  // Case 2 — primer mode OR bare response: starts with "{" (or whitespace then "{")
-  const trimmed = text.trim();
+  // Case 3 — primer mode OR bare response: starts with "{" (or whitespace then "{")
   if (trimmed.startsWith("{")) {
-    // strip trailing ``` if model closed the code block
     const stripped = trimmed.replace(/\s*```[\w]*\s*$/, "").trim();
     const json = firstToLast(stripped);
     if (json) {
@@ -166,7 +238,7 @@ function extractJsonString(text: string): string | null {
     }
   }
 
-  // Case 3 — last resort: grab first "{" to last "}"
+  // Case 4 — last resort: grab first "{" to last "}"
   return firstToLast(text);
 }
 
@@ -226,6 +298,13 @@ export function parseAuditJson(markdown: string): ParsedAuditResult | null {
             (s: number, v: AuditScoreDetail) => s + (v.score ?? 0), 0
           );
           ind.total_score = Math.min(computedTotal, 100);
+          ind.grade = normalizeAuditGrade(ind.grade, ind.total_score) ?? "";
+          if (!ind.what_did_well?.trim() || !ind.what_missed?.trim()) {
+            const syntheticCriteriaJson = JSON.stringify(ind.scores ?? {});
+            const derived = deriveAuditSummaries(syntheticCriteriaJson);
+            ind.what_did_well = ind.what_did_well?.trim() || derived.whatDidWell || "";
+            ind.what_missed = ind.what_missed?.trim() || derived.whatMissed || "";
+          }
           return ind;
         });
         return parsed as ParsedAuditResult;
@@ -460,9 +539,29 @@ export function extractAnalysisMarkdown(full: string): string {
   return full.trim();
 }
 
+export function normalizeAuditGrade(grade: string | null | undefined, score?: number | null): string | null {
+  const raw = (grade ?? "").trim();
+  const g = raw.toLowerCase();
+
+  if (g === "pass" || g === "review" || g === "fail") return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  if (g === "needs improvement") return "Review";
+  if (["a", "a+", "a-", "b+", "b", "b-"].includes(g)) return "Pass";
+  if (["c+", "c", "c-", "review"].includes(g)) return "Review";
+  if (["d", "d+", "d-", "f"].includes(g)) return "Fail";
+
+  if (typeof score === "number") {
+    if (score >= 85) return "Pass";
+    if (score >= 70) return "Review";
+    return "Fail";
+  }
+
+  return raw || null;
+}
+
 export function gradeColor(grade: string | null): string {
-  if (!grade) return "gray";
-  const g = grade.toLowerCase();
+  const normalized = normalizeAuditGrade(grade);
+  if (!normalized) return "gray";
+  const g = normalized.toLowerCase();
   if (g === "pass") return "green";
   if (g === "fail") return "red";
   return "yellow";
@@ -473,4 +572,55 @@ export function scoreColor(score: number | null): string {
   if (score >= 85) return "green";
   if (score >= 70) return "yellow";
   return "red";
+}
+
+export function normalizeAuditFileName(name: string | null | undefined): string {
+  return (name ?? "").trim().toLowerCase();
+}
+
+export function extractTicketNumberFromAuditFileName(name: string | null | undefined): string | null {
+  const normalized = normalizeAuditFileName(name);
+  if (!normalized) return null;
+  const stem = normalized.replace(/\.(mhtml|mht|html|htm)$/i, "").trim();
+  if (!stem) return null;
+  return /^[a-z]*\d+[a-z0-9-]*$/i.test(stem) ? stem.toUpperCase() : null;
+}
+
+export function normalizeAuditMonth(value: string | null | undefined, fallbackDate?: string | null): string | null {
+  const raw = (value ?? "").trim();
+  if (raw) {
+    const isoMatch = raw.match(/^(\d{4})-(\d{2})$/);
+    if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}`;
+    const parsed = new Date(`${raw} 1`);
+    if (!Number.isNaN(parsed.getTime())) {
+      return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
+    }
+  }
+
+  const fallback = (fallbackDate ?? "").trim();
+  if (fallback) {
+    const date = new Date(fallback);
+    if (!Number.isNaN(date.getTime())) {
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    }
+    const directMatch = fallback.match(/^(\d{4})-(\d{2})/);
+    if (directMatch) return `${directMatch[1]}-${directMatch[2]}`;
+  }
+
+  return null;
+}
+
+
+export function formatAuditMonth(value: string | null | undefined): string {
+  const normalized = normalizeAuditMonth(value);
+  if (!normalized) return "—";
+
+  const isoMatch = normalized.match(/^(\d{4})-(\d{2})$/);
+  if (!isoMatch) return normalized;
+
+  const date = new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, 1);
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+  }).format(date);
 }

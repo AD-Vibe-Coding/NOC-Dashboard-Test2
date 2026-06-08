@@ -42,6 +42,7 @@ import {
   type AggregateOptions,
   type PerformanceMetric,
 } from "./data";
+import type { DisputeField } from "./DisputeForm";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,7 +68,7 @@ interface Props {
   filterOptions?: AggregateOptions;
   onClose: () => void;
   /** Callback to open a dispute form for a specific metric + field. */
-  onDispute?: (metric: PerformanceMetric, field: "ack_minutes" | "carrier_ticket_minutes") => void;
+  onDispute?: (metric: PerformanceMetric, field: DisputeField) => void;
   /** Map of metric_id → dispute info for showing status badges. */
   disputesByMetricId?: Map<number, DisputeInfo[]>;
 }
@@ -82,7 +83,11 @@ interface ColDef {
   /** Extract display string from a metric row (used for CSV export). */
   render: (m: PerformanceMetric) => string;
   /** Optional JSX renderer for the table cell. Falls back to `render()`. */
-  renderCell?: (m: PerformanceMetric) => React.ReactNode;
+  renderCell?: (
+    m: PerformanceMetric,
+    onDispute?: Props["onDispute"],
+    disputesByMetricId?: Props["disputesByMetricId"],
+  ) => React.ReactNode;
   /** Extract numeric/string for sorting. */
   sortValue: (m: PerformanceMetric) => number | string;
   align?: "right";
@@ -357,6 +362,12 @@ const CALL_COLS: ColDef[] = [
 
 const IPATH_TASK_URL = "https://ipath.vcomsolutions.com/vMobile/tasks/edittask";
 
+const AUDIT_DISPUTE_STATUS_COLORS: Record<string, string> = {
+  pending: "yellow",
+  approved: "green",
+  rejected: "red",
+};
+
 const TASK_COLS: ColDef[] = [
   {
     key: "ref_number",
@@ -427,8 +438,11 @@ const TASK_COLS: ColDef[] = [
     label: "Met SLA",
     render: (m) =>
       m.success_count === 1 ? "Yes" : m.success_count === 0 ? "No" : "—",
+    renderCell: (m) => (
+      <Text size="xs">{m.success_count === 1 ? "Yes" : m.success_count === 0 ? "No" : "—"}</Text>
+    ),
     sortValue: (m) => m.success_count ?? -1,
-    width: 70,
+    width: 110,
   },
   {
     key: "duration_minutes",
@@ -539,6 +553,21 @@ const AUDIT_COLS: ColDef[] = [
     key: "ticket_number",
     label: "Ticket Number",
     render: (m) => str(auditRaw(m).ticket_number) || "—",
+    renderCell: (m) => {
+      const id = str(auditRaw(m).ticket_number);
+      if (!id) return "—";
+      return (
+        <Anchor
+          href={`${IPATH_URL}?trouble_id=${encodeURIComponent(id)}&sel_tab=Cases`}
+          target="_blank"
+          rel="noopener noreferrer"
+          size="xs"
+          fw={600}
+        >
+          {id}
+        </Anchor>
+      );
+    },
     sortValue: (m) => str(auditRaw(m).ticket_number),
     width: 110,
   },
@@ -617,9 +646,40 @@ const AUDIT_COLS: ColDef[] = [
     key: "what_missed",
     label: "What You Missed / Could Do Better",
     render: (m) => str(auditRaw(m).what_missed) || "—",
-    renderCell: (m) => <FeedbackCell value={str(auditRaw(m).what_missed)} color="orange" />,
+    renderCell: (
+      m: PerformanceMetric,
+      onDispute?: Props["onDispute"],
+      disputesByMetricId?: Props["disputesByMetricId"],
+    ) => {
+      const dispute = disputesByMetricId?.get(m.id)?.find((item: DisputeInfo) => item.field_name === "ai_feedback");
+      return (
+        <Group gap="xs" wrap="nowrap" align="flex-start">
+          <FeedbackCell value={str(auditRaw(m).what_missed)} color="orange" />
+          <Stack gap={4} align="flex-start">
+            {onDispute && (
+              <Tooltip label="Dispute AI-generated feedback">
+                <ActionIcon
+                  size="sm"
+                  variant="light"
+                  color="yellow"
+                  onClick={() => onDispute(m, "ai_feedback")}
+                  aria-label="Dispute AI-generated feedback"
+                >
+                  <IconGavel size={14} />
+                </ActionIcon>
+              </Tooltip>
+            )}
+            {dispute && (
+              <Badge size="xs" color={AUDIT_DISPUTE_STATUS_COLORS[dispute.status] ?? "gray"} variant="light">
+                {dispute.status}
+              </Badge>
+            )}
+          </Stack>
+        </Group>
+      );
+    },
     sortValue: (m) => str(auditRaw(m).what_missed),
-    width: 200,
+    width: 260,
   },
 ];
 
@@ -892,8 +952,9 @@ export function RawDataModal({
                       {cols.map((c) => {
                         // Show dispute badge + button for disputable fields
                         const isDisputable =
-                          activeTab === "tickets" &&
-                          (c.key === "ack_minutes" || c.key === "carrier_ticket_minutes");
+                          (activeTab === "tickets" &&
+                            (c.key === "ack_minutes" || c.key === "carrier_ticket_minutes")) ||
+                          (activeTab === "tasks" && c.key === "success_count");
                         const fieldDisputes = disputes.filter(
                           (d) => d.field_name === c.key,
                         );
@@ -911,7 +972,7 @@ export function RawDataModal({
                             }}
                           >
                             <Group gap={4} wrap="nowrap" justify={c.align === "right" ? "flex-end" : "flex-start"}>
-                              {c.renderCell ? c.renderCell(m) : c.render(m)}
+                              {c.renderCell ? c.renderCell(m, onDispute, disputesByMetricId) : c.render(m)}
                               {isDisputable && latestDispute && (
                                 <Tooltip
                                   label={

@@ -10,10 +10,11 @@
  *   2. Audit History     — table of all saved audits with scores
  *   3. Push to Metrics   — select audits → push scores to Performance Tracker
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
+  Anchor,
   Badge,
   Box,
   Button,
@@ -26,6 +27,7 @@ import {
   Progress,
   ScrollArea,
   SegmentedControl,
+  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -51,12 +53,16 @@ import ReactMarkdown from "react-markdown";
 import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
-import { resolveTeamMember } from "../PerformanceTracker/team";
+import { isExcludedAuditActor, resolveTeamMember } from "../PerformanceTracker/team";
 import { BulkUploadTab } from "./BulkUploadTab";
 import { AuditChat } from "./AuditChat";
 import {
+  deriveAuditSummaries,
   extractAnalysisMarkdown,
+  formatAuditMonth,
   gradeColor,
+  normalizeAuditFileName,
+  normalizeAuditGrade,
   parseAuditJson,
   scoreColor,
   useTicketAudits,
@@ -130,7 +136,7 @@ function buildFieldsFromIndividual(result: ParsedAuditResult, ind: AuditIndividu
     ticket_date: result.ticket_date ?? "",
     agent_name: resolveTeamMember(ind.name) ?? ind.name ?? "",
     overall_score: typeof ind.total_score === "number" ? ind.total_score : "",
-    grade: ind.grade ?? "",
+    grade: normalizeAuditGrade(ind.grade, typeof ind.total_score === "number" ? ind.total_score : null) ?? "",
     audit_month: result.audit_month ?? new Date().toISOString().slice(0, 7),
     queue: result.queue ?? "noc",
     criteria,
@@ -147,6 +153,13 @@ function buildFieldsFromIndividual(result: ParsedAuditResult, ind: AuditIndividu
 const _savedRegistry = new Set<string>();
 
 // ── Score badge ───────────────────────────────────────────────────────────────
+function auditSummaryText(audit: TicketAudit, kind: "well" | "missed") {
+  const direct = kind === "well" ? audit.what_did_well : audit.what_missed;
+  if (direct && direct.trim()) return direct;
+  const derived = deriveAuditSummaries(audit.criteria_json);
+  return kind === "well" ? (derived.whatDidWell ?? "—") : (derived.whatMissed ?? "—");
+}
+
 function ScoreBadge({ score, grade }: { score: number | null; grade: string | null }) {
   return (
     <Group gap={6}>
@@ -157,6 +170,31 @@ function ScoreBadge({ score, grade }: { score: number | null; grade: string | nu
         <Badge color={gradeColor(grade)} variant="light" size="sm">{grade}</Badge>
       )}
     </Group>
+  );
+}
+
+function AuditLink({
+  label,
+  onClick,
+}: {
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Anchor
+      component="button"
+      type="button"
+      size="sm"
+      fw={600}
+      c="blue.3"
+      style={{ textAlign: "left" }}
+      onClick={(event: React.MouseEvent<HTMLButtonElement>) => {
+        event.stopPropagation();
+        onClick();
+      }}
+    >
+      {label}
+    </Anchor>
   );
 }
 
@@ -211,6 +249,12 @@ function IndividualReviewPanel({
         } else if (Object.keys(fields.criteria).length > 0) {
           criteriaJson = JSON.stringify(fields.criteria);
         }
+        if (isExcludedAuditActor(individual.name) || isExcludedAuditActor(fields.agent_name)) {
+          setSaved(true);
+          setSaving(false);
+          return;
+        }
+
         await saveAudit({
           file_name: fileName,
           file_size_bytes: fileSize,
@@ -219,6 +263,7 @@ function IndividualReviewPanel({
           ticket_date: fields.ticket_date || null,
           agent_name: fields.agent_name || null,
           agent_name_raw: fields.agent_name || null,
+          audit_role: individual.role || null,
           overall_score: typeof fields.overall_score === "number" ? fields.overall_score : null,
           grade: fields.grade || null,
           criteria_json: criteriaJson,
@@ -324,7 +369,7 @@ function IndividualReviewPanel({
 // ── Upload & Analyze tab ──────────────────────────────────────────────────────
 function UploadTab({ onSaved }: { onSaved: () => void }) {
   const { identity } = useIdentity();
-  const { saveAudit } = useTicketAudits();
+  const { audits, saveAudit } = useTicketAudits();
 
   const [inputMode, setInputMode] = useState<"upload" | "paste">("upload");
   const [fileName, setFileName] = useState("");
@@ -332,6 +377,7 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
   const [parsedText, setParsedText] = useState("");
   const [pastedText, setPastedText] = useState("");
   const [parseError, setParseError] = useState<string | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
   const [streaming, setStreaming] = useState(false);
@@ -344,9 +390,14 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
   const [parsedResult, setParsedResult] = useState<ParsedAuditResult | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const existingFileNames = useMemo(
+    () => new Set(audits.map((audit) => normalizeAuditFileName(audit.file_name))),
+    [audits],
+  );
 
   function resetState() {
     setParseError(null);
+    setDuplicateError(null);
     setStreamResult("");
     setStreamError(null);
     setAnalyzed(false);
@@ -355,6 +406,15 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
 
   async function handleFile(file: File) {
     resetState();
+    const normalizedName = normalizeAuditFileName(file.name);
+    if (existingFileNames.has(normalizedName)) {
+      setFileName("");
+      setFileSize(0);
+      setParsedText("");
+      setDuplicateError(`A ticket named "${file.name}" was already uploaded and audited. Please rename the file or remove the existing audit first.`);
+      return;
+    }
+
     setFileName(file.name);
     setFileSize(file.size);
     setParsedText("");
@@ -565,6 +625,12 @@ function UploadTab({ onSaved }: { onSaved: () => void }) {
         </Stack>
       )}
 
+      {duplicateError && (
+        <Alert color="orange" icon={<IconAlertCircle size={16} />} radius="md">
+          {duplicateError}
+        </Alert>
+      )}
+
       {parseError && (
         <Alert color="red" icon={<IconAlertCircle size={16} />} radius="md">
           {parseError}
@@ -730,9 +796,25 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
   const { identity } = useIdentity();
   const isManager = identity?.role === "manager";
   const [viewing, setViewing] = useState<TicketAudit | null>(null);
+  const [viewingLoading, setViewingLoading] = useState(false);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [clearing, setClearing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+
+  async function openAuditDetails(audit: TicketAudit) {
+    setViewing(audit);
+    setViewingLoading(true);
+    try {
+      const r = await fetch(`/api/ticket-audits/${audit.id}`);
+      const j = await r.json().catch(() => null);
+      if (!r.ok) throw new Error(j?.error ?? `HTTP ${r.status}`);
+      setViewing(j as TicketAudit);
+    } catch {
+      // Keep summary row visible if full fetch fails.
+    } finally {
+      setViewingLoading(false);
+    }
+  }
 
   async function handleDelete(id: number) {
     setDeleting(id);
@@ -743,6 +825,12 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
     setClearing(true);
     try { await onClearAll(); setConfirmClear(false); } finally { setClearing(false); }
   }
+
+  const me = (identity?.name ?? "").trim().toLowerCase();
+  const myAudits = audits.filter((a) => (a.agent_name ?? "").trim().toLowerCase() === me);
+  const myOwners = myAudits.filter((a) => a.audit_role === "Owner");
+  const myContributors = myAudits.filter((a) => a.audit_role === "Contributor");
+  const myContribAS = myAudits.filter((a) => a.audit_role === "Contributor - AS");
 
   return (
     <Stack gap="md" pt="md">
@@ -778,6 +866,48 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
         </Text>
       )}
 
+      {myAudits.length > 0 && !isManager && (
+        <Card withBorder radius="md" p="sm">
+          <Stack gap="xs">
+            <Text size="xs" fw={700} tt="uppercase" c="dimmed">My Ticket Roles</Text>
+            <Group gap="xs" wrap="wrap">
+              <Badge color="violet" variant="light">Owner: {myOwners.length}</Badge>
+              <Badge color="blue" variant="light">Contributor: {myContributors.length}</Badge>
+              <Badge color="orange" variant="outline">Contributor - AS: {myContribAS.length}</Badge>
+            </Group>
+            <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+              <Card withBorder radius="sm" p="xs">
+                <Text size="xs" fw={600} c="violet">Owner tickets</Text>
+                <Stack gap={2} mt={4}>
+                  {myOwners.slice(0, 6).map((a) => (
+                    <Text key={`owner-${a.id}`} size="xs" c="dimmed">{a.ticket_number ?? a.file_name}</Text>
+                  ))}
+                  {myOwners.length === 0 && <Text size="xs" c="dimmed">—</Text>}
+                </Stack>
+              </Card>
+              <Card withBorder radius="sm" p="xs">
+                <Text size="xs" fw={600} c="blue">Contributor tickets</Text>
+                <Stack gap={2} mt={4}>
+                  {myContributors.slice(0, 6).map((a) => (
+                    <Text key={`contrib-${a.id}`} size="xs" c="dimmed">{a.ticket_number ?? a.file_name}</Text>
+                  ))}
+                  {myContributors.length === 0 && <Text size="xs" c="dimmed">—</Text>}
+                </Stack>
+              </Card>
+              <Card withBorder radius="sm" p="xs">
+                <Text size="xs" fw={600} c="orange">Contributor - AS tickets</Text>
+                <Stack gap={2} mt={4}>
+                  {myContribAS.slice(0, 6).map((a) => (
+                    <Text key={`as-${a.id}`} size="xs" c="dimmed">{a.ticket_number ?? a.file_name}</Text>
+                  ))}
+                  {myContribAS.length === 0 && <Text size="xs" c="dimmed">—</Text>}
+                </Stack>
+              </Card>
+            </SimpleGrid>
+          </Stack>
+        </Card>
+      )}
+
       {audits.length > 0 && (
         <Card withBorder radius="md" p={0}>
           <ScrollArea>
@@ -798,12 +928,25 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
               </Table.Thead>
               <Table.Tbody>
                 {audits.map((a) => (
-                  <Table.Tr key={a.id} style={{ cursor: "pointer" }} onClick={() => setViewing(a)}>
+                  <Table.Tr key={a.id} style={{ cursor: "pointer" }} onClick={() => openAuditDetails(a)}>
                     <Table.Td>
-                      <Text size="xs" c="dimmed" ff="monospace">{a.id}</Text>
+                      <AuditLink label={`#${a.id}`} onClick={() => openAuditDetails(a)} />
                     </Table.Td>
                     <Table.Td>
                       <Text fw={500} size="sm">{a.agent_name ?? "—"}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      {a.audit_role ? (
+                        <Badge
+                          size="xs"
+                          variant={a.audit_role === "Contributor - AS" ? "outline" : "light"}
+                          color={a.audit_role === "Owner" ? "violet" : a.audit_role === "Contributor - AS" ? "orange" : "blue"}
+                        >
+                          {a.audit_role}
+                        </Badge>
+                      ) : (
+                        <Text size="xs" c="dimmed">—</Text>
+                      )}
                     </Table.Td>
                     <Table.Td>
                       <Text size="xs" truncate style={{ maxWidth: 180 }}>
@@ -813,7 +956,7 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
                       </Text>
                     </Table.Td>
                     <Table.Td>
-                      <Text size="xs" ff="monospace">{a.audit_month ?? "—"}</Text>
+                      <Text size="xs">{formatAuditMonth(a.audit_month)}</Text>
                     </Table.Td>
                     <Table.Td>
                       <Badge size="xs" variant="light" color={a.queue === "noc" ? "blue" : "violet"}>
@@ -879,10 +1022,29 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
       >
         {viewing && (
           <Stack gap="md">
+            {viewingLoading && (
+              <Alert color="violet" variant="light" radius="md" icon={<Loader size={16} color="var(--mantine-color-violet-5)" />}>
+                Loading full audit details…
+              </Alert>
+            )}
             <SimpleGrid cols={2} spacing="sm">
               <Box>
                 <Text size="xs" c="dimmed" fw={600} tt="uppercase">Agent</Text>
                 <Text fw={500}>{viewing.agent_name ?? "—"}</Text>
+              </Box>
+              <Box>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase">Role</Text>
+                {viewing.audit_role ? (
+                  <Badge
+                    size="sm"
+                    variant={viewing.audit_role === "Contributor - AS" ? "outline" : "light"}
+                    color={viewing.audit_role === "Owner" ? "violet" : viewing.audit_role === "Contributor - AS" ? "orange" : "blue"}
+                  >
+                    {viewing.audit_role}
+                  </Badge>
+                ) : (
+                  <Text fw={500}>—</Text>
+                )}
               </Box>
               <Box>
                 <Text size="xs" c="dimmed" fw={600} tt="uppercase">Month</Text>
@@ -899,6 +1061,23 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
                 <Text fw={500}>{viewing.audited_by ?? "—"}</Text>
               </Box>
             </SimpleGrid>
+
+            {(auditSummaryText(viewing, "well") !== "—" || auditSummaryText(viewing, "missed") !== "—") && (
+              <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                {auditSummaryText(viewing, "well") !== "—" && (
+                  <Card withBorder radius="md" p="sm">
+                    <Text size="xs" fw={700} tt="uppercase" c="green.4" mb={6}>What You Did Well</Text>
+                    <Text size="sm" c="dimmed" style={{ whiteSpace: "pre-wrap" }}>{auditSummaryText(viewing, "well")}</Text>
+                  </Card>
+                )}
+                {auditSummaryText(viewing, "missed") !== "—" && (
+                  <Card withBorder radius="md" p="sm">
+                    <Text size="xs" fw={700} tt="uppercase" c="orange.4" mb={6}>What You Missed / Could Do Better</Text>
+                    <Text size="sm" c="dimmed" style={{ whiteSpace: "pre-wrap" }}>{auditSummaryText(viewing, "missed")}</Text>
+                  </Card>
+                )}
+              </SimpleGrid>
+            )}
 
             {viewing.criteria_json && (() => {
               try {
@@ -981,16 +1160,79 @@ function HistoryTab({ audits, loading, onDelete, onClearAll }: {
 }
 
 // ── Push to Metrics tab ───────────────────────────────────────────────────────
-function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushed: () => void }) {
+const NOC_OWNER_OPTIONS = [
+  "Mohammed Zubairuddin",
+  "Pranav Dandibhotla",
+  "Mohammed Ashraf",
+  "Akram Ahmed",
+  "Kenya Gentry",
+  "Hamza Rahmani",
+  "Akash Hanvate",
+  "Otukho Olembo",
+  "Karthik Radhakrishnan",
+  "Sriram Parisa",
+  "Karthik Damagalla",
+  "Abhishek Benarji",
+  "Lokesh Naik Banavath",
+  "Mahalakshmi Samiti",
+  "Anirudh Kukudala",
+  "Perry Cox",
+  "Matt Marquez",
+] as const;
+
+function PushToMetricsTab({ audits, onPushed, onDelete }: { audits: TicketAudit[]; onPushed: () => void; onDelete: (id: number) => Promise<void> }) {
   const unpushed = audits.filter((a) => !a.metrics_id && a.agent_name && a.overall_score !== null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [roleFilter, setRoleFilter] = useState<"all" | "Owner" | "Contributor" | "Contributor - AS">("all");
+  const [ownerFilter, setOwnerFilter] = useState<string>("all");
   const [pushing, setPushing] = useState(false);
+  const [deleting, setDeleting] = useState<number | null>(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [confirmBulkDeleteOpen, setConfirmBulkDeleteOpen] = useState(false);
   const [pushError, setPushError] = useState<string | null>(null);
   const [pushResult, setPushResult] = useState<string | null>(null);
 
+  const ownerSet = new Set<string>(NOC_OWNER_OPTIONS);
+
+  const filteredUnpushed = unpushed.filter((a) => {
+    if (roleFilter !== "all" && (a.audit_role ?? "") !== roleFilter) return false;
+
+    const agentName = a.agent_name ?? "";
+    if (ownerFilter === "all") return true;
+    if (ownerFilter === "others") return !ownerSet.has(agentName);
+    return agentName === ownerFilter;
+  });
+
+  const selectedInFilter = filteredUnpushed.filter((a) => selected.has(a.id)).length;
+
   function toggleAll() {
-    if (selected.size === unpushed.length) setSelected(new Set());
-    else setSelected(new Set(unpushed.map((a) => a.id)));
+    if (selectedInFilter === filteredUnpushed.length) {
+      const next = new Set(selected);
+      filteredUnpushed.forEach((a) => next.delete(a.id));
+      setSelected(next);
+      return;
+    }
+    const next = new Set(selected);
+    filteredUnpushed.forEach((a) => next.add(a.id));
+    setSelected(next);
+  }
+
+  async function handleDelete(id: number) {
+    setDeleting(id);
+    setPushError(null);
+    setPushResult(null);
+    try {
+      await onDelete(id);
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
   }
 
   async function handlePush() {
@@ -1018,19 +1260,89 @@ function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushe
         `Pushed ${pushed} audit${pushed !== 1 ? "s" : ""} to Performance Tracker` +
         (failed > 0 ? ` · ${failed} failed: ${errors.join("; ")}` : " ✅"),
       );
-      setSelected(new Set());
+      const pushedIds = new Set(audit_ids);
+      setSelected((prev) => new Set([...prev].filter((id) => !pushedIds.has(id))));
       onPushed();
     } catch (e) {
       setPushError(e instanceof Error ? e.message : "Push failed");
+    } finally {
+      setPushing(false);
+      onPushed();
     }
+  }
 
-    setPushing(false);
-    onPushed();
+  async function handleBulkDelete() {
+    if (selected.size === 0) return;
+    const auditIds = filteredUnpushed.filter((a) => selected.has(a.id)).map((a) => a.id);
+    if (auditIds.length === 0) return;
+
+    setBulkDeleting(true);
+    setPushError(null);
+    setPushResult(null);
+
+    try {
+      const results = await Promise.allSettled(auditIds.map((id) => onDelete(id)));
+      const deleted = results.filter((result) => result.status === "fulfilled").length;
+      const failed = results.length - deleted;
+
+      setSelected((prev) => new Set([...prev].filter((id) => !auditIds.includes(id))));
+      setPushResult(
+        `Deleted ${deleted} selected audit${deleted !== 1 ? "s" : ""}` +
+        (failed > 0 ? ` · ${failed} failed` : " ✅"),
+      );
+
+      if (failed > 0) {
+        const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+        setPushError(firstFailure?.reason instanceof Error ? firstFailure.reason.message : "Some deletes failed");
+      }
+
+      onPushed();
+    } catch (e) {
+      setPushError(e instanceof Error ? e.message : "Bulk delete failed");
+    } finally {
+      setBulkDeleting(false);
+    }
   }
 
   return (
-    <Stack gap="md" pt="md">
-      <Alert icon={<IconChartBar size={16} />} color="violet" variant="light" radius="md">
+    <>
+      <Modal
+        opened={confirmBulkDeleteOpen}
+        onClose={() => !bulkDeleting && setConfirmBulkDeleteOpen(false)}
+        title="Delete selected audits?"
+        centered
+        radius="lg"
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            You are about to delete <b>{selectedInFilter}</b> selected audit{selectedInFilter !== 1 ? "s" : ""}
+            from the current filtered view.
+          </Text>
+          <Text size="sm" c="dimmed">
+            This action cannot be undone.
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              variant="default"
+              onClick={() => setConfirmBulkDeleteOpen(false)}
+              disabled={bulkDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              leftSection={<IconTrash size={15} />}
+              loading={bulkDeleting}
+              onClick={handleBulkDelete}
+            >
+              Yes, delete selected
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Stack gap="md" pt="md">
+        <Alert icon={<IconChartBar size={16} />} color="violet" variant="light" radius="md">
         <Text size="sm">
           Select audits below to push their scores to the <b>Team Performance</b> widget as <code>source_type = "audit"</code>. 
           Each pushed audit creates a performance metric row for the agent, visible in their drill-down.
@@ -1043,72 +1355,160 @@ function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushe
         </Text>
       ) : (
         <>
-          <Group justify="space-between">
-            <Group gap="sm">
-              <Checkbox
-                checked={selected.size === unpushed.length}
-                indeterminate={selected.size > 0 && selected.size < unpushed.length}
-                onChange={toggleAll}
-                label={`Select all (${unpushed.length})`}
-              />
-              <Text size="xs" c="dimmed">{selected.size} selected</Text>
+          <Group justify="space-between" align="flex-end" wrap="wrap">
+            <Group align="flex-end" gap="md" wrap="wrap">
+              <Stack gap={6}>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase">Filter by role</Text>
+                <SegmentedControl
+                  value={roleFilter}
+                  onChange={(value) => setRoleFilter(value as typeof roleFilter)}
+                  data={[
+                    { label: `All (${unpushed.length})`, value: "all" },
+                    { label: `Owner (${unpushed.filter((a) => a.audit_role === "Owner").length})`, value: "Owner" },
+                    { label: `Contributor (${unpushed.filter((a) => a.audit_role === "Contributor").length})`, value: "Contributor" },
+                    { label: `Contributor - AS (${unpushed.filter((a) => a.audit_role === "Contributor - AS").length})`, value: "Contributor - AS" },
+                  ]}
+                />
+              </Stack>
+              <Stack gap={6}>
+                <Text size="xs" c="dimmed" fw={600} tt="uppercase">Filter by owner</Text>
+                <Select
+                  value={ownerFilter}
+                  onChange={(value) => setOwnerFilter(value ?? "all")}
+                  data={[
+                    { value: "all", label: `All owners (${unpushed.length})` },
+                    ...NOC_OWNER_OPTIONS.map((name) => ({
+                      value: name,
+                      label: `${name} (${unpushed.filter((a) => a.agent_name === name).length})`,
+                    })),
+                    {
+                      value: "others",
+                      label: `Others (${unpushed.filter((a) => !ownerSet.has(a.agent_name ?? "")).length})`,
+                    },
+                  ]}
+                  w={300}
+                  searchable
+                  nothingFoundMessage="No owner found"
+                />
+              </Stack>
             </Group>
-            <Button
-              leftSection={<IconSend size={15} />}
-              color="violet"
-              size="sm"
-              disabled={selected.size === 0}
-              loading={pushing}
-              onClick={handlePush}
-            >
-              Push to Performance Tracker
-            </Button>
+            <Group gap="xs">
+              <Button
+                leftSection={<IconTrash size={15} />}
+                color="red"
+                variant="light"
+                size="sm"
+                disabled={selectedInFilter === 0}
+                loading={bulkDeleting}
+                onClick={() => setConfirmBulkDeleteOpen(true)}
+              >
+                Delete selected
+              </Button>
+              <Button
+                leftSection={<IconSend size={15} />}
+                color="violet"
+                size="sm"
+                disabled={selectedInFilter === 0}
+                loading={pushing}
+                onClick={handlePush}
+              >
+                Push filtered selection to Performance Tracker
+              </Button>
+            </Group>
           </Group>
 
-          <Card withBorder radius="md" p={0}>
-            <Table fz="sm" horizontalSpacing="md" verticalSpacing="sm" striped>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th w={40}></Table.Th>
-                  <Table.Th>Agent</Table.Th>
-                  <Table.Th>Ticket</Table.Th>
-                  <Table.Th>Month</Table.Th>
-                  <Table.Th>Score</Table.Th>
-                  <Table.Th>Grade</Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {unpushed.map((a) => (
-                  <Table.Tr key={a.id}>
-                    <Table.Td>
-                      <Checkbox
-                        checked={selected.has(a.id)}
-                        onChange={(e) => {
-                          const next = new Set(selected);
-                          if (e.currentTarget.checked) next.add(a.id);
-                          else next.delete(a.id);
-                          setSelected(next);
-                        }}
-                      />
-                    </Table.Td>
-                    <Table.Td><Text fw={500}>{a.agent_name}</Text></Table.Td>
-                    <Table.Td>
-                      <Text size="xs" c="dimmed">{a.ticket_number ?? a.file_name}</Text>
-                    </Table.Td>
-                    <Table.Td><Text size="xs" ff="monospace">{a.audit_month ?? "—"}</Text></Table.Td>
-                    <Table.Td>
-                      <Badge color={scoreColor(a.overall_score)} variant="filled" size="sm" fw={700}>
-                        {a.overall_score}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Badge color={gradeColor(a.grade)} variant="light" size="sm">{a.grade}</Badge>
-                    </Table.Td>
-                  </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Card>
+          {filteredUnpushed.length === 0 ? (
+            <Text c="dimmed" ta="center" py="xl">
+              No audits match the selected role filter.
+            </Text>
+          ) : (
+            <>
+              <Group justify="space-between">
+                <Group gap="sm">
+                  <Checkbox
+                    checked={filteredUnpushed.length > 0 && selectedInFilter === filteredUnpushed.length}
+                    indeterminate={selectedInFilter > 0 && selectedInFilter < filteredUnpushed.length}
+                    onChange={toggleAll}
+                    label={`Select all in filter (${filteredUnpushed.length})`}
+                  />
+                  <Text size="xs" c="dimmed">{selectedInFilter} selected in current filter</Text>
+                </Group>
+                <Text size="xs" c="dimmed">Total selected across all filters: {selected.size}</Text>
+              </Group>
+
+              <Card withBorder radius="md" p={0}>
+                <Table fz="sm" horizontalSpacing="md" verticalSpacing="sm" striped>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th w={40}></Table.Th>
+                      <Table.Th>Agent</Table.Th>
+                      <Table.Th>Role</Table.Th>
+                      <Table.Th>Ticket</Table.Th>
+                      <Table.Th>Month</Table.Th>
+                      <Table.Th>Score</Table.Th>
+                      <Table.Th>Grade</Table.Th>
+                      <Table.Th w={44}></Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {filteredUnpushed.map((a) => (
+                      <Table.Tr key={a.id}>
+                        <Table.Td>
+                          <Checkbox
+                            checked={selected.has(a.id)}
+                            onChange={(e) => {
+                              const next = new Set(selected);
+                              if (e.currentTarget.checked) next.add(a.id);
+                              else next.delete(a.id);
+                              setSelected(next);
+                            }}
+                          />
+                        </Table.Td>
+                        <Table.Td><Text fw={500}>{a.agent_name}</Text></Table.Td>
+                        <Table.Td>
+                          {a.audit_role ? (
+                            <Badge
+                              size="xs"
+                              variant={a.audit_role === "Contributor - AS" ? "outline" : "light"}
+                              color={a.audit_role === "Owner" ? "violet" : a.audit_role === "Contributor - AS" ? "orange" : "blue"}
+                            >
+                              {a.audit_role}
+                            </Badge>
+                          ) : (
+                            <Text size="xs" c="dimmed">—</Text>
+                          )}
+                        </Table.Td>
+                        <Table.Td>
+                          <Text size="xs" c="dimmed">{a.ticket_number ?? a.file_name}</Text>
+                        </Table.Td>
+                        <Table.Td><Text size="xs">{formatAuditMonth(a.audit_month)}</Text></Table.Td>
+                        <Table.Td>
+                          <Badge color={scoreColor(a.overall_score)} variant="filled" size="sm" fw={700}>
+                            {a.overall_score}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <Badge color={gradeColor(a.grade)} variant="light" size="sm">{a.grade}</Badge>
+                        </Table.Td>
+                        <Table.Td>
+                          <ActionIcon
+                            size="sm"
+                            variant="subtle"
+                            color="red"
+                            loading={deleting === a.id}
+                            onClick={() => handleDelete(a.id)}
+                            aria-label={`Delete audit ${a.id}`}
+                          >
+                            <IconTrash size={14} />
+                          </ActionIcon>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Card>
+            </>
+          )}
         </>
       )}
 
@@ -1118,7 +1518,8 @@ function PushToMetricsTab({ audits, onPushed }: { audits: TicketAudit[]; onPushe
       {pushResult && (
         <Alert color="green" icon={<IconCheck size={16} />} radius="md">{pushResult}</Alert>
       )}
-    </Stack>
+      </Stack>
+    </>
   );
 }
 
@@ -1154,7 +1555,7 @@ export function TicketAuditWidget() {
             Ticket Audit is available to Tier 2, Tier 3, and Managers. Your current role does not have access.
           </Alert>
         ) : (
-          <Tabs value={activeTab} onChange={setActiveTab} variant="default" keepMounted={false}>
+          <Tabs value={activeTab} onChange={setActiveTab} variant="default" keepMounted>
           <Tabs.List>
             <Tabs.Tab value="upload" leftSection={<IconUpload size={14} />}>
               Upload &amp; Analyze
@@ -1194,7 +1595,7 @@ export function TicketAuditWidget() {
 
           {canPushMetrics && (
             <Tabs.Panel value="metrics">
-              <PushToMetricsTab audits={audits} onPushed={refresh} />
+              <PushToMetricsTab audits={audits} onPushed={refresh} onDelete={deleteAudit} />
             </Tabs.Panel>
           )}
         </Tabs>

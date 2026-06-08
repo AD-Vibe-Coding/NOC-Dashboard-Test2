@@ -9,6 +9,7 @@ import {
   Card,
   Group,
   Modal,
+  SegmentedControl,
   Select,
   Stack,
   Table,
@@ -44,6 +45,7 @@ import {
   persistImport,
   rederivePeriodsForAllRows,
   usePerformanceData,
+  type PerformanceMetric,
 } from "./data";
 import {
   LOCKED_TEAM,
@@ -54,6 +56,286 @@ import {
 import { SOURCE_TYPE_LABELS, type SourceType } from "./import";
 
 export { PerformanceTrackerTile } from "./Tile";
+
+const SNAPSHOT_DEMO_MEMBER = "Snapshot Demo User";
+
+const SNAPSHOT_DEMO_METRICS: PerformanceMetric[] = [
+  {
+    id: -9901,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tickets",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: 42,
+    score: "High",
+    period_start: "2026-01-09T14:12:00Z",
+    period_end: "2026-01-09T14:54:00Z",
+    queue: "noc",
+    period_month: "2026-01",
+    period_quarter: "2026-Q1",
+    ack_minutes: 5,
+    carrier_ticket_minutes: 11,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "DEMO-23011",
+      customer_name: "Acme Retail Group",
+      subject_text: "Core switch packet loss review",
+      hour: 14,
+      is_weekend: false,
+      is_maintenance: false,
+      within_24h: "less than 24 hours",
+    }),
+    created_at: "2026-01-09T14:54:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9902,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "calls",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: null,
+    score: "Answered",
+    period_start: "2026-02-12T16:08:00Z",
+    period_end: "2026-02-12T16:19:00Z",
+    queue: "mobility",
+    period_month: "2026-02",
+    period_quarter: "2026-Q1",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: 404,
+    wait_seconds: 22,
+    raw_json: JSON.stringify({
+      caller_info: "+1 (555) 010-2201",
+      customer_name: "Northwind Health",
+      hour: 16,
+      is_weekend: false,
+    }),
+    created_at: "2026-02-12T16:19:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9903,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tasks",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: 31,
+    score: null,
+    period_start: "2026-03-03T11:25:00Z",
+    period_end: "2026-03-03T11:56:00Z",
+    queue: "noc",
+    period_month: "2026-03",
+    period_quarter: "2026-Q1",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "TASK-7701",
+      customer_name: "Litware Inc.",
+      subject_text: "Firewall object update",
+      hour: 11,
+      is_weekend: false,
+    }),
+    created_at: "2026-03-03T11:56:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9904,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tickets",
+    total_count: 1,
+    success_count: 0,
+    duration_minutes: 67,
+    score: "Medium",
+    period_start: "2026-04-18T19:02:00Z",
+    period_end: "2026-04-18T20:09:00Z",
+    queue: "noc",
+    period_month: "2026-04",
+    period_quarter: "2026-Q2",
+    ack_minutes: 8,
+    carrier_ticket_minutes: 19,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "DEMO-23814",
+      customer_name: "Contoso Logistics",
+      subject_text: "Carrier handoff validation",
+      hour: 19,
+      is_weekend: false,
+      is_maintenance: false,
+      within_24h: "more than 24 hours",
+    }),
+    created_at: "2026-04-18T20:09:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9905,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tickets",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: 38,
+    score: "High",
+    period_start: "2026-05-06T13:02:00Z",
+    period_end: "2026-05-06T13:40:00Z",
+    queue: "noc",
+    period_month: "2026-05",
+    period_quarter: "2026-Q2",
+    ack_minutes: 4,
+    carrier_ticket_minutes: 9,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "DEMO-24051",
+      customer_name: "Acme Retail Group",
+      subject_text: "WAN latency investigation",
+      hour: 13,
+      is_weekend: false,
+      is_maintenance: false,
+      within_24h: "less than 24 hours",
+    }),
+    created_at: "2026-05-06T13:40:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9906,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tickets",
+    total_count: 1,
+    success_count: 0,
+    duration_minutes: 71,
+    score: "Medium",
+    period_start: "2026-06-02T15:10:00Z",
+    period_end: "2026-06-02T16:21:00Z",
+    queue: "noc",
+    period_month: "2026-06",
+    period_quarter: "2026-Q2",
+    ack_minutes: 7,
+    carrier_ticket_minutes: 17,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "DEMO-24118",
+      customer_name: "Northwind Health",
+      subject_text: "Primary circuit flap review",
+      hour: 15,
+      is_weekend: false,
+      is_maintenance: false,
+      within_24h: "more than 24 hours",
+    }),
+    created_at: "2026-06-02T16:21:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9907,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "calls",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: null,
+    score: "Answered",
+    period_start: "2026-06-03T14:05:00Z",
+    period_end: "2026-06-03T14:17:00Z",
+    queue: "mobility",
+    period_month: "2026-06",
+    period_quarter: "2026-Q2",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: 482,
+    wait_seconds: 31,
+    raw_json: JSON.stringify({
+      caller_info: "+1 (555) 010-2400",
+      customer_name: "Adventure Works",
+      hour: 14,
+      is_weekend: false,
+    }),
+    created_at: "2026-06-03T14:17:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9908,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "calls",
+    total_count: 1,
+    success_count: 0,
+    duration_minutes: null,
+    score: "No answer",
+    period_start: "2026-06-04T18:20:00Z",
+    period_end: "2026-06-04T18:22:00Z",
+    queue: "mobility",
+    period_month: "2026-06",
+    period_quarter: "2026-Q2",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: 0,
+    wait_seconds: 19,
+    raw_json: JSON.stringify({
+      caller_info: "+1 (555) 010-9988",
+      customer_name: "Graphic Design Institute",
+      hour: 18,
+      is_weekend: false,
+    }),
+    created_at: "2026-06-04T18:22:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9909,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tasks",
+    total_count: 1,
+    success_count: 1,
+    duration_minutes: 26,
+    score: null,
+    period_start: "2026-06-05T12:10:00Z",
+    period_end: "2026-06-05T12:36:00Z",
+    queue: "noc",
+    period_month: "2026-06",
+    period_quarter: "2026-Q2",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "TASK-8801",
+      customer_name: "Litware Inc.",
+      subject_text: "Update monitoring contacts",
+      hour: 12,
+      is_weekend: false,
+    }),
+    created_at: "2026-06-05T12:36:00Z",
+  } as unknown as PerformanceMetric,
+  {
+    id: -9910,
+    import_id: -1,
+    member_name: SNAPSHOT_DEMO_MEMBER,
+    source_type: "tasks",
+    total_count: 1,
+    success_count: 0,
+    duration_minutes: 44,
+    score: null,
+    period_start: "2026-06-07T09:45:00Z",
+    period_end: "2026-06-07T10:29:00Z",
+    queue: "mobility",
+    period_month: "2026-06",
+    period_quarter: "2026-Q2",
+    ack_minutes: null,
+    carrier_ticket_minutes: null,
+    handle_seconds: null,
+    wait_seconds: null,
+    raw_json: JSON.stringify({
+      ref_number: "TASK-8824",
+      customer_name: "Contoso Logistics",
+      subject_text: "SIM swap follow-up",
+      hour: 9,
+      is_weekend: true,
+    }),
+    created_at: "2026-06-07T10:29:00Z",
+  } as unknown as PerformanceMetric,
+];
 
 /**
  * Team Performance Tracker — main widget.
@@ -81,8 +363,28 @@ export function PerformanceTrackerWidget() {
 
   const [activeTab, setActiveTab] = useState<string | null>("overview");
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"fit" | "zoom">("zoom");
+  const [zoomPercent, setZoomPercent] = useState<string>("110");
+  const [fitScale, setFitScale] = useState(1);
 
   const { metrics, imports, loading, refresh } = usePerformanceData();
+  const effectiveMetrics = useMemo(
+    () => (selectedMember === SNAPSHOT_DEMO_MEMBER ? SNAPSHOT_DEMO_METRICS : metrics),
+    [metrics, selectedMember],
+  );
+
+  useEffect(() => {
+    const updateFitScale = () => {
+      const availableHeight = window.innerHeight - 220;
+      const estimatedContentHeight = activeTab === "trends" ? 1080 : 1240;
+      const nextScale = Math.max(0.72, Math.min(1, availableHeight / estimatedContentHeight));
+      setFitScale(Number(nextScale.toFixed(2)));
+    };
+
+    updateFitScale();
+    window.addEventListener("resize", updateFitScale);
+    return () => window.removeEventListener("resize", updateFitScale);
+  }, [activeTab, scopedMember, isManager]);
 
   // Track pending dispute count for the tab badge
   const [pendingDisputeCount, setPendingDisputeCount] = useState(0);
@@ -129,6 +431,10 @@ export function PerformanceTrackerWidget() {
     );
     return [
       { group: "View", items: [{ value: "__team__", label: "Whole team" }] },
+      {
+        group: "Snapshot-safe demo",
+        items: [{ value: SNAPSHOT_DEMO_MEMBER, label: `${SNAPSHOT_DEMO_MEMBER} · presentation only` }],
+      },
       { group: "NOC", items: nocItems },
       { group: "Mobility", items: mobilityItems },
     ];
@@ -313,22 +619,54 @@ export function PerformanceTrackerWidget() {
                     View
                   </Text>
                   {scopedMember && (
-                    <Badge size="xs" variant="light" color="blue">
-                      Individual: applies to both Overview & Trends
+                    <Badge
+                      size="xs"
+                      variant="light"
+                      color={scopedMember === SNAPSHOT_DEMO_MEMBER ? "violet" : "blue"}
+                    >
+                      {scopedMember === SNAPSHOT_DEMO_MEMBER
+                        ? "Snapshot-safe demo view"
+                        : "Individual: applies to both Overview & Trends"}
                     </Badge>
                   )}
                 </Group>
-                <Select
-                  size="xs"
-                  w={280}
-                  data={memberOptions}
-                  value={selectedMember ?? "__team__"}
-                  onChange={(v) =>
-                    setSelectedMember(v === "__team__" ? null : v)
-                  }
-                  searchable
-                  allowDeselect={false}
-                />
+                <Group gap="xs" wrap="nowrap">
+                  <SegmentedControl
+                    size="xs"
+                    value={viewMode}
+                    onChange={(value) => setViewMode(value as "fit" | "zoom")}
+                    data={[
+                      { value: "fit", label: "Fit whole" },
+                      { value: "zoom", label: "Zoom + scroll" },
+                    ]}
+                  />
+                  {viewMode === "zoom" && (
+                    <Select
+                      size="xs"
+                      w={92}
+                      data={[
+                        { value: "100", label: "100%" },
+                        { value: "110", label: "110%" },
+                        { value: "125", label: "125%" },
+                        { value: "140", label: "140%" },
+                      ]}
+                      value={zoomPercent}
+                      onChange={(value) => value && setZoomPercent(value)}
+                      allowDeselect={false}
+                    />
+                  )}
+                  <Select
+                    size="xs"
+                    w={280}
+                    data={memberOptions}
+                    value={selectedMember ?? "__team__"}
+                    onChange={(v) =>
+                      setSelectedMember(v === "__team__" ? null : v)
+                    }
+                    searchable
+                    allowDeselect={false}
+                  />
+                </Group>
               </Group>
             </Card>
           ) : (
@@ -409,14 +747,22 @@ export function PerformanceTrackerWidget() {
           </Tabs.List>
 
           <Tabs.Panel value="overview" pt="md">
-            <PerformanceDashboard
-              metrics={metrics}
-              scopedMember={scopedMember}
-              onRederive={isManager ? handleRederivePeriods : undefined}
-              isRederiving={isRederiving}
-              currentUserName={canonicalSelf ?? undefined}
-              onDisputeChange={handleDisputeChange}
-            />
+            <Box
+              style={{
+                zoom: viewMode === "fit" ? fitScale : Number(zoomPercent) / 100,
+                transformOrigin: "top left",
+                width: viewMode === "fit" ? `${100 / fitScale}%` : undefined,
+              }}
+            >
+              <PerformanceDashboard
+                metrics={effectiveMetrics}
+                scopedMember={scopedMember}
+                onRederive={isManager ? handleRederivePeriods : undefined}
+                isRederiving={isRederiving}
+                currentUserName={canonicalSelf ?? undefined}
+                onDisputeChange={handleDisputeChange}
+              />
+            </Box>
           </Tabs.Panel>
 
           <Tabs.Panel value="trends" pt="md">
@@ -430,10 +776,18 @@ export function PerformanceTrackerWidget() {
                 The Trends tab carries its own queue (All/NOC/Mobility)
                 filter so users can slice the trend by team without
                 affecting the Overview tab's filters. */}
-            <PerformanceTrends
-              metrics={metrics}
-              scopedMember={scopedMember}
-            />
+            <Box
+              style={{
+                zoom: viewMode === "fit" ? fitScale : Number(zoomPercent) / 100,
+                transformOrigin: "top left",
+                width: viewMode === "fit" ? `${100 / fitScale}%` : undefined,
+              }}
+            >
+              <PerformanceTrends
+                metrics={effectiveMetrics}
+                scopedMember={scopedMember}
+              />
+            </Box>
           </Tabs.Panel>
 
           {isManager && (
@@ -538,6 +892,7 @@ function ImportHistory({
               <Table.Tr>
                 <Table.Th>When</Table.Th>
                 <Table.Th>File</Table.Th>
+                <Table.Th>Ticket Audit File</Table.Th>
                 <Table.Th>Sheet</Table.Th>
                 <Table.Th>Type</Table.Th>
                 <Table.Th ta="right">Total</Table.Th>

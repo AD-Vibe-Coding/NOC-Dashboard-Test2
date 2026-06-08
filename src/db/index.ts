@@ -105,6 +105,7 @@ function tableClient<T>(name: string): TableClient<T> {
 type BreakRow = typeof schema.breaks.$inferSelect;
 type BreakScheduleRow = typeof schema.break_schedules.$inferSelect;
 type ReminderEventRow = typeof schema.reminder_events.$inferSelect;
+type PunchEventRow = typeof schema.punch_events.$inferSelect;
 type OneOnOneNoteRow = typeof schema.one_on_one_notes.$inferSelect;
 type NotebookSectionPreferenceRow = typeof schema.notebook_section_preferences.$inferSelect;
 type PersonalActionItemRow = typeof schema.personal_action_items.$inferSelect;
@@ -134,6 +135,7 @@ export const db = {
   breaks: tableClient<BreakRow>("breaks"),
   break_schedules: tableClient<BreakScheduleRow>("break_schedules"),
   reminder_events: tableClient<ReminderEventRow>("reminder_events"),
+  punch_events: tableClient<PunchEventRow>("punch_events"),
   one_on_one_notes: tableClient<OneOnOneNoteRow>("one_on_one_notes"),
   notebook_section_preferences: tableClient<NotebookSectionPreferenceRow>("notebook_section_preferences"),
   personal_action_items: tableClient<PersonalActionItemRow>("personal_action_items"),

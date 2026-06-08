@@ -123,17 +123,13 @@ function generateSlackBody(p: BodyParams): string {
     lines.push("*1. High-Priority Incidents (P1/P2)*");
     for (const t of p.tickets) {
       lines.push("");
-      const heading = [t.ticket_id && `#${t.ticket_id}`, t.description].filter(Boolean).join(": ");
-      if (heading) lines.push(`Ticket ${heading}`);
-      if (t.status)         lines.push(`   Status: ${t.status}`);
-      if (t.current_action) lines.push(`   Current Action: ${t.current_action}`);
-      if (t.next_plan)      lines.push(`   Next Plan of Action: ${t.next_plan}`);
-      if (t.due_date)       lines.push(`   Due Date: ${t.due_date}`);
-      if (t.assigned_to)    lines.push(`   Assigned to: ${t.assigned_to}`);
-      if (t.owner_in_threads || t.summary_in_ticket) {
-        lines.push(`   Add the next owner to all related email threads: ${t.owner_in_threads ? "Yes" : "No"}`);
-        lines.push(`   Ticket Summary added to ticket: ${t.summary_in_ticket ? "Yes" : "No"}`);
-      }
+      if (t.ticket_id) lines.push(`Ticket #${t.ticket_id}`);
+      if (t.status)     lines.push(`   Status: ${t.status}`);
+      if (t.next_plan)  lines.push(`   Next Plan of Action: ${t.next_plan}`);
+      if (t.due_date)   lines.push(`   Due Date: ${t.due_date}`);
+      if (t.assigned_to) lines.push(`   Assigned to: ${t.assigned_to}`);
+      lines.push(`   Add the next owner to all related email threads: ${t.owner_in_threads || "Not set"}`);
+      lines.push(`   Ticket Summary added to ticket: ${t.summary_in_ticket || "Not set"}`);
     }
   }
 
@@ -293,11 +289,26 @@ function TicketCard({ ticket, index, agents, onChange, onRemove }: {
         <TextInput label="Due Date" placeholder="e.g. 02/18/2026 08:10 AM" value={ticket.due_date}
           onChange={e => set("due_date", e.currentTarget.value)} size="xs" />
         <Group gap="xl" mt={4}>
-          <Checkbox size="xs" label="Next owner added to email threads"
-            checked={ticket.owner_in_threads} onChange={e => set("owner_in_threads", e.currentTarget.checked)} />
-          <Checkbox size="xs" label="Ticket summary added to ticket"
-            checked={ticket.summary_in_ticket} onChange={e => set("summary_in_ticket", e.currentTarget.checked)} />
+          <Checkbox
+            size="xs"
+            label="Next owner added to email threads *"
+            checked={ticket.owner_in_threads === true}
+            indeterminate={ticket.owner_in_threads === null}
+            onChange={e => set("owner_in_threads", e.currentTarget.checked)}
+          />
+          <Checkbox
+            size="xs"
+            label="Ticket summary added to ticket *"
+            checked={ticket.summary_in_ticket === true}
+            indeterminate={ticket.summary_in_ticket === null}
+            onChange={e => set("summary_in_ticket", e.currentTarget.checked)}
+          />
         </Group>
+        {(ticket.owner_in_threads === null || ticket.summary_in_ticket === null) && (
+          <Alert color="yellow" variant="light" icon={<IconAlertCircle size={14} />}>
+            Both pre-checklist items are required for each high-priority ticket.
+          </Alert>
+        )}
       </Stack>
     </Card>
   );
@@ -703,6 +714,16 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
   }
 
   async function submitHandover() {
+    const incompleteTicket = tickets.find(
+      (ticket) => !ticket.owner_in_threads || !ticket.summary_in_ticket,
+    );
+    if (incompleteTicket) {
+      setError(
+        `Complete both required pre-checklist fields for every P1/P2 ticket before submitting${incompleteTicket.ticket_id ? ` (ticket #${incompleteTicket.ticket_id})` : ""}.`,
+      );
+      return;
+    }
+
     setSubmitting(true); setError(null);
     try {
       // Build full payload (includes weekend data + manager checklist for DB/history)

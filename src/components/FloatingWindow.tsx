@@ -78,8 +78,6 @@ export function FloatingWindow({ win }: Props) {
     return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
   }, [win.id, resizeWindow]);
 
-  if (win.minimized) return null;
-
   const Icon = win.icon;
 
   const style: React.CSSProperties = win.maximized
@@ -105,7 +103,7 @@ export function FloatingWindow({ win }: Props) {
       ref={boxRef}
       style={{
         ...style,
-        display: "flex",
+        display: win.minimized ? "none" : "flex",
         flexDirection: "column",
         borderRadius: win.maximized ? 0 : 12,
         overflow: "hidden",

@@ -33,6 +33,18 @@ export const reminder_events = pgTable("reminder_events", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const punch_events = pgTable("punch_events", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  action: text("action").notNull(), // punch_in | punch_out
+  message: text("message"),
+  slack_posted: boolean("slack_posted"),
+  slack_channel: text("slack_channel"),
+  slack_ts: text("slack_ts"),
+  punched_at: text("punched_at").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const one_on_one_notes = pgTable("one_on_one_notes", {
   id: serial("id").primaryKey(),
   manager_name: text("manager_name").notNull(),
@@ -394,6 +406,7 @@ export const ticket_audits = pgTable("ticket_audits", {
   // Agent attribution
   agent_name: text("agent_name"),           // canonical team member name
   agent_name_raw: text("agent_name_raw"),   // as found in the ticket
+  audit_role: text("audit_role"),           // Owner | Contributor | Contributor - AS
   // Audit result
   overall_score: real("overall_score"),     // 0–100
   grade: text("grade"),                     // "Pass" | "Fail" | "Needs Improvement"

@@ -1,7 +1,7 @@
 import { Badge, Box, Group, Stack, Text, Title } from "@mantine/core";
 import { IconGavel, IconStarFilled } from "@tabler/icons-react";
 import { WidgetTile } from "../WidgetTile";
-import { gradeColor, scoreColor, useTicketAudits } from "./data";
+import { gradeColor, normalizeAuditMonth, scoreColor, useTicketAudits } from "./data";
 
 interface Props {
   onExpand: () => void;
@@ -11,7 +11,7 @@ export function TicketAuditTile({ onExpand }: Props) {
   const { audits, loading } = useTicketAudits();
 
   const thisMonth = new Date().toISOString().slice(0, 7);
-  const monthAudits = audits.filter((a) => a.audit_month === thisMonth);
+  const monthAudits = audits.filter((a) => normalizeAuditMonth(a.audit_month) === thisMonth);
   const avgScore =
     monthAudits.length > 0
       ? Math.round(

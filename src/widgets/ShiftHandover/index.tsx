@@ -167,9 +167,7 @@ interface TicketEntry {
   id: string;
   ticket_number: string;
   priority: "P1" | "P2" | "P3" | "";
-  description: string;
   status: string;
-  current_action: string;
   next_plan: string;
   /** ISO datetime string or empty. Stored verbatim. */
   due_date: string;
@@ -185,9 +183,7 @@ function emptyTicket(): TicketEntry {
     id: `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     ticket_number: "",
     priority: "P2",
-    description: "",
     status: "",
-    current_action: "",
     next_plan: "",
     due_date: "",
     assigned_to: "",
@@ -378,9 +374,7 @@ export function ShiftHandoverWidget() {
         lines.push(`TICKET ${i + 1}:`);
         if (t.ticket_number) lines.push(`- Number: ${t.ticket_number}`);
         if (t.priority) lines.push(`- Priority: ${t.priority}`);
-        if (t.description) lines.push(`- Description: ${t.description}`);
         if (t.status) lines.push(`- Status: ${t.status}`);
-        if (t.current_action) lines.push(`- Current Action: ${t.current_action}`);
         if (t.next_plan) lines.push(`- Next Plan: ${t.next_plan}`);
         if (t.due_date) lines.push(`- Due Date: ${formatDueDate(t.due_date)}`);
         if (t.assigned_to) lines.push(`- Assigned to: ${t.assigned_to}`);
@@ -678,7 +672,6 @@ Example:
                               </Badge>
                               <Text size="xs" fw={600} truncate>
                                 {t.ticket_number ? `#${t.ticket_number}` : "(no number)"}
-                                {t.description ? ` — ${t.description}` : ""}
                               </Text>
                               {t.assigned_to && (
                                 <Text size="xs" c="dimmed" truncate>
@@ -732,30 +725,12 @@ Example:
                               />
                             </Group>
                             <TextInput
-                              label="Brief description"
-                              placeholder="Lumen DIA circuit down at Tamarac FL"
-                              size="xs"
-                              value={t.description}
-                              onChange={(e) =>
-                                updateTicket(t.id, "description", e.currentTarget.value)
-                              }
-                            />
-                            <TextInput
                               label="Status"
                               placeholder="Carrier investigating / Outage ongoing / Pending dispatch ETA"
                               size="xs"
                               value={t.status}
                               onChange={(e) =>
                                 updateTicket(t.id, "status", e.currentTarget.value)
-                              }
-                            />
-                            <TextInput
-                              label="Current Action"
-                              placeholder="Awaiting field tech ETA at 08:00 PST"
-                              size="xs"
-                              value={t.current_action}
-                              onChange={(e) =>
-                                updateTicket(t.id, "current_action", e.currentTarget.value)
                               }
                             />
                             <Textarea
@@ -798,28 +773,28 @@ Example:
                             </Group>
                             <Group gap={6} grow>
                               <Select
-                                label="Add owner to email threads?"
-                                data={TICKET_FLAG_OPTIONS}
-                                value={t.owner_in_threads || ""}
+                                label="Add owner to email threads? *"
+                                data={TICKET_FLAG_OPTIONS.filter((option) => option.value !== "")}
+                                value={t.owner_in_threads || null}
                                 onChange={(v) =>
                                   updateTicket(
                                     t.id,
                                     "owner_in_threads",
-                                    (v ?? "") as TicketEntry["owner_in_threads"],
+                                    ((v ?? "") as "Yes" | "No" | ""),
                                   )
                                 }
                                 size="xs"
                                 allowDeselect={false}
                               />
                               <Select
-                                label="Ticket summary added?"
-                                data={TICKET_FLAG_OPTIONS}
-                                value={t.summary_in_ticket || ""}
+                                label="Ticket summary added? *"
+                                data={TICKET_FLAG_OPTIONS.filter((option) => option.value !== "")}
+                                value={t.summary_in_ticket || null}
                                 onChange={(v) =>
                                   updateTicket(
                                     t.id,
                                     "summary_in_ticket",
-                                    (v ?? "") as TicketEntry["summary_in_ticket"],
+                                    ((v ?? "") as "Yes" | "No" | ""),
                                   )
                                 }
                                 size="xs"

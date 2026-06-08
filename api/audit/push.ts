@@ -10,6 +10,24 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
 
+function normalizeAuditMonth(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})$/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2]}`;
+
+  const parsed = new Date(`${trimmed} 1`);
+  if (!Number.isNaN(parsed.getTime())) {
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, "0");
+    return `${year}-${month}`;
+  }
+
+  return null;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
@@ -42,6 +60,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   for (const audit of audits ?? []) {
     try {
+      const normalizedAuditMonth = normalizeAuditMonth(audit.audit_month);
+
       if (!audit.agent_name) {
         throw new Error(`Audit #${audit.id} has no agent name — set agent before pushing`);
       }
@@ -60,9 +80,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           row_count: 1,
           matched_count: 1,
           skipped_count: 0,
-          period_label: audit.audit_month ?? null,
-          period_start: audit.audit_month ? `${audit.audit_month}-01` : null,
-          period_end: audit.audit_month ? `${audit.audit_month}-01` : null,
+          period_label: normalizedAuditMonth ?? null,
+          period_start: normalizedAuditMonth ? `${normalizedAuditMonth}-01` : null,
+          period_end: normalizedAuditMonth ? `${normalizedAuditMonth}-01` : null,
           notes: `Ticket ${audit.ticket_number ?? ""} · Score: ${audit.overall_score} · ${audit.grade ?? ""}`,
         })
         .select()
@@ -111,9 +131,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           total_count: 1,
           success_count: (audit.overall_score ?? 0) >= 70 ? 1 : 0,
           score: String(audit.overall_score),
-          period_start: audit.ticket_date ?? (audit.audit_month ? `${audit.audit_month}-01` : null),
-          period_end:   audit.ticket_date ?? (audit.audit_month ? `${audit.audit_month}-01` : null),
-          period_month: audit.audit_month ?? null,
+          period_start: audit.ticket_date ?? (normalizedAuditMonth ? `${normalizedAuditMonth}-01` : null),
+          period_end:   audit.ticket_date ?? (normalizedAuditMonth ? `${normalizedAuditMonth}-01` : null),
+          period_month: normalizedAuditMonth ?? null,
           queue: audit.queue ?? null,
           raw_json: JSON.stringify({
             // ── Exact columns the user specified ──────────────────────

@@ -303,6 +303,30 @@ function isWithinShift(nowMin: number, shift: { start: number; end: number }): b
   return nowMin >= start || nowMin <= end;
 }
 
+function isWithinShiftForColumn(
+  nowMin: number,
+  shift: { start: number; end: number },
+  columnContext: "today" | "previous",
+): boolean {
+  const { start, end } = shift;
+
+  if (start === end) return true;
+
+  // Same-day shifts belong to their own day column only.
+  if (end > start) {
+    return columnContext === "today" && nowMin >= start && nowMin <= end;
+  }
+
+  // Overnight shifts are split across two roster dates:
+  // - today's column applies only before midnight (e.g. Sun 7 PM → 11:59 PM)
+  // - previous day's column applies only after midnight (e.g. Sat 7 PM → Sun 4 AM)
+  if (columnContext === "today") {
+    return nowMin >= start;
+  }
+
+  return nowMin <= end;
+}
+
 /** Today metadata in Pacific time */
 function dayMetaPST(offsetDays = 0) {
   const pst = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
@@ -408,6 +432,11 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 
   const headers = rows[0].map((h) => (h ?? "").trim());
   const secondRow = rows[1]?.map((h) => (h ?? "").trim()) ?? [];
+  const combinedHeaders = headers.map((header, idx) => {
+    const top = header.trim();
+    const bottom = (secondRow[idx] ?? "").trim();
+    return [top, bottom].filter(Boolean).join(" ").trim();
+  });
   const nowMin = nowMinutesPST();
   const today = todayPST();
   const previousDay = dayMetaPST(-1);
@@ -440,15 +469,15 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
     .filter(Boolean);
 
   if (hasPublishedCalendarHeader) {
-    const todayColIdx    = findDateColumnIndex(headers, today);
-    const previousColIdx = findDateColumnIndex(headers, previousDay);
+    const todayColIdx    = Math.max(findDateColumnIndex(headers, today), findDateColumnIndex(combinedHeaders, today));
+    const previousColIdx = Math.max(findDateColumnIndex(headers, previousDay), findDateColumnIndex(combinedHeaders, previousDay));
 
     const diag = {
       currentTimePST: diagTimePST,
       currentMinPST:  nowMin,
       todayLabel:     `${today.monthName} (${today.isoDate})`,
       matchedCol:     todayColIdx,
-      headersPreview: headers.slice(0, 10),
+      headersPreview: combinedHeaders.slice(0, 10).map((h, idx) => `${idx}:${h}`),
     };
 
     if (todayColIdx > 0 || previousColIdx > 0) {
@@ -462,7 +491,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
         const todayShift = parseShiftCell(todayCell);
         if (todayShift && todayShift !== "OFF") {
           shiftWindows.push({ name, start: todayShift.start, end: todayShift.end, cell: todayCell });
-          if (isWithinShift(nowMin, todayShift)) {
+          if (isWithinShiftForColumn(nowMin, todayShift, "today")) {
             inShiftNow.push(name);
             continue;
           }
@@ -470,7 +499,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 
         const previousCell  = previousColIdx > 0 ? (row[previousColIdx] ?? "").trim() : "";
         const previousShift = parseShiftCell(previousCell);
-        if (previousShift && previousShift !== "OFF" && previousShift.end < previousShift.start && nowMin <= previousShift.end) {
+        if (previousShift && previousShift !== "OFF" && isWithinShiftForColumn(nowMin, previousShift, "previous")) {
           inShiftNow.push(name);
           shiftWindows.push({ name, start: previousShift.start, end: previousShift.end, cell: previousCell });
         }
@@ -507,7 +536,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
       if (!name) continue;
       const cell  = (row[todayColIdx] ?? "").trim();
       const shift = parseShiftCell(cell);
-      if (shift && shift !== "OFF" && isWithinShift(nowMin, shift)) {
+      if (shift && shift !== "OFF" && isWithinShiftForColumn(nowMin, shift, "today")) {
         inShiftNow.push(name);
       }
     }
@@ -556,7 +585,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
       if (!name) continue;
       const cell = (row[dowIdx] ?? "").trim();
       const shift = parseShiftCell(cell);
-      if (shift && shift !== "OFF" && isWithinShift(nowMin, shift)) {
+      if (shift && shift !== "OFF" && isWithinShiftForColumn(nowMin, shift, "today")) {
         inShiftNow.push(name);
       }
     }

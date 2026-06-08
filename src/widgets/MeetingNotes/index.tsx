@@ -50,7 +50,6 @@ import {
   IconStar,
   IconStarFilled,
   IconTrash,
-  IconRefresh,
   IconUser,
   IconUsersGroup,
 } from "@tabler/icons-react";
@@ -559,7 +558,6 @@ export function MeetingNotesWidget() {
   const [managerView, setManagerView] = useState<"notebook" | "actions">("notebook");
   const [allNotesModalOpen, setAllNotesModalOpen] = useState(false);
   const [noteGroupFilter, setNoteGroupFilter] = useState<string>("all");
-  const [taskOwnerFilter, setTaskOwnerFilter] = useState<string>(() => localStorage.getItem("ac_filter_owner") ?? "all");
   const [taskStatusFilter, setTaskStatusFilter] = useState<string>(() => localStorage.getItem("ac_filter_status") ?? "active");
   const [taskPriorityFilter, setTaskPriorityFilter] = useState<string>(() => localStorage.getItem("ac_filter_priority") ?? "all");
   const [_taskSectionFilter] = useState<string>("all");
@@ -687,7 +685,6 @@ export function MeetingNotesWidget() {
   }, [identity?.name, isManager]);
 
   // Persist filter selections to localStorage
-  useEffect(() => { localStorage.setItem("ac_filter_owner", taskOwnerFilter); }, [taskOwnerFilter]);
   useEffect(() => { localStorage.setItem("ac_filter_status", taskStatusFilter); }, [taskStatusFilter]);
   useEffect(() => { localStorage.setItem("ac_filter_priority", taskPriorityFilter); }, [taskPriorityFilter]);
 
@@ -1026,7 +1023,7 @@ export function MeetingNotesWidget() {
   // Manager's OWN tasks: stored owner is the manager
   const myManagerTasksClean = useMemo(() => {
     if (!identity?.name) return [] as PersonalActionItem[];
-    return managerTaskRows.filter((task) => storedOwner(task) === identity.name);
+    return managerTaskRows.filter((task) => samePerson(storedOwner(task), identity.name));
   }, [managerTaskRows, identity?.name]);
 
   // Team tasks: stored owner is someone OTHER than the manager
@@ -1654,87 +1651,6 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
       setShowImportancePanel(true);
     } catch (err) {
       setError("AI analysis failed: " + (err instanceof Error ? err.message : String(err)));
-    }
-  }
-
-  /** Directly patches owner_name/employee_name on every DB task that came from
-   *  an individual 1:1 note. Uses resolveTeamMember so short names like "Hamza"
-   *  resolve to the canonical "Hamza Rahmani". Safe to run multiple times. */
-  async function fixAllOwners() {
-    if (!identity?.name) return;
-    setSaving(true);
-    try {
-      const MANAGER_NAMES = ["Anirudh Kukudala", "Perry Cox", "Matt Marquez"];
-
-      function managerPrefix(title: string): string | null {
-        const m = title.match(/^([A-Z][a-z]+(?: [A-Z][a-z]+)+):\s*(.+)$/);
-        if (m) {
-          const found = MANAGER_NAMES.find((n) => samePerson(n, m[1].trim()));
-          if (found) return found;
-        }
-        const b = title.match(/^\[([^\]]+)\]/);
-        if (b) {
-          const found = MANAGER_NAMES.find((n) => samePerson(n, b[1].trim()));
-          if (found) return found;
-        }
-        return null;
-      }
-
-      // Fetch everything fresh from DB
-      const [freshTasks, freshNotes] = await Promise.all([
-        db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } }),
-        db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } }),
-      ]);
-
-      const noteById = new Map(freshNotes.map((n) => [n.id, n]));
-      const noteByTitle = new Map(freshNotes.map((n) => [String(n.title ?? "").trim().toLowerCase(), n]));
-
-      let fixed = 0;
-      const debugLines: string[] = [];
-
-      for (const task of freshTasks) {
-        // Find the note this task came from
-        let note = task.note_id != null ? noteById.get(task.note_id) : undefined;
-        if (!note && task.details) note = noteByTitle.get(String(task.details).trim().toLowerCase());
-        if (!note) continue;
-
-        // Only fix individual 1:1 notes
-        const group = note.notebook_group ?? (
-          String(note.employee_name ?? "").startsWith("Management · ") ? "management"
-          : String(note.employee_name ?? "").startsWith("Other · ") ? "other"
-          : "individual"
-        );
-        if (group !== "individual") continue;
-
-        // Resolve the canonical employee name
-        const rawSection = note.section_name ?? note.employee_name ?? "";
-        const canonicalEmployee = resolveTeamMember(rawSection) ?? rawSection;
-
-        // Determine correct owner
-        const managerOwner = managerPrefix(task.title ?? "");
-        const correctOwner = managerOwner ?? canonicalEmployee;
-
-        const currentOwner = task.owner_name ?? task.employee_name ?? "";
-        if (!samePerson(currentOwner, correctOwner)) {
-          debugLines.push(`"${String(task.title ?? "").slice(0, 45)}" : ${currentOwner} → ${correctOwner}`);
-          await db.personal_action_items.updateById(task.id, {
-            owner_name: correctOwner,
-            employee_name: correctOwner,
-          });
-          fixed++;
-        }
-      }
-
-      await load();
-      setExtractDebug(
-        fixed === 0
-          ? `✅ All ${freshTasks.length} tasks already have correct owners.\n${debugLines.slice(0, 10).join("\n") || "No changes needed."}`
-          : `✅ Fixed ${fixed} tasks.\n${debugLines.slice(0, 20).join("\n")}`,
-      );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
     }
   }
 
@@ -3036,7 +2952,6 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                           <Group justify="space-between" align="center" wrap="wrap" gap="xs">
                             <Group gap="xs" wrap="wrap">
                               <Button size="sm" variant="light" color="grape" leftSection={<IconSparkles size={14} />} onClick={() => void extractAllTasks()} loading={saving}>Extract all</Button>
-                              <Button size="sm" variant="filled" color="orange" leftSection={<IconRefresh size={14} />} onClick={() => void fixAllOwners()} loading={saving}>Fix owners</Button>
                               <Button size="sm" variant="light" color="teal" leftSection={<IconBrandSlack size={14} />} onClick={() => void sendSlackDigest()} loading={digestSending}>Send digest</Button>
                               <Button size="sm" variant={dueThisWeek ? "filled" : "light"} color="orange" leftSection={<IconCalendar size={14} />} onClick={() => setDueThisWeek(v => !v)}>
                                 Due this week
@@ -3072,20 +2987,6 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
 
                           {/* ── Filters ── */}
                           <Group gap="sm" wrap="wrap">
-                            <Select
-                              size="sm"
-                              placeholder="All owners"
-                              data={[
-                                { value: "all", label: "All owners" },
-                                ...(identity?.name ? [{ value: identity.name, label: `Me (${identity.name})` }] : []),
-                                ...Array.from(new Set(managerTaskRows.map(t => resolveTaskOwner(t)))).filter(n => n && n !== identity?.name).sort().map(n => ({ value: n, label: n })),
-                              ]}
-                              value={taskOwnerFilter}
-                              onChange={v => setTaskOwnerFilter(v || "all")}
-                              searchable
-                              allowDeselect={false}
-                              style={{ width: 170 }}
-                            />
                             <Select size="sm" placeholder="All statuses" data={[{ value: "all", label: "All statuses" }, { value: "active", label: "Active (not done)" }, { value: "stale", label: "Stale (21+ days)" }, ...TASK_STATUS_OPTIONS]} value={taskStatusFilter} onChange={v => setTaskStatusFilter(v || "active")} allowDeselect={false} style={{ width: 185 }} />
                             <Select size="sm" placeholder="All priorities" data={[{ value: "all", label: "All priorities" }, ...TASK_PRIORITY_OPTIONS]} value={taskPriorityFilter} onChange={v => setTaskPriorityFilter(v || "all")} allowDeselect={false} style={{ width: 150 }} />
                             <TextInput size="sm" value={search} onChange={e => setSearch(e.currentTarget.value)} placeholder="Search tasks…" leftSection={<IconSearch size={14} />} style={{ flex: 1, minWidth: 160 }} />
@@ -3094,12 +2995,11 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                           {/* ── MY tasks section ── */}
                           {(() => {
                             const myFiltered = myManagerTasksClean.filter(task => {
-                              const ownerOk = taskOwnerFilter === "all" || storedOwner(task) === taskOwnerFilter;
                               const statusOk = taskStatusFilter === "all" || (taskStatusFilter === "active" ? (task.status !== "done" && task.status !== "duplicate") : taskStatusFilter === "stale" ? (task.status !== "done" && !!task.created_at && Math.floor((Date.now() - new Date(task.created_at).getTime()) / 86400000) >= 21) : task.status === taskStatusFilter);
                               const priorityOk = taskPriorityFilter === "all" || (task.priority ?? "medium") === taskPriorityFilter;
                               const textOk = !search.trim() || `${task.title} ${task.details ?? ""}`.toLowerCase().includes(search.trim().toLowerCase());
                               const dueOk = !dueThisWeek || (!!task.due_date && task.due_date <= WEEK_FROM_NOW);
-                              return ownerOk && statusOk && priorityOk && textOk && dueOk;
+                              return statusOk && priorityOk && textOk && dueOk;
                             });
                             return (
                               <Stack gap="sm">
@@ -3152,12 +3052,11 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                           {/* ── TEAM action items ── */}
                           {(() => {
                             const teamFiltered = allTeamTasks.filter(task => {
-                              const ownerOk = taskOwnerFilter === "all" || storedOwner(task) === taskOwnerFilter;
                               const statusOk = taskStatusFilter === "all" || (taskStatusFilter === "active" ? (task.status !== "done" && task.status !== "duplicate") : taskStatusFilter === "stale" ? (task.status !== "done" && !!task.created_at && Math.floor((Date.now() - new Date(task.created_at).getTime()) / 86400000) >= 21) : task.status === taskStatusFilter);
                               const priorityOk = taskPriorityFilter === "all" || (task.priority ?? "medium") === taskPriorityFilter;
                               const textOk = !search.trim() || `${task.title} ${task.details ?? ""}`.toLowerCase().includes(search.trim().toLowerCase());
                               const dueOk = !dueThisWeek || (!!task.due_date && task.due_date <= WEEK_FROM_NOW);
-                              return ownerOk && statusOk && priorityOk && textOk && dueOk;
+                              return statusOk && priorityOk && textOk && dueOk;
                             });
                             const groupedByOwner = groupByPerson
                               ? Array.from(new Set(teamFiltered.map(t => t.owner_name ?? t.section_name ?? t.employee_name))).sort()

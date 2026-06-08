@@ -9,7 +9,7 @@
  *
  * Files are processed sequentially (one at a time) to avoid overloading the API.
  */
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -40,8 +40,18 @@ import {
 } from "@tabler/icons-react";
 import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
-import { resolveTeamMember } from "../PerformanceTracker/team";
-import { parseAuditJson, extractAnalysisMarkdown, scoreColor, gradeColor, useTicketAudits } from "./data";
+import { isExcludedAuditActor, resolveTeamMember } from "../PerformanceTracker/team";
+import {
+  parseAuditJson,
+  extractAnalysisMarkdown,
+  normalizeAuditFileName,
+  normalizeAuditMonth,
+  normalizeAuditGrade,
+  normalizeAuditOwners,
+  scoreColor,
+  gradeColor,
+  useTicketAudits,
+} from "./data";
 
 // ── Per-file status ────────────────────────────────────────────────────────────
 type BulkStatus =
@@ -84,27 +94,65 @@ function statusBadge(item: BulkItem) {
 
 export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
   const { identity } = useIdentity();
-  const { saveAudit } = useTicketAudits();
+  const { audits, saveAudit } = useTicketAudits();
 
   const [items, setItems] = useState<BulkItem[]>([]);
   const [running, setRunning] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(-1);
   const [dragOver, setDragOver] = useState(false);
+  const [queueNotice, setQueueNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const stoppedRef = useRef(false);
+  const existingFileNames = useMemo(
+    () => new Set(audits.map((audit) => normalizeAuditFileName(audit.file_name))),
+    [audits],
+  );
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   function addFiles(files: File[]) {
     const valid = Array.from(files).filter((f) =>
       f.name.match(/\.(mhtml|mht|html|htm)$/i)
     );
-    const newItems: BulkItem[] = valid.map((f) => ({
+
+    const queuedNames = new Set(items.map((item) => normalizeAuditFileName(item.file.name)));
+    const batchNames = new Set<string>();
+    const accepted: File[] = [];
+    const rejectedExisting: string[] = [];
+    const rejectedQueued: string[] = [];
+    const rejectedBatch: string[] = [];
+
+    for (const file of valid) {
+      const normalized = normalizeAuditFileName(file.name);
+      if (!normalized) continue;
+      if (existingFileNames.has(normalized)) {
+        rejectedExisting.push(file.name);
+        continue;
+      }
+      if (queuedNames.has(normalized)) {
+        rejectedQueued.push(file.name);
+        continue;
+      }
+      if (batchNames.has(normalized)) {
+        rejectedBatch.push(file.name);
+        continue;
+      }
+      batchNames.add(normalized);
+      accepted.push(file);
+    }
+
+    const newItems: BulkItem[] = accepted.map((f) => ({
       id: `${f.name}-${f.size}-${Date.now()}-${Math.random()}`,
       file: f,
       status: "queued" as BulkStatus,
     }));
     setItems((prev) => [...prev, ...newItems]);
+
+    const notices: string[] = [];
+    if (rejectedExisting.length > 0) notices.push(`Already audited: ${rejectedExisting.join(", ")}`);
+    if (rejectedQueued.length > 0) notices.push(`Already in queue: ${rejectedQueued.join(", ")}`);
+    if (rejectedBatch.length > 0) notices.push(`Duplicated in this batch: ${rejectedBatch.join(", ")}`);
+    setQueueNotice(notices.length > 0 ? notices.join(" · ") : null);
   }
 
   function removeItem(id: string) {
@@ -119,6 +167,7 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
   function clearAll() {
     if (running) return;
     setItems([]);
+    setQueueNotice(null);
     setCurrentIdx(-1);
   }
 
@@ -242,6 +291,8 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
       return;
     }
 
+    result.individuals = normalizeAuditOwners(result.individuals);
+
     // Auto-save — owners first, then contributors
     const owners = result.individuals.filter(i => i.role === "Owner");
     const contributors = result.individuals.filter(i => i.role !== "Owner");
@@ -274,6 +325,9 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
         }
 
         const agentName = resolveTeamMember(ind.name) ?? ind.name ?? null;
+        if (isExcludedAuditActor(ind.name) || isExcludedAuditActor(agentName)) {
+          continue;
+        }
 
         await saveAudit({
           file_name: item.file.name,
@@ -283,17 +337,19 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
           ticket_date: result.ticket_date ?? null,
           agent_name: agentName,
           agent_name_raw: ind.name ?? null,
+          audit_role: ind.role ?? "Owner",
           overall_score: typeof ind.total_score === "number" ? ind.total_score : null,
-          grade: ind.grade ?? null,
+          grade: normalizeAuditGrade(ind.grade, typeof ind.total_score === "number" ? ind.total_score : null),
           criteria_json: Object.keys(criteriaFull).length > 0 ? JSON.stringify(criteriaFull) : null,
           what_did_well: ind.what_did_well ?? null,
           what_missed: ind.what_missed ?? null,
           analysis_markdown: cleanMarkdown,
-          audit_month: result.audit_month ?? null,
+          audit_month: normalizeAuditMonth(result.audit_month),
           queue: result.queue ?? null,
           audited_by: identity?.name ?? null,
           metrics_id: null,
         } as any);
+        onSaved();
 
         individuals.push({
           name: agentName ?? ind.name ?? "Unknown",
@@ -372,9 +428,11 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
   const saved = items.filter((i) => i.status === "saved").length;
   const errored = items.filter((i) => i.status === "error" || i.status === "needs_review").length;
   const queuedCount = items.filter((i) => i.status === "queued").length;
-  const done = saved + errored;
-  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
-  const allDone = !running && total > 0 && done === total;
+  const inProgressCount = items.filter((i) => i.status === "parsing" || i.status === "analyzing" || i.status === "saving").length;
+  const auditedCount = saved + errored;
+  const remainingCount = total - auditedCount - inProgressCount;
+  const progress = total > 0 ? Math.round((auditedCount / total) * 100) : 0;
+  const allDone = !running && total > 0 && auditedCount === total;
 
   return (
     <Stack gap="md" pt="md">
@@ -431,6 +489,12 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
         </Stack>
       </Card>
 
+      {queueNotice && (
+        <Alert color="orange" icon={<IconAlertCircle size={16} />} radius="md">
+          {queueNotice}
+        </Alert>
+      )}
+
       {/* Controls + progress bar */}
       {total > 0 && (
         <Card withBorder radius="md" p="md">
@@ -444,6 +508,10 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
               <Box ta="center">
                 <Text size="lg" fw={800} lh={1} c="blue">{queuedCount}</Text>
                 <Text size="xs" c="dimmed" mt={2}>Queued</Text>
+              </Box>
+              <Box ta="center">
+                <Text size="lg" fw={800} lh={1} c="violet">{auditedCount}</Text>
+                <Text size="xs" c="dimmed" mt={2}>Audited</Text>
               </Box>
               <Box ta="center">
                 <Text size="lg" fw={800} lh={1} c="green">{saved}</Text>
@@ -517,12 +585,12 @@ export function BulkUploadTab({ onSaved }: { onSaved: () => void }) {
           <Group justify="space-between" mt={4}>
             <Text size="xs" c="dimmed">
               {running
-                ? `Processing file ${currentIdx + 1} of ${total}…`
+                ? `Audited ${auditedCount} of ${total} tickets · ${inProgressCount} in progress · ${Math.max(remainingCount, 0)} remaining`
                 : allDone
-                ? `Completed — ${saved} saved, ${errored} need review`
-                : `${done} of ${total} processed`}
+                ? `Completed — ${auditedCount} of ${total} audited · ${saved} saved, ${errored} need review`
+                : `${auditedCount} of ${total} audited`}
             </Text>
-            <Text size="xs" c="dimmed">{progress}%</Text>
+            <Text size="xs" c="dimmed">{progress}% audited</Text>
           </Group>
         </Card>
       )}

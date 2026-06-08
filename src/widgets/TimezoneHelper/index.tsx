@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
+  ActionIcon,
   Alert,
   Autocomplete,
   Badge,
@@ -8,12 +9,14 @@ import {
   Divider,
   Group,
   Progress,
+  Select,
   Stack,
   Text,
   ThemeIcon,
 } from "@mantine/core";
 import {
   IconAlertTriangle,
+  IconArrowsExchange,
   IconClock,
   IconHistory,
   IconMapPin,
@@ -639,6 +642,95 @@ function getPTLabel(date: Date): string {
   return parts.find(p => p.type === "timeZoneName")?.value ?? "PT";
 }
 
+const TIMEZONE_ALIAS_MAP: Record<string, string> = {
+  UTC: "UTC",
+  GMT: "Etc/GMT",
+  BST: "Europe/London",
+  IST: "Asia/Kolkata",
+  CET: "Europe/Paris",
+  CEST: "Europe/Paris",
+  EET: "Europe/Athens",
+  GST: "Asia/Dubai",
+  PKT: "Asia/Karachi",
+  WIB: "Asia/Jakarta",
+  CST: "America/Chicago",
+  CDT: "America/Chicago",
+  EST: "America/New_York",
+  EDT: "America/New_York",
+  MST: "America/Denver",
+  MDT: "America/Denver",
+  PST: "America/Los_Angeles",
+  PDT: "America/Los_Angeles",
+  AKST: "America/Anchorage",
+  HST: "Pacific/Honolulu",
+  JST: "Asia/Tokyo",
+  KST: "Asia/Seoul",
+  AEST: "Australia/Sydney",
+  AEDT: "Australia/Sydney",
+};
+
+const COMMON_TIMEZONE_OPTIONS = [
+  { value: "UTC", label: "UTC" },
+  { value: "Etc/GMT", label: "GMT" },
+  { value: "America/New_York", label: "EST / EDT — Eastern Time" },
+  { value: "America/Chicago", label: "CST / CDT — Central Time" },
+  { value: "America/Denver", label: "MST / MDT — Mountain Time" },
+  { value: "America/Los_Angeles", label: "PST / PDT — Pacific Time" },
+  { value: "America/Anchorage", label: "AKST / AKDT — Alaska" },
+  { value: "Pacific/Honolulu", label: "HST — Hawaii" },
+  { value: "Europe/London", label: "BST / GMT — London" },
+  { value: "Europe/Paris", label: "CET / CEST — Paris" },
+  { value: "Europe/Athens", label: "EET / EEST — Athens" },
+  { value: "Asia/Dubai", label: "GST — Dubai" },
+  { value: "Asia/Kolkata", label: "IST — India" },
+  { value: "Asia/Karachi", label: "PKT — Pakistan" },
+  { value: "Asia/Singapore", label: "SGT — Singapore" },
+  { value: "Asia/Manila", label: "PHT — Manila" },
+  { value: "Asia/Hong_Kong", label: "HKT — Hong Kong" },
+  { value: "Asia/Shanghai", label: "CST — China Standard Time" },
+  { value: "Asia/Tokyo", label: "JST — Tokyo" },
+  { value: "Asia/Seoul", label: "KST — Seoul" },
+  { value: "Australia/Sydney", label: "AEST / AEDT — Sydney" },
+  { value: "Pacific/Auckland", label: "NZST / NZDT — Auckland" },
+];
+
+function getTimezoneOptions() {
+  const intlWithSupportedValues = Intl as typeof Intl & {
+    supportedValuesOf?: (key: string) => string[];
+  };
+  const dynamic = typeof intlWithSupportedValues.supportedValuesOf === "function"
+    ? intlWithSupportedValues.supportedValuesOf("timeZone").map((tz: string) => ({ value: tz, label: tz }))
+    : [];
+
+  const map = new Map<string, { value: string; label: string }>();
+  for (const option of [...COMMON_TIMEZONE_OPTIONS, ...dynamic]) {
+    if (!map.has(option.value)) map.set(option.value, option);
+  }
+  return Array.from(map.values());
+}
+
+function normalizeTimezoneInput(value: string | null | undefined): string | null {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  if (TIMEZONE_ALIAS_MAP[upper]) return TIMEZONE_ALIAS_MAP[upper];
+  return raw;
+}
+
+
+function formatConverterDateTime(date: Date, timeZone: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+    timeZoneName: "short",
+  }).format(date);
+}
+
 function getSupportStatus(date: Date): "within" | "boundary" | "outside" {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(date);
   const h = parseInt(parts.find(p => p.type === "hour")?.value ?? "0");
@@ -717,6 +809,11 @@ function getPTWorkdayProgress(date: Date): number {
 
 // ─── Main widget ──────────────────────────────────────────────────────────────
 export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
+  const timezoneOptions = useMemo(() => getTimezoneOptions(), []);
+  const [helperTab] = useState<string>("lookup");
+  const [fromTimezone, setFromTimezone] = useState<string>("Etc/GMT");
+  const [toTimezone, setToTimezone] = useState<string>("America/Chicago");
+  const [converterError, setConverterError] = useState<string | null>(null);
   const [location, setLocation] = useState("");
   const [result, setResult] = useState<ConversionResult | null>(null);
   const [resolvedRef, setResolvedRef] = useState<ResolveResult | null>(null);
@@ -776,6 +873,41 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
   const statusColor = supportStatus === "within" ? "teal" : supportStatus === "boundary" ? "yellow" : "red";
   const ptProgress = result ? getPTWorkdayProgress(new Date()) : 0;
 
+  const normalizedFromTimezone = normalizeTimezoneInput(fromTimezone);
+  const normalizedToTimezone = normalizeTimezoneInput(toTimezone);
+
+  const converterResult = useMemo(() => {
+    if (!normalizedFromTimezone || !normalizedToTimezone) {
+      return null;
+    }
+    try {
+      const now = new Date();
+      Intl.DateTimeFormat("en-US", { timeZone: normalizedFromTimezone }).format(now);
+      Intl.DateTimeFormat("en-US", { timeZone: normalizedToTimezone }).format(now);
+
+      return {
+        source: formatConverterDateTime(now, normalizedFromTimezone),
+        target: formatConverterDateTime(now, normalizedToTimezone),
+        sourceAbbr: getTzAbbr(now, normalizedFromTimezone),
+        targetAbbr: getTzAbbr(now, normalizedToTimezone),
+      };
+    } catch {
+      return null;
+    }
+  }, [normalizedFromTimezone, normalizedToTimezone]);
+
+  useEffect(() => {
+    if (!normalizedFromTimezone || !normalizedToTimezone) {
+      setConverterError("Choose both a source and target timezone.");
+      return;
+    }
+    if (!converterResult) {
+      setConverterError("Could not convert that timezone pair. Try selecting valid timezones.");
+      return;
+    }
+    setConverterError(null);
+  }, [converterResult, normalizedFromTimezone, normalizedToTimezone]);
+
   // Build flat suggestion list from all known data
   const suggestions = useMemo(() => {
     const list: string[] = [];
@@ -815,7 +947,6 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
   return (
     <WidgetFrame title="NOC Timezone Helper" icon={IconWorldPin} iconColor="cyan">
       <Stack gap="md" p="md">
-
         {/* ── Input with autocomplete ── */}
         <Autocomplete
           placeholder='ZIP, city, state, or country — e.g. "90210", "CA", "Houston, TX", "London, UK"'
@@ -832,7 +963,6 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
           radius="md"
           size="md"
           comboboxProps={{ shadow: "md", radius: "md" }}
-
         />
 
         {/* ── Quick chips + recents ── */}
@@ -872,7 +1002,7 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
         )}
 
         {/* ── Result card ── */}
-        {result && resolvedRef && (
+        {helperTab === "lookup" && result && resolvedRef && (
           <Card withBorder radius="lg" p="lg" style={{ borderColor: `var(--mantine-color-${statusColor}-7)` }}>
             {/* Two-panel time display */}
             <Group justify="space-between" align="stretch" wrap="nowrap" gap="xl">
@@ -932,6 +1062,82 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
           </Group>
         )}
 
+        <Card withBorder radius="lg" p="lg">
+          <Stack gap="md">
+            <Group justify="space-between" align="center" wrap="wrap">
+              <div>
+                <Text fw={700}>Timezone converter</Text>
+                <Text size="sm" c="dimmed">Convert from any timezone to any timezone, for example GMT to CST.</Text>
+              </div>
+              <Badge variant="light" color="cyan">Converter</Badge>
+            </Group>
+
+            <Group align="end" wrap="wrap">
+              <Select
+                label="From"
+                searchable
+                data={timezoneOptions}
+                value={fromTimezone}
+                onChange={(value) => {
+                  const next = normalizeTimezoneInput(value);
+                  if (next) {
+                    setFromTimezone(next);
+                  }
+                }}
+                style={{ flex: 1, minWidth: 220 }}
+                comboboxProps={{ withinPortal: true }}
+              />
+              <ActionIcon
+                aria-label="Swap timezones"
+                variant="light"
+                color="cyan"
+                size="xl"
+                mb={2}
+                onClick={() => {
+                  setFromTimezone(normalizedToTimezone ?? fromTimezone);
+                  setToTimezone(normalizedFromTimezone ?? toTimezone);
+                }}
+              >
+                <IconArrowsExchange size={18} />
+              </ActionIcon>
+              <Select
+                label="To"
+                searchable
+                data={timezoneOptions}
+                value={toTimezone}
+                onChange={(value: string | null) => {
+                  const next = normalizeTimezoneInput(value);
+                  if (next) setToTimezone(next);
+                }}
+                style={{ flex: 1, minWidth: 220 }}
+                comboboxProps={{ withinPortal: true }}
+              />
+            </Group>
+
+            {converterError ? (
+              <Alert color="yellow" variant="light" radius="md" icon={<IconAlertTriangle size={14} />}>
+                <Text size="sm">{converterError}</Text>
+              </Alert>
+            ) : converterResult ? (
+              <Card withBorder radius="md" p="md">
+                <Group justify="space-between" align="stretch" wrap="wrap" gap="md">
+                  <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                    <Text size="xs" fw={700} c="dimmed" tt="uppercase">Source time</Text>
+                    <Text fw={800} size="xl" ff="monospace">{converterResult.source}</Text>
+                    <Text size="xs" c="dimmed">{normalizedFromTimezone}{converterResult.sourceAbbr ? ` · ${converterResult.sourceAbbr}` : ""}</Text>
+                  </Stack>
+                  <Divider orientation="vertical" visibleFrom="sm" />
+                  <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                    <Text size="xs" fw={700} c="dimmed" tt="uppercase">Converted time</Text>
+                    <Text fw={800} size="xl" ff="monospace">{converterResult.target}</Text>
+                    <Text size="xs" c="dimmed">{normalizedToTimezone}{converterResult.targetAbbr ? ` · ${converterResult.targetAbbr}` : ""}</Text>
+                  </Stack>
+                </Group>
+              </Card>
+            ) : null}
+          </Stack>
+        </Card>
+
       </Stack>
     </WidgetFrame>
   );
@@ -947,7 +1153,7 @@ export function TimezoneHelperTile({ onExpand }: { onExpand: () => void }) {
         </ThemeIcon>
         <Stack gap={2} style={{ flex: 1 }}>
           <Text fw={700} size="sm">NOC Timezone Helper</Text>
-          <Text size="xs" c="dimmed">ZIP · City · State · Abbreviation → PST/PT</Text>
+          <Text size="xs" c="dimmed">Timezone converter + ZIP · City · State → PT helper</Text>
           <Group gap={4} mt={4}>
             <Badge size="xs" variant="light" color="green">Within hours</Badge>
             <Badge size="xs" variant="light" color="yellow">Boundary</Badge>

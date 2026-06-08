@@ -20,6 +20,8 @@ export interface SlackPostResult {
 export interface SlackPostOptions {
   /** Optional thread parent ts to reply in-thread. */
   thread_ts?: string | null;
+  /** Direct-message target Slack user ID (U...). If provided, API posts to that DM. */
+  target_user_id?: string;
   /**
    * Override the displayed sender name on Slack. Requires the bot to have the
    * `chat:write.customize` OAuth scope. If omitted, Slack falls back to the
@@ -48,6 +50,7 @@ export async function postSlackMessage(
 
   const payload: Record<string, unknown> = { text };
   if (opts.thread_ts) payload.thread_ts = opts.thread_ts;
+  if (opts.target_user_id) payload.target_user_id = opts.target_user_id;
   if (opts.username) payload.username = opts.username;
   if (opts.icon_emoji) payload.icon_emoji = opts.icon_emoji;
 

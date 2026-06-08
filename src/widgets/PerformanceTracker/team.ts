@@ -250,7 +250,14 @@ for (const m of LOCKED_TEAM) {
  *      steps 1 + 2 on the stripped form
  *   4. null (rejected)
  */
+export function isExcludedAuditActor(rawName: string | null | undefined): boolean {
+  const key = ckey(rawName ?? "");
+  if (!key) return false;
+  return key === "ebonding" || key === "tech support" || key === "techsupport";
+}
+
 export function resolveTeamMember(rawName: string | null | undefined): string | null {
+  if (isExcludedAuditActor(rawName)) return null;
   if (!rawName) return null;
   const key = ckey(rawName);
   if (!key) return null;

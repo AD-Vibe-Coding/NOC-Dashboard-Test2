@@ -67,7 +67,7 @@ import {
 } from "./data";
 import { type SourceType } from "./import";
 import { RawDataModal, type DisputeInfo } from "./RawDataModal";
-import { DisputeForm } from "./DisputeForm";
+import { DisputeForm, type DisputeField } from "./DisputeForm";
 
 interface Props {
   metrics: PerformanceMetric[];
@@ -97,7 +97,7 @@ export function PerformanceDashboard({
 }: Props) {
   // ---- Dispute state ----
   const [disputeMetric, setDisputeMetric] = useState<PerformanceMetric | null>(null);
-  const [disputeField, setDisputeField] = useState<"ack_minutes" | "carrier_ticket_minutes" | null>(null);
+  const [disputeField, setDisputeField] = useState<DisputeField | null>(null);
   const [disputeMap, setDisputeMap] = useState<Map<number, DisputeInfo[]>>(new Map());
   const [disputeRefresh, setDisputeRefresh] = useState(0);
 
@@ -170,9 +170,15 @@ export function PerformanceDashboard({
     shiftFilter,
   };
 
+  const summaryMembers = useMemo(() => {
+    const members = new Set(LOCKED_TEAM_NAMES);
+    if (scopedMember) members.add(scopedMember);
+    return Array.from(members);
+  }, [scopedMember]);
+
   const summaries = useMemo(
-    () => aggregateMetrics(metrics, LOCKED_TEAM_NAMES, options),
-    [metrics, options.queue, options.period, options.excludeMaintenance, options.dayFilter, options.shiftFilter],
+    () => aggregateMetrics(metrics, summaryMembers, options),
+    [metrics, summaryMembers, options.queue, options.period, options.excludeMaintenance, options.dayFilter, options.shiftFilter],
   );
 
   // ---- Auto-diagnostic: do we have ticket rows that don't have a
@@ -1621,6 +1627,17 @@ function GenericSourceCard({
               </Text>
               <Text size="sm" fw={600} ff="monospace">
                 {formatMinutes(grandDuration)}
+              </Text>
+            </Box>
+          )}
+          {sourceType === "audit" && rows.length > 0 && (
+            <Box>
+              <Text size="xs" c="dimmed">
+                Average score
+              </Text>
+              <Text size="sm" fw={600} ff="monospace">
+                {Math.round(rows.reduce((sum, r) => sum + (r.score ?? 0) * (r.rowCount > 0 ? r.rowCount : 0), 0) /
+                  Math.max(rows.reduce((sum, r) => sum + r.rowCount, 0), 1))}
               </Text>
             </Box>
           )}

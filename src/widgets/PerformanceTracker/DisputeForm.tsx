@@ -1,6 +1,5 @@
 /**
- * DisputeForm — modal for a tech to dispute an ack_minutes or
- * carrier_ticket_minutes value on a specific ticket row.
+ * DisputeForm — modal for disputing imported KPI values or AI-generated audit feedback.
  *
  * Supports attaching screenshots and email files as evidence.
  */
@@ -31,34 +30,28 @@ import {
 } from "@tabler/icons-react";
 import { type PerformanceMetric } from "./data";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type DisputeField = "ack_minutes" | "carrier_ticket_minutes";
+export type DisputeField = "ack_minutes" | "carrier_ticket_minutes" | "success_count" | "ai_feedback";
 
 export interface Attachment {
   name: string;
-  type: string; // MIME type
-  size: number; // bytes
-  dataUrl: string; // base64 data URL
+  type: string;
+  size: number;
+  dataUrl: string;
 }
 
 interface Props {
-  /** The metric row being disputed, or null to close the modal. */
   metric: PerformanceMetric | null;
-  /** Pre-selected field to dispute. */
   field: DisputeField | null;
-  /** The logged-in user's canonical name. */
   submitterName: string;
   onClose: () => void;
-  /** Called after a successful submission. */
   onSubmitted: () => void;
 }
 
 const FIELD_LABELS: Record<DisputeField, string> = {
   ack_minutes: "Acknowledgement Time (minutes)",
   carrier_ticket_minutes: "Time to Open w/ Carrier (minutes)",
+  success_count: "Met SLA",
+  ai_feedback: "What You Missed / Could Do Better (AI feedback)",
 };
 
 const ACCEPTED_TYPES = [
@@ -68,13 +61,20 @@ const ACCEPTED_TYPES = [
   "image/webp",
   "image/bmp",
   "application/pdf",
-  "message/rfc822",          // .eml
-  "application/vnd.ms-outlook", // .msg
+  "message/rfc822",
+  "application/vnd.ms-outlook",
   "text/plain",
 ].join(",");
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
+const MAX_FILE_SIZE = 5 * 1024 * 1024;
 const MAX_FILES = 5;
+
+const TASK_SLA_DELAY_OPTIONS = [
+  { value: "Customer", label: "Customer" },
+  { value: "Carrier", label: "Carrier" },
+  { value: "MOM team", label: "MOM team" },
+  { value: "Other Technician", label: "Other Technician" },
+];
 
 function fmtMin(v: number | null | undefined): string {
   if (v == null) return "—";
@@ -92,7 +92,6 @@ function isImage(type: string): boolean {
   return type.startsWith("image/");
 }
 
-/** Read a File into a base64 data URL. */
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -102,9 +101,15 @@ function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+function readOriginalAiFeedback(metric: PerformanceMetric | null): string {
+  if (!metric) return "";
+  try {
+    const parsed = JSON.parse(String((metric as Record<string, unknown>).raw_json ?? "{}")) as Record<string, unknown>;
+    return String(parsed.what_missed ?? parsed.what_you_missed ?? parsed.what_you_missed_could_do_better ?? "");
+  } catch {
+    return "";
+  }
+}
 
 export function DisputeForm({
   metric,
@@ -124,12 +129,13 @@ export function DisputeForm({
 
   const raw = metric as Record<string, unknown> | null;
   const ticketRef = raw?.ref_number ? String(raw.ref_number) : undefined;
+  const isTaskSlaDispute = field === "success_count";
+  const isAiFeedbackDispute = field === "ai_feedback";
   const originalValue =
-    field && metric
+    field && metric && field !== "ai_feedback"
       ? ((metric as Record<string, unknown>)[field] as number | null)
       : null;
-
-  // ---- File handling ----
+  const originalAiFeedback = readOriginalAiFeedback(metric);
 
   async function handleFilesSelected(files: FileList | null) {
     if (!files) return;
@@ -142,9 +148,7 @@ export function DisputeForm({
         break;
       }
       if (file.size > MAX_FILE_SIZE) {
-        setError(
-          `"${file.name}" is too large (${fmtFileSize(file.size)}). Max ${fmtFileSize(MAX_FILE_SIZE)} per file.`,
-        );
+        setError(`"${file.name}" is too large (${fmtFileSize(file.size)}). Max ${fmtFileSize(MAX_FILE_SIZE)} per file.`);
         continue;
       }
       try {
@@ -161,7 +165,6 @@ export function DisputeForm({
     }
 
     setAttachments((prev) => [...prev, ...newAttachments]);
-    // Reset file input so the same file can be re-selected
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -169,16 +172,18 @@ export function DisputeForm({
     setAttachments((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  // ---- Submission ----
-
   async function handleSubmit() {
     if (!metric || !field) return;
-    if (typeof proposedValue !== "number" || proposedValue < 0) {
+    if (!isAiFeedbackDispute && !isTaskSlaDispute && (typeof proposedValue !== "number" || proposedValue < 0)) {
       setError("Please enter a valid proposed value.");
       return;
     }
     if (!reason.trim()) {
-      setError("Please provide a reason for the dispute.");
+      setError(
+        isAiFeedbackDispute
+          ? "Please explain what was wrong in the AI-generated feedback."
+          : "Please provide a reason for the dispute.",
+      );
       return;
     }
 
@@ -195,12 +200,17 @@ export function DisputeForm({
             ticket_ref: ticketRef ?? null,
             submitted_by: submitterName,
             field_name: field,
-            original_value: originalValue ?? 0,
-            proposed_value: proposedValue,
+            original_value: isAiFeedbackDispute ? 0 : (originalValue ?? 0),
+            proposed_value: isAiFeedbackDispute ? 0 : (isTaskSlaDispute ? (originalValue ?? 0) : proposedValue),
             reason: reason.trim(),
-            evidence_note: evidence.trim() || null,
-            attachments_json:
-              attachments.length > 0 ? JSON.stringify(attachments) : null,
+            evidence_note: isAiFeedbackDispute
+              ? JSON.stringify({
+                  evidence_note: evidence.trim() || null,
+                  ai_feedback_original: originalAiFeedback || null,
+                  ai_feedback_mistake: reason.trim(),
+                })
+              : (evidence.trim() || null),
+            attachments_json: attachments.length > 0 ? JSON.stringify(attachments) : null,
             status: "pending",
           },
         }),
@@ -208,12 +218,9 @@ export function DisputeForm({
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(
-          (body as { error?: string }).error || `HTTP ${res.status}`,
-        );
+        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
       }
 
-      // Reset form
       setField(null);
       setProposedValue("");
       setReason("");
@@ -247,19 +254,16 @@ export function DisputeForm({
     >
       <Stack gap="md">
         <Text size="sm" c="dimmed">
-          If a tool outage or maintenance window inflated your numbers, submit a
-          dispute with the correct value and supporting evidence. Your manager
-          will review and approve or reject it.
+          If a tool outage, audit issue, or AI-generated feedback mistake affected your evaluation, submit a dispute with context and supporting evidence. Your manager will review and approve or reject it.
         </Text>
 
         <Select
           label="Field to dispute"
           data={[
             { value: "ack_minutes", label: FIELD_LABELS.ack_minutes },
-            {
-              value: "carrier_ticket_minutes",
-              label: FIELD_LABELS.carrier_ticket_minutes,
-            },
+            { value: "carrier_ticket_minutes", label: FIELD_LABELS.carrier_ticket_minutes },
+            { value: "success_count", label: FIELD_LABELS.success_count },
+            { value: "ai_feedback", label: FIELD_LABELS.ai_feedback },
           ]}
           value={field}
           onChange={(v) => setField(v as DisputeField)}
@@ -268,63 +272,87 @@ export function DisputeForm({
         />
 
         {field && (
-          <Group gap="lg">
-            <div>
-              <Text size="xs" c="dimmed">
-                Current value
-              </Text>
-              <Text fw={700} c="red.4" ff="monospace" size="lg">
-                {fmtMin(originalValue)}
-              </Text>
-            </div>
-            <Text c="dimmed" size="lg">
-              →
-            </Text>
-            <NumberInput
-              label="Proposed value (minutes)"
-              value={proposedValue}
-              onChange={setProposedValue}
-              min={0}
-              step={0.5}
-              decimalScale={2}
+          isTaskSlaDispute ? (
+            <Select
+              label="Delay caused by"
+              placeholder="Select a delay category"
+              data={TASK_SLA_DELAY_OPTIONS}
+              value={reason}
+              onChange={(v) => setReason(v ?? "")}
+              allowDeselect={false}
               size="sm"
-              style={{ flex: 1 }}
-              placeholder="e.g. 2.5"
             />
-          </Group>
+          ) : isAiFeedbackDispute ? (
+            <Stack gap="sm">
+              <Card withBorder radius="md" p="sm">
+                <Stack gap={4}>
+                  <Text size="xs" c="dimmed">Original AI-generated feedback</Text>
+                  <Text size="sm">{originalAiFeedback || "—"}</Text>
+                </Stack>
+              </Card>
+              <Textarea
+                label="What was the mistake in AI-generated feedback?"
+                value={reason}
+                onChange={(event) => setReason(event.currentTarget.value)}
+                minRows={4}
+                autosize
+                placeholder="Explain what was incorrect, misleading, incomplete, or unfair in the AI-generated feedback."
+                withAsterisk
+              />
+            </Stack>
+          ) : (
+            <Group gap="lg">
+              <div>
+                <Text size="xs" c="dimmed">Current value</Text>
+                <Text fw={700} c="red.4" ff="monospace" size="lg">
+                  {fmtMin(originalValue)}
+                </Text>
+              </div>
+              <Text c="dimmed" size="lg">→</Text>
+              <NumberInput
+                label="Proposed value (minutes)"
+                value={proposedValue}
+                onChange={setProposedValue}
+                min={0}
+                step={0.5}
+                decimalScale={2}
+                size="sm"
+                style={{ flex: 1 }}
+                placeholder="e.g. 2.5"
+              />
+            </Group>
+          )
         )}
 
-        <Textarea
-          label="Reason"
-          placeholder="e.g. iPath was down for maintenance from 9:00 AM to 11:15 AM on 3/15. I had the ticket ready but couldn't update until the tool came back online."
-          value={reason}
-          onChange={(e) => setReason(e.currentTarget.value)}
-          minRows={3}
-          autosize
-          size="sm"
-          withAsterisk
-        />
+        {!isAiFeedbackDispute && (
+          <Textarea
+            label="Reason"
+            placeholder="e.g. iPath was down for maintenance from 9:00 AM to 11:15 AM on 3/15. I had the ticket ready but couldn't update until the tool came back online."
+            value={reason}
+            onChange={(e) => setReason(e.currentTarget.value)}
+            minRows={3}
+            autosize
+            size="sm"
+            withAsterisk
+          />
+        )}
 
         <TextInput
-          label="Evidence / Notes"
-          placeholder="Slack thread link, incident reference, etc."
+          label={isAiFeedbackDispute ? "Supporting context (optional)" : "Evidence / Notes"}
+          placeholder={isAiFeedbackDispute ? "Add any extra context, examples, or clarifications." : "Slack thread link, incident reference, etc."}
           value={evidence}
           onChange={(e) => setEvidence(e.currentTarget.value)}
           size="sm"
         />
 
-        {/* File attachments */}
         <Box>
           <Group gap="xs" mb={6}>
-            <Text size="sm" fw={500}>
-              Attachments
-            </Text>
+            <Text size="sm" fw={500}>Attachments</Text>
             <Text size="xs" c="dimmed">
               Screenshots, emails, PDFs — up to {MAX_FILES} files, {fmtFileSize(MAX_FILE_SIZE)} each
             </Text>
           </Group>
 
-          {/* Hidden native file input */}
           <input
             type="file"
             ref={fileInputRef}
@@ -334,22 +362,13 @@ export function DisputeForm({
             onChange={(e) => handleFilesSelected(e.target.files)}
           />
 
-          {/* Attachment list */}
           {attachments.length > 0 && (
             <Stack gap={6} mb="sm">
               {attachments.map((att, idx) => (
                 <Card key={idx} withBorder radius="sm" p="xs">
                   <Group gap="sm" wrap="nowrap">
                     {isImage(att.type) ? (
-                      <Image
-                        src={att.dataUrl}
-                        alt={att.name}
-                        w={48}
-                        h={48}
-                        fit="cover"
-                        radius="sm"
-                        style={{ flexShrink: 0 }}
-                      />
+                      <Image src={att.dataUrl} alt={att.name} w={48} h={48} fit="cover" radius="sm" style={{ flexShrink: 0 }} />
                     ) : (
                       <Box
                         style={{
@@ -367,20 +386,11 @@ export function DisputeForm({
                       </Box>
                     )}
                     <Box style={{ flex: 1, minWidth: 0 }}>
-                      <Text size="sm" fw={500} truncate>
-                        {att.name}
-                      </Text>
-                      <Text size="xs" c="dimmed">
-                        {fmtFileSize(att.size)}
-                      </Text>
+                      <Text size="sm" fw={500} truncate>{att.name}</Text>
+                      <Text size="xs" c="dimmed">{fmtFileSize(att.size)}</Text>
                     </Box>
                     <Tooltip label="Remove">
-                      <ActionIcon
-                        size="sm"
-                        variant="subtle"
-                        color="red"
-                        onClick={() => removeAttachment(idx)}
-                      >
+                      <ActionIcon size="sm" variant="subtle" color="red" onClick={() => removeAttachment(idx)}>
                         <IconX size={14} />
                       </ActionIcon>
                     </Tooltip>
@@ -398,27 +408,23 @@ export function DisputeForm({
             onClick={() => fileInputRef.current?.click()}
             disabled={attachments.length >= MAX_FILES}
           >
-            {attachments.length > 0
-              ? `Add more files (${attachments.length}/${MAX_FILES})`
-              : "Attach screenshot or email"}
+            {attachments.length > 0 ? `Add more files (${attachments.length}/${MAX_FILES})` : "Attach screenshot or email"}
           </Button>
         </Box>
 
-        {error && (
-          <Text size="sm" c="red">
-            {error}
-          </Text>
-        )}
+        {error && <Text size="sm" c="red">{error}</Text>}
 
         <Group justify="flex-end" mt="xs">
-          <Button variant="default" onClick={onClose} disabled={submitting}>
-            Cancel
-          </Button>
+          <Button variant="default" onClick={onClose} disabled={submitting}>Cancel</Button>
           <Button
             color="yellow"
             onClick={handleSubmit}
             loading={submitting}
-            disabled={!field || typeof proposedValue !== "number"}
+            disabled={
+              !field ||
+              (!isAiFeedbackDispute && !isTaskSlaDispute && typeof proposedValue !== "number") ||
+              !reason.trim()
+            }
           >
             Submit Dispute
           </Button>

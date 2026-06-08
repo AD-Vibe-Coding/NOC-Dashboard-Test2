@@ -11,9 +11,11 @@ import {
   Progress,
   RingProgress,
   ScrollArea,
+  SegmentedControl,
   Select,
   SimpleGrid,
   Stack,
+  Switch,
   Table,
   Text,
   ThemeIcon,
@@ -27,7 +29,8 @@ import {
   IconCoffee,
   IconHeadset,
   IconLock,
-  IconPlayerPlay,
+  IconLogin2,
+  IconLogout2,
   IconPlayerStop,
   IconUser,
   IconUserCheck,
@@ -41,7 +44,7 @@ import { useRosterShift, type ShiftWindow } from "../../lib/use-roster-shift";
 import { LOCKED_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../PerformanceTracker/team";
 import { useIdentity } from "../../lib/identity";
 import { db } from "../../db";
-import { emojiForBreak, formatBreakStartMessage, postSlackMessage } from "../../lib/slack";
+import { postSlackMessage } from "../../lib/slack";
 import { formatElapsedIso } from "../../lib/format";
 import { BreakScheduleModal } from "./BreakScheduleModal";
 import { defaultRoleFor } from "../../lib/roles";
@@ -65,6 +68,17 @@ const BREAK_EMOJI: Record<string, string> = {
   "Urgent Task": "🚨",
   "Meeting - Internal": "🗓️",
   "Meeting - External": "🤝",
+};
+
+const BREAK_TYPE_TO_ICON: Record<string, string> = {
+  Coffee: ":coffee:",
+  Lunch: ":fork_and_knife:",
+  Restroom: ":restroom:",
+  Personal: ":hourglass_flowing_sand:",
+  Other: ":hourglass_flowing_sand:",
+  "Urgent Task": ":rotating_light:",
+  "Meeting - Internal": ":spiral_calendar_pad:",
+  "Meeting - External": ":handshake:",
 };
 
 const STATUS_TYPES = [
@@ -97,6 +111,70 @@ const MEETING_REMINDER_STEPS_MS = [45 * 60_000, 75 * 60_000, 120 * 60_000];
 const LUNCH_REMINDER_MS = 65 * 60_000;
 const OTHER_BREAK_REMINDER_MS = 30 * 60_000;
 const BREAK_START_QUEUE_COOLDOWN_MS = 2 * 60_000;
+const QUEUE_ESCALATION_STAGE_DELAYS_MS = [0, 10 * 60_000, 20 * 60_000] as const;
+const REMINDERS_PAUSED_STORAGE_KEY = "team-availability-reminders-paused-v1";
+
+// Canonical roster-name -> Slack user ID.
+// We key by canonical names used in LOCKED_TEAM/resolveTeamMember so Zoom and roster names resolve consistently.
+const SLACK_USER_BY_CANONICAL_MEMBER: Record<string, string> = {
+  "abhishek benarji": "U09PWVD4BU6",
+  "akash hanvate": "U09PVHEKRGV",
+  "anirudh kukudala": "U09Q2HK9HJQ",
+  "mohammed ashraf": "U09PX02N8MU",
+  "hamza rahmani": "U09PZ1RCZGS",
+  "karthik damagalla": "U09PSJVFJF5",
+  "karthik radhakrishnan": "U09QBTS7F8R",
+  "kenya gentry": "U09J2RJUBMF",
+  "lokesh naik banavath": "U09PVHC696H",
+  "akram ahmed": "U09PVH91ESZ",
+  "otukho olembo": "U09J2RFJBUZ",
+  "perry cox": "U09J2RL9X1P",
+  "pranav dandibhotla": "U09PX009L22",
+  "mahalakshmi samiti": "U09QBU1R4KB",
+  "sriram parisa": "U09QT9ZS5EC",
+  "mohammed zubairuddin": "U09PZ1M7QM8",
+};
+
+// Extra direct aliases seen in Zoom/Slack display names.
+const SLACK_NAME_ALIASES: Record<string, string> = {
+  "abishek benarji": "abhishek benarji",
+  "abhishek benarji - ab": "abhishek benarji",
+  "ashraf mohammed": "mohammed ashraf",
+  "hamza rahmani umme": "hamza rahmani",
+  "lokesh banavath": "lokesh naik banavath",
+  "mohammed akram ahmed": "akram ahmed",
+  "samiti mahalakshmi": "mahalakshmi samiti",
+  "zubair mohammed": "mohammed zubairuddin",
+};
+
+function normalizeMemberName(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/\s*[-|:]\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function slackUserIdFor(name: string) {
+  const normalizedRaw = normalizeMemberName(name);
+  const canonical = resolveTeamMember(name) ?? name;
+  const normalizedCanonical = normalizeMemberName(canonical);
+  const aliasedRaw = SLACK_NAME_ALIASES[normalizedRaw] ?? normalizedRaw;
+  const aliasedCanonical = SLACK_NAME_ALIASES[normalizedCanonical] ?? normalizedCanonical;
+
+  return (
+    SLACK_USER_BY_CANONICAL_MEMBER[aliasedCanonical]
+    ?? SLACK_USER_BY_CANONICAL_MEMBER[aliasedRaw]
+    ?? null
+  );
+}
+
+const MANAGER_ESCALATION_IDS = ["U09Q2HK9HJQ", "U09J2RL9X1P"];
+
+function managerSlackIds(): string[] {
+  return [...new Set(MANAGER_ESCALATION_IDS)];
+}
 
 // Normalise names for fuzzy matching between Zoom display names and Break Tracker employee names
 function normName(n: string) {
@@ -189,7 +267,12 @@ function todayPacificIso() {
 
 export function ZoomQueueWidget() {
   const { data, loading, error, refresh } = useZoomQueue();
-  const { ready, active: activeBreaks, history: breakHistory, refresh: refreshBreaks } = useBreakData();
+  const [viewMode, setViewMode] = useState<"fit" | "zoom">("zoom");
+  const [zoomPercent, setZoomPercent] = useState<string>("110");
+  const [fitScale, setFitScale] = useState(1);
+  const [countdownNow, setCountdownNow] = useState(Date.now());
+  const localReminderAnchorRef = useRef<Record<string, number>>({});
+  const { active: activeBreaks, history: breakHistory, refresh: refreshBreaks } = useBreakData();
   const { data: rosterData, isInShift, isRosterListed } = useRosterShift();
   const { identity } = useIdentity();
   const isManager = identity?.role === "manager";
@@ -198,6 +281,18 @@ export function ZoomQueueWidget() {
   const [posting, setPosting] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [breakScheduleOpen, setBreakScheduleOpen] = useState(false);
+  const [punchInMessage] = useState("Hello Team");
+  const [punchOutMessage] = useState("Signing off for now");
+  const [punchPosting, setPunchPosting] = useState(false);
+  const [punchActionPending, setPunchActionPending] = useState<"punch_in" | "punch_out" | null>(null);
+  const [lastPunchAction, setLastPunchAction] = useState<"punch_in" | "punch_out" | null>(null);
+  const [remindersPaused, setRemindersPaused] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(REMINDERS_PAUSED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
 
   const effectiveName = (isManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")).trim();
 
@@ -207,11 +302,93 @@ export function ZoomQueueWidget() {
     setTimeout(() => setToasts((prev) => prev.filter((x) => x.id !== id)), 5000);
   }
 
+  useEffect(() => {
+    if (!effectiveName) return;
+    let cancelled = false;
+    void db.punch_events
+      .list({
+        filter: { employee_name: effectiveName },
+        orderBy: { column: "punched_at", ascending: false },
+        limit: 1,
+      })
+      .then((rows) => {
+        if (cancelled) return;
+        const row = rows[0];
+        setLastPunchAction((row?.action as "punch_in" | "punch_out" | undefined) ?? null);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLastPunchAction(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveName]);
+
+  function openPunchModal(action: "punch_in" | "punch_out") {
+    const seed = action === "punch_in" ? punchInMessage : punchOutMessage;
+    const entered = window.prompt(
+      action === "punch_in" ? "Enter punch-in message" : "Enter punch-out message",
+      seed,
+    );
+    if (entered === null) return;
+    void submitPunch(action, entered);
+  }
+
+  async function submitPunch(action: "punch_in" | "punch_out", messageOverride?: string) {
+    const name = effectiveName.trim();
+    if (!name || punchPosting) return;
+
+    setPunchPosting(true);
+    setPunchActionPending(action);
+    try {
+      const trimmedMessage = (messageOverride ?? (action === "punch_in" ? punchInMessage : punchOutMessage)).trim();
+      const defaultMessage = action === "punch_in" ? "Hello Team" : "Signing off for now";
+      const text = trimmedMessage || defaultMessage;
+
+      let slackPosted = false;
+      let slackTs: string | null = null;
+      let slackChannel: string | null = null;
+
+      try {
+        const slack = await postSlackMessage(text, {
+          username: name,
+          ...(action === "punch_in" ? { icon_emoji: ":large_green_circle:" } : {}),
+        });
+        slackPosted = !!slack.posted;
+        slackTs = slack.ts ?? null;
+        slackChannel = slack.channel ?? null;
+      } catch {
+        // logging still continues even if Slack fails
+      }
+
+      const punchedAt = new Date().toISOString();
+      await db.punch_events.insert({
+        employee_name: name,
+        action,
+        message: trimmedMessage || defaultMessage,
+        slack_posted: slackPosted,
+        slack_channel: slackChannel,
+        slack_ts: slackTs,
+        punched_at: punchedAt,
+      });
+
+      setLastPunchAction(action);
+      showToast({
+        color: slackPosted ? "green" : "yellow",
+        title: action === "punch_in" ? "Punched in" : "Punched out",
+        body: slackPosted ? `Posted to #${slackChannel ?? "noc-team"}` : "Saved, but Slack post did not complete",
+      });
+    } finally {
+      setPunchPosting(false);
+      setPunchActionPending(null);
+    }
+  }
+
   async function startStatus() {
     const trimmed = effectiveName;
-    if (!trimmed || !statusType || posting || !ready) return;
+    if (!trimmed || !statusType || posting) return;
 
-    // Block if the person already has an active break/status
     const alreadyActive = activeBreaks.find((b) => samePerson(b.employee_name, trimmed));
     if (alreadyActive) {
       showToast({
@@ -236,14 +413,28 @@ export function ZoomQueueWidget() {
     }
 
     setPosting(true);
-    const slackText = formatBreakStartMessage(statusType);
+    const slackText = statusType === "Meeting - Internal"
+      ? "Meeting - Internal"
+      : statusType === "Meeting - External"
+        ? "Meeting - External"
+        : statusType === "Coffee"
+          ? "BRB - Coffee"
+          : statusType === "Lunch"
+            ? "Lunch"
+            : statusType === "Restroom"
+              ? "Bio"
+              : statusType === "Personal"
+                ? "BRB"
+                : statusType === "Other"
+                  ? "BRB"
+                  : statusType;
 
     let slackTs: string | null = null;
     let slackPosted = false;
     try {
       const result = await postSlackMessage(slackText, {
         username: trimmed,
-        icon_emoji: emojiForBreak(statusType),
+        icon_emoji: BREAK_TYPE_TO_ICON[statusType] ?? ":hourglass_flowing_sand:",
       });
       slackTs = result.ts ?? null;
       slackPosted = !!result.posted;
@@ -264,17 +455,19 @@ export function ZoomQueueWidget() {
       });
     }
 
-    await db.breaks.insert({
-      employee_name: trimmed,
-      break_type: statusType,
-      start_time: new Date().toISOString(),
-      is_active: true,
-      slack_message_ts: slackTs,
-      slack_posted: slackPosted,
-    });
-
-    setPosting(false);
-    refreshBreaks();
+    try {
+      await db.breaks.insert({
+        employee_name: trimmed,
+        break_type: statusType,
+        start_time: new Date().toISOString(),
+        is_active: true,
+        slack_message_ts: slackTs,
+        slack_posted: slackPosted,
+      });
+      refreshBreaks();
+    } finally {
+      setPosting(false);
+    }
   }
 
   async function endStatus(activeStatus: ActiveStatusRow) {
@@ -358,6 +551,62 @@ export function ZoomQueueWidget() {
     return set;
   }, [rosterData]);
   const nowMinPacific = nowMinutesPacific();
+
+  useEffect(() => {
+    const id = window.setInterval(() => setCountdownNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const updateFitScale = () => {
+      const availableHeight = window.innerHeight - 170;
+      const estimatedContentHeight = isManager ? 1180 : 1040;
+      const nextScale = Math.max(0.7, Math.min(1, availableHeight / estimatedContentHeight));
+      setFitScale(Number(nextScale.toFixed(2)));
+    };
+
+    updateFitScale();
+    window.addEventListener("resize", updateFitScale);
+    return () => window.removeEventListener("resize", updateFitScale);
+  }, [isManager]);
+
+  function queueReminderMetaForAgent(agent: ZoomAgent & { rosterName?: string | null }): { remainingMs: number | null; sent: boolean } {
+    const name = agent.rosterName ?? agent.display_name;
+    const normalized = normName(name);
+    const shiftWindow = shiftWindowMap.get(normalized);
+    const key = shiftWindow
+      ? `${normalized}:${shiftWindow.start}:${shiftWindow.end}`
+      : `${normalized}:no-shift`;
+
+    const activeStatus = activeStatusMap.get(normalized);
+    const isQueueEligibleForRow = agent.status !== "in_queue" && !activeStatus;
+
+    // This helper is used only by the "In shift + not in queue" table,
+    // so keep countdown aligned with the row's presence there.
+    if (!isQueueEligibleForRow) {
+      delete localReminderAnchorRef.current[key];
+      return { remainingMs: null, sent: false };
+    }
+
+    const state = readReminderState() as Record<string, { eligibleSince: number; reminded?: boolean; sentStages?: number[] }>;
+    const entry = state[key];
+
+    if (entry) {
+      delete localReminderAnchorRef.current[key];
+      const sent = Array.isArray(entry.sentStages)
+        ? entry.sentStages.includes(1)
+        : !!entry.reminded;
+      if (sent) return { remainingMs: 0, sent: true };
+      const remaining = Math.max(0, REMINDER_DELAY_MS - (countdownNow - entry.eligibleSince));
+      return { remainingMs: remaining, sent: false };
+    }
+
+    // UI fallback until the 60s reminder tick persists eligibleSince to localStorage.
+    const anchor = localReminderAnchorRef.current[key] ?? countdownNow;
+    localReminderAnchorRef.current[key] = anchor;
+    const remaining = Math.max(0, REMINDER_DELAY_MS - (countdownNow - anchor));
+    return { remainingMs: remaining, sent: false };
+  }
 
   function isActuallyInShift(name: string, displayName?: string) {
     if (!rosterData) return true; // still loading
@@ -526,6 +775,7 @@ export function ZoomQueueWidget() {
   const activeStatusMapRef     = useRef(activeStatusMap);
   const inShiftNowSetRef       = useRef(inShiftNowSet);
   const breakHistoryRef        = useRef(breakHistory);
+  const remindersPausedRef     = useRef(remindersPaused);
 
   // Keep refs in sync on every render (no interval restart needed)
   dataRef.current           = data;
@@ -548,8 +798,10 @@ export function ZoomQueueWidget() {
       const activeStatMap = activeStatusMapRef.current;
       const inShiftSet   = inShiftNowSetRef.current;
       const brkHistory   = breakHistoryRef.current;
+      const remindersPaused = remindersPausedRef.current;
 
       if (!data || !rosterData) return;
+      if (remindersPaused) return;
 
       // If a previous tick is still running, skip this one entirely
       if (tickRunningRef.current) return;
@@ -562,6 +814,7 @@ export function ZoomQueueWidget() {
         const nextQueueState = readReminderState();
         const nextMeetingState = readMeetingReminderState();
         const nextBreakState = readBreakReminderState();
+        const managerIds = managerSlackIds();
         const trackedQueueKeys = new Set<string>();
         const trackedMeetingKeys = new Set<string>();
         const trackedBreakKeys = new Set<string>();
@@ -618,8 +871,8 @@ export function ZoomQueueWidget() {
           );
 
           const queueReminderKey      = shiftWindow
-            ? `${normalized}:${shiftWindow.start}:${shiftWindow.end}`
-            : `${normalized}:no-shift`;
+            ? `${todayKey}:${normalized}:${shiftWindow.start}:${shiftWindow.end}`
+            : `${todayKey}:${normalized}:no-shift`;
           const queueReminderDedupeKey = `queue:${todayKey}:${normalized}:${shiftWindow?.start ?? "none"}:${shiftWindow?.end ?? "none"}`;
           trackedQueueKeys.add(queueReminderKey);
 
@@ -649,12 +902,27 @@ export function ZoomQueueWidget() {
             ? (now - new Date(lastEndedBreakToday.end_time!).getTime()) < POST_BREAK_COOLDOWN_MS
             : false;
 
-          // Determine if the person is currently "in shift":
-          //   - If we have a precise shift window, use the 15-min grace-period check
-          //   - Fallback: use the roster inShiftNow set (matched by name)
-          const inShiftForReminder = shiftWindow
-            ? isWithinReminderWindow(nowMin, shiftWindow)
-            : inShiftSet.has(normalized);
+          // Determine if the person is currently eligible for reminder window:
+          //   - If roster strategy is unconstrained/unavailable, allow reminders for visible out-of-queue rows.
+          //   - If we have a precise shift window, use the 15-min grace-period check.
+          //   - Fallback: use roster inShiftNow set.
+          const unconstrainedRoster =
+            !rosterData?.strategy ||
+            rosterData.strategy === "unconfigured" ||
+            rosterData.strategy === "error" ||
+            rosterData.strategy === "fallback-all-listed" ||
+            rosterData.strategy === "no-column-match" ||
+            rosterData.strategy === "published-calendar-no-column" ||
+            rosterData.strategy === "published-csv-unmatched" ||
+            rosterData.strategy === "empty";
+
+          // STRICT for queue reminders: never remind unless shift is positively known.
+          // This prevents out-of-shift escalation spam.
+          const inShiftForReminder = !unconstrainedRoster && (
+            shiftWindow
+              ? isWithinReminderWindow(nowMin, shiftWindow)
+              : inShiftSet.has(normalized)
+          );
 
           // Queue reminder fires if:
           // - currently within shift (with grace period)
@@ -665,42 +933,87 @@ export function ZoomQueueWidget() {
           const isQueueEligible = inShiftForReminder
             && agent.status !== "in_queue"
             && !activeStatus
-            && !inBreakStartCooldown
-            && !inPostBreakCooldown;
+            && !inBreakStartCooldown;
 
-          console.debug(
+                    console.debug(
             `[ReminderTick] ${name} | isQueueEligible=${isQueueEligible}` +
             ` | inBreakCooldown=${inBreakStartCooldown} | inPostBreakCooldown=${inPostBreakCooldown}`
           );
 
           if (!isQueueEligible) {
-            delete nextQueueState[queueReminderKey];
+            const shouldResetTimer = !inShiftForReminder || agent.status === "in_queue";
+            if (shouldResetTimer) {
+              delete nextQueueState[queueReminderKey];
+            }
           } else {
             const existing = nextQueueState[queueReminderKey];
             if (!existing) {
               console.debug(`[ReminderTick] ${name} — started eligibility timer (will fire in ${REMINDER_DELAY_MS/60000} min)`);
               nextQueueState[queueReminderKey] = { eligibleSince: now, reminded: false };
-            } else if (
-              !existing.reminded &&
-              now - existing.eligibleSince >= REMINDER_DELAY_MS &&
-              !sentReminderKeys.has(queueReminderDedupeKey)
-            ) {
-              console.debug(`[ReminderTick] ${name} — firing QUEUE reminder`);
-              try {
-                await postSlackMessage(`${name} - Please turn on the call queue.`, {
-                  username: "Queue Reminder",
-                  icon_emoji: ":rotating_light:",
-                });
-                await db.reminder_events.insert({
-                  employee_name: name,
-                  reminder_type: "queue",
-                  dedupe_key: queueReminderDedupeKey,
-                  sent_at: new Date().toISOString(),
-                });
-                sentReminderKeys.add(queueReminderDedupeKey);
+            } else if (now - existing.eligibleSince >= REMINDER_DELAY_MS) {
+              const targetUserId = slackUserIdFor(name);
+              const elapsedAfterBase = now - existing.eligibleSince - REMINDER_DELAY_MS;
+              const legacyStage1AlreadySent = sentReminderKeys.has(queueReminderDedupeKey);
+
+              for (let i = 0; i < QUEUE_ESCALATION_STAGE_DELAYS_MS.length; i++) {
+                const stage = i + 1;
+                const stageDelay = QUEUE_ESCALATION_STAGE_DELAYS_MS[i];
+                const stageKey = `${queueReminderDedupeKey}:s${stage}`;
+
+                if (elapsedAfterBase < stageDelay) continue;
+                if (sentReminderKeys.has(stageKey)) continue;
+
+                const stillInShiftForSend = shiftWindow
+                  ? isWithinReminderWindow(nowMin, shiftWindow)
+                  : inShiftSet.has(normalized);
+                if (!stillInShiftForSend) {
+                  delete nextQueueState[queueReminderKey];
+                  break;
+                }
+
+                if (stage === 1 && legacyStage1AlreadySent) {
+                  sentReminderKeys.add(stageKey);
+                  continue;
+                }
+
+                console.debug(`[ReminderTick] ${name} — firing QUEUE reminder stage ${stage}`);
+                try {
+                  if ((stage === 1 || stage === 2) && targetUserId) {
+                    await postSlackMessage(`${name} - Please turn on the call queue.`, {
+                      target_user_id: targetUserId,
+                      username: "Queue Reminder",
+                      icon_emoji: ":rotating_light:",
+                    });
+                  }
+
+                  if ((stage === 2 || stage === 3) && managerIds.length > 0) {
+                    for (const managerId of managerIds) {
+                      await postSlackMessage(
+                        `[Escalation S${stage}] ${name} is still out of queue. Please follow up.`,
+                        {
+                          target_user_id: managerId,
+                          username: "Queue Reminder",
+                          icon_emoji: ":rotating_light:",
+                        },
+                      );
+                    }
+                  }
+
+                  await db.reminder_events.insert({
+                    employee_name: name,
+                    reminder_type: "queue",
+                    dedupe_key: stageKey,
+                    sent_at: new Date().toISOString(),
+                  });
+                  sentReminderKeys.add(stageKey);
+                  if (stage === 1) sentReminderKeys.add(queueReminderDedupeKey);
+                } catch (err) {
+                  console.warn(`[ReminderTick] queue reminder failed for ${name} (stage ${stage}):`, err);
+                }
+              }
+
+              if (legacyStage1AlreadySent || sentReminderKeys.has(`${queueReminderDedupeKey}:s1`)) {
                 nextQueueState[queueReminderKey] = { ...existing, reminded: true };
-              } catch (err) {
-                console.warn(`[ReminderTick] queue reminder failed for ${name}:`, err);
               }
             }
           }
@@ -718,9 +1031,14 @@ export function ZoomQueueWidget() {
                 if (elapsed >= step && !entry.sentSteps.includes(step) && !sentReminderKeys.has(meetingDedupeKey)) {
                   console.debug(`[ReminderTick] ${name} — firing MEETING reminder (step ${step / 60000}min)`);
                   try {
+                    const targetUserId = slackUserIdFor(name);
                     await postSlackMessage(
                       `${name} - If you are done with the meeting, please turn on the call queue.`,
-                      { username: "Queue Reminder", icon_emoji: ":spiral_calendar_pad:" },
+                      {
+                        target_user_id: targetUserId ?? undefined,
+                        username: "Queue Reminder",
+                        icon_emoji: ":spiral_calendar_pad:",
+                      },
                     );
                     await db.reminder_events.insert({
                       employee_name: name,
@@ -745,25 +1063,57 @@ export function ZoomQueueWidget() {
               const startedAt  = new Date(activeStatus.start_time).getTime();
               const elapsed    = now - startedAt;
               const threshold  = activeStatus.break_type === "Lunch" ? LUNCH_REMINDER_MS : OTHER_BREAK_REMINDER_MS;
-              const breakDedupeKey = `break:${todayKey}:${normalized}:${activeStatus.id}`;
+              const baseBreakKey = `break:${todayKey}:${normalized}:${activeStatus.id}`;
 
-              if (!entry.reminded && elapsed >= threshold && !sentReminderKeys.has(breakDedupeKey)) {
-                console.debug(`[ReminderTick] ${name} — firing BREAK reminder`);
-                try {
-                  await postSlackMessage(
-                    `${name} - If you are still on break, please update your status. If not, please turn on the call queue.`,
-                    { username: "Queue Reminder", icon_emoji: ":coffee:" },
-                  );
-                  await db.reminder_events.insert({
-                    employee_name: name,
-                    reminder_type: "break",
-                    dedupe_key: breakDedupeKey,
-                    sent_at: new Date().toISOString(),
-                  });
-                  sentReminderKeys.add(breakDedupeKey);
-                  entry.reminded = true;
-                } catch (err) {
-                  console.warn(`[ReminderTick] break reminder failed for ${name}:`, err);
+              if (elapsed >= threshold) {
+                const targetUserId = slackUserIdFor(name);
+                const stageKeys = [`${baseBreakKey}:s1`, `${baseBreakKey}:s2`, `${baseBreakKey}:s3`];
+                const stageDelays = [0, 10 * 60_000, 20 * 60_000] as const;
+                const elapsedAfterBase = elapsed - threshold;
+
+                for (let i = 0; i < stageDelays.length; i++) {
+                  const stage = i + 1;
+                  const stageKey = stageKeys[i];
+                  if (elapsedAfterBase < stageDelays[i]) continue;
+                  if (sentReminderKeys.has(stageKey)) continue;
+
+                  console.debug(`[ReminderTick] ${name} — firing BREAK reminder stage ${stage}`);
+                  try {
+                    if ((stage === 1 || stage === 2) && targetUserId) {
+                      await postSlackMessage(
+                        `${name} - If you are still on break, please update your status. If not, please turn on the call queue.`,
+                        {
+                          target_user_id: targetUserId,
+                          username: "Queue Reminder",
+                          icon_emoji: ":coffee:",
+                        },
+                      );
+                    }
+
+                    if ((stage === 2 || stage === 3) && managerIds.length > 0) {
+                      for (const managerId of managerIds) {
+                        await postSlackMessage(
+                          `[Escalation S${stage}] ${name} is still on break status and not in queue. Please follow up.`,
+                          {
+                            target_user_id: managerId,
+                            username: "Queue Reminder",
+                            icon_emoji: ":coffee:",
+                          },
+                        );
+                      }
+                    }
+
+                    await db.reminder_events.insert({
+                      employee_name: name,
+                      reminder_type: "break",
+                      dedupe_key: stageKey,
+                      sent_at: new Date().toISOString(),
+                    });
+                    sentReminderKeys.add(stageKey);
+                    if (stage === 1) entry.reminded = true;
+                  } catch (err) {
+                    console.warn(`[ReminderTick] break reminder failed for ${name} (stage ${stage}):`, err);
+                  }
                 }
               }
               nextBreakState[breakReminderKey] = entry;
@@ -798,6 +1148,9 @@ export function ZoomQueueWidget() {
     return () => window.clearInterval(id);
   }, []); // ← intentionally empty: stable interval, reads latest state via refs
 
+  const contentScale = viewMode === "fit" ? fitScale : Number(zoomPercent) / 100;
+  const useInternalScroll = viewMode === "zoom";
+
   return (
     <WidgetFrame
       title="Team Availability"
@@ -807,17 +1160,59 @@ export function ZoomQueueWidget() {
       loading={loading}
       onRefresh={refresh}
       headerActions={
-        <Tooltip label="Add manual break timing">
-          <Button
+        <Group gap="xs" wrap="wrap" justify="flex-end">
+          <SegmentedControl
             size="xs"
-            variant="light"
-            color="blue"
-            leftSection={<IconClockEdit size={14} />}
-            onClick={() => setBreakScheduleOpen(true)}
-          >
-            Break timing
-          </Button>
-        </Tooltip>
+            value={viewMode}
+            onChange={(value: string) => setViewMode(value as "fit" | "zoom")}
+            data={[
+              { value: "fit", label: "Fit whole" },
+              { value: "zoom", label: "Zoom + scroll" },
+            ]}
+          />
+          {viewMode === "zoom" && (
+            <Select
+              size="xs"
+              w={110}
+              value={zoomPercent}
+              onChange={(value) => value && setZoomPercent(value)}
+              data={[
+                { value: "100", label: "100%" },
+                { value: "110", label: "110%" },
+                { value: "125", label: "125%" },
+                { value: "140", label: "140%" },
+              ]}
+              allowDeselect={false}
+            />
+          )}
+          {isManager && (
+            <Switch
+              size="sm"
+              label="Pause reminders"
+              checked={remindersPaused}
+              onChange={(event) => {
+                const checked = event.currentTarget.checked;
+                setRemindersPaused(checked);
+                try {
+                  window.localStorage.setItem(REMINDERS_PAUSED_STORAGE_KEY, checked ? "1" : "0");
+                } catch {
+                  // ignore storage failures
+                }
+              }}
+            />
+          )}
+          <Tooltip label="Add manual break timing">
+            <Button
+              size="xs"
+              variant="light"
+              color="blue"
+              leftSection={<IconClockEdit size={14} />}
+              onClick={() => setBreakScheduleOpen(true)}
+            >
+              Break timing
+            </Button>
+          </Tooltip>
+        </Group>
       }
       status={
         data
@@ -838,6 +1233,7 @@ export function ZoomQueueWidget() {
           identityName={identity?.name}
           isManager={isManager}
         />
+        <Box style={{ zoom: contentScale, transformOrigin: "top left" }}>
         <Stack gap="md">
         {data?.warning && (
           <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" radius="md">
@@ -887,11 +1283,35 @@ export function ZoomQueueWidget() {
                   Quickly set a break or meeting status while keeping queue visibility below.
                 </Text>
               </Stack>
-              {!isManager && (
-                <Badge variant="light" color="gray" leftSection={<IconLock size={10} />}>
-                  {effectiveName || "Not signed in"}
-                </Badge>
-              )}
+              <Group gap="xs" align="center" wrap="nowrap">
+                {!isManager && (
+                  <Badge variant="light" color="gray" leftSection={<IconLock size={10} />}>
+                    {effectiveName || "Not signed in"}
+                  </Badge>
+                )}
+                <Button
+                  size="xs"
+                  color="green"
+                  variant="light"
+                  leftSection={<IconLogin2 size={12} />}
+                  onClick={() => openPunchModal("punch_in")}
+                  loading={punchActionPending === "punch_in"}
+                  disabled={!effectiveName || punchPosting || lastPunchAction === "punch_in"}
+                >
+                  Punch in
+                </Button>
+                <Button
+                  size="xs"
+                  color="gray"
+                  variant="subtle"
+                  leftSection={<IconLogout2 size={12} />}
+                  onClick={() => openPunchModal("punch_out")}
+                  loading={punchActionPending === "punch_out"}
+                  disabled={!effectiveName || punchPosting || lastPunchAction === "punch_out"}
+                >
+                  Punch out
+                </Button>
+              </Group>
             </Group>
             <Grid gutter="sm" align="end">
               <Grid.Col span={{ base: 12, md: isManager ? 4 : 8 }}>
@@ -918,7 +1338,7 @@ export function ZoomQueueWidget() {
                   </Box>
                 )}
               </Grid.Col>
-              <Grid.Col span={{ base: 12, md: isManager ? 5 : 8 }}>
+              <Grid.Col span={{ base: 12, md: isManager ? 6 : 4 }}>
                 <Select
                   label="Status"
                   data={STATUS_TYPES}
@@ -928,26 +1348,28 @@ export function ZoomQueueWidget() {
                   size="sm"
                 />
               </Grid.Col>
-              <Grid.Col span={{ base: 12, md: 3 }}>
+              <Grid.Col span={{ base: 12, md: 2 }}>
                 {(() => {
                   const alreadyActive = effectiveName ? activeBreaks.find((b) => samePerson(b.employee_name, effectiveName)) : null;
                   return (
                     <Tooltip label={alreadyActive ? `End current "${alreadyActive.break_type}" status first` : ""} disabled={!alreadyActive} withArrow>
                       <Button
                         fullWidth
-                        leftSection={<IconPlayerPlay size={14} />}
+                        mt={{ base: 0, md: 24 }}
+                        leftSection={<IconPlayerStop size={14} />}
                         onClick={startStatus}
                         loading={posting}
-                        disabled={!effectiveName || !statusType || !ready || posting || !!alreadyActive}
+                        disabled={!effectiveName || !statusType || posting || !!alreadyActive}
                         size="sm"
-                        color={alreadyActive ? "gray" : undefined}
+                        color={alreadyActive ? "gray" : "blue"}
                       >
-                        Update status
+                        Submit
                       </Button>
                     </Tooltip>
                   );
                 })()}
               </Grid.Col>
+
             </Grid>
             <Group gap="xs" wrap="wrap">
               <Badge variant="light" color="orange">Breaks</Badge>
@@ -955,6 +1377,8 @@ export function ZoomQueueWidget() {
               <Badge variant="light" color="teal">Meeting - External</Badge>
               <Text size="xs" c="dimmed">External = customer / partner meeting.</Text>
             </Group>
+
+
           </Stack>
         </Card>
 
@@ -978,6 +1402,9 @@ export function ZoomQueueWidget() {
                       <Badge size="xs" color="orange" variant="light" leftSection={<IconCoffee size={10} />}>
                         {onBreakCount} on break
                       </Badge>
+                    )}
+                    {isManager && remindersPaused && (
+                      <Badge size="xs" color="yellow" variant="filled">Reminders paused</Badge>
                     )}
                   </Group>
                 </Stack>
@@ -1148,6 +1575,7 @@ export function ZoomQueueWidget() {
                       <Table.Th>Reason</Table.Th>
                       <Table.Th>Active</Table.Th>
                       <Table.Th>Action</Table.Th>
+                      <Table.Th>Reminder in</Table.Th>
                       {allQueues.map((q) => (
                         <Table.Th key={q} style={{ textAlign: "center" }}>{QUEUE_SHORT[q] ?? q}</Table.Th>
                       ))}
@@ -1165,6 +1593,8 @@ export function ZoomQueueWidget() {
                         endDisabled={posting}
                         canEndStatus={isManager || identity?.name?.trim() === (a.rosterName ?? a.display_name).trim()}
                         showReason
+                        showReminderTimer
+                        reminderMeta={queueReminderMetaForAgent(a)}
                       />
                     ))}
                   </Table.Tbody>
@@ -1186,7 +1616,7 @@ export function ZoomQueueWidget() {
           {onBreak.length === 0 && onBreakExtraNames.length === 0 ? (
             <Text size="xs" c="dimmed" ta="center" py="lg">No team members are currently on break</Text>
           ) : (
-            <ScrollArea.Autosize mah={300}>
+            <ScrollArea.Autosize mah={useInternalScroll ? 300 : undefined}>
               <Table striped highlightOnHover withRowBorders={false} verticalSpacing="xs" horizontalSpacing="md">
                 <Table.Thead>
                   <Table.Tr>
@@ -1330,7 +1760,8 @@ export function ZoomQueueWidget() {
             {currentShiftCount} in shift (Zoom) · roster: {rosterData?.inShiftNow.length ?? "?"} · refreshed {new Date(data.fetched_at).toLocaleTimeString()}
           </Text>
         )}
-      </Stack>
+          </Stack>
+        </Box>
       </>
     </WidgetFrame>
   );
@@ -1345,6 +1776,8 @@ type AgentRowProps = {
   endDisabled?: boolean;
   canEndStatus?: boolean;
   showReason: boolean;
+  showReminderTimer?: boolean;
+  reminderMeta?: { remainingMs: number | null; sent: boolean };
 };
 
 function AgentRow({
@@ -1356,6 +1789,8 @@ function AgentRow({
   endDisabled,
   canEndStatus,
   showReason,
+  showReminderTimer,
+  reminderMeta,
 }: AgentRowProps) {
   const isOnBreak = !!breakType;
   const canonicalName = agent.rosterName ?? resolveTeamMember(agent.display_name);
@@ -1435,6 +1870,20 @@ function AgentRow({
             )
           ) : (
             <Text size="xs" c="dimmed">—</Text>
+          )}
+        </Table.Td>
+      )}
+
+      {showReminderTimer && (
+        <Table.Td>
+          {reminderMeta?.sent ? (
+            <Badge size="xs" color="green" variant="light">Sent</Badge>
+          ) : reminderMeta?.remainingMs == null ? (
+            <Badge size="xs" color="gray" variant="light">OUT</Badge>
+          ) : (
+            <Badge size="xs" color={reminderMeta.remainingMs <= 60_000 ? "yellow" : "blue"} variant="light" ff="monospace">
+              {Math.floor(reminderMeta.remainingMs / 60000)}:{String(Math.floor((reminderMeta.remainingMs % 60000) / 1000)).padStart(2, "0")}
+            </Badge>
           )}
         </Table.Td>
       )}
