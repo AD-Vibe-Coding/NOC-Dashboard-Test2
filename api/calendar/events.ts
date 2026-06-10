@@ -76,7 +76,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   calUrl.searchParams.set("singleEvents", "true");
   calUrl.searchParams.set("orderBy",      "startTime");
   calUrl.searchParams.set("maxResults",   "20");
-  calUrl.searchParams.set("fields",       "items(id,summary,start,end,location,status,htmlLink,colorId)");
+  calUrl.searchParams.set("fields",       "items(id,summary,description,start,end,location,status,htmlLink,hangoutLink,conferenceData(entryPoints(entryPointType,uri,label),conferenceSolution(name)),colorId)");
 
   try {
     const r = await fetch(calUrl.toString(), {

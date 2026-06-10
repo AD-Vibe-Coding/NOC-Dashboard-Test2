@@ -118,6 +118,31 @@ type SectionTreeNode = {
   children: SectionTreeNode[];
 };
 
+type DuplicateTaskReview = {
+  summary: string;
+  groups: Array<{
+    canonicalTitle: string;
+    reason: string;
+    taskIds: number[];
+  }>;
+};
+
+type MeetingNotesCache = {
+  ownerName: string | null;
+  notes: OneOnOneNote[];
+  preferences: NotebookSectionPreference[];
+  tasks: PersonalActionItem[];
+};
+
+let meetingNotesCache: MeetingNotesCache = {
+  ownerName: null,
+  notes: [],
+  preferences: [],
+  tasks: [],
+};
+
+const MY_DAY_TAG = "[My Day]";
+
 const SOURCE_OPTIONS = [
   { value: "gmail_gemini", label: "Gemini notes from Gmail" },
   { value: "pasted", label: "Paste meeting notes" },
@@ -213,6 +238,22 @@ function isManagementEmployeeValue(value: string | null | undefined) {
 
 function isOtherEmployeeValue(value: string | null | undefined) {
   return String(value ?? "").startsWith(OTHER_PREFIX);
+}
+
+function formatMeetingTitleDate(value?: string | null) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime())
+    ? String(value)
+    : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+}
+
+function defaultMeetingTitle(mode: NotebookMode, meetingDate?: string | null) {
+  if (mode === "management" || mode === "other") {
+    const formattedDate = formatMeetingTitleDate(meetingDate);
+    return formattedDate ? `Team Meeting - ${formattedDate}` : "Team Meeting";
+  }
+  return "1:1 Meeting Summary";
 }
 
 function deriveNotebookGroup(note: OneOnOneNote): NotebookMode {
@@ -532,8 +573,15 @@ export function MeetingNotesWidget() {
   const { complete: completeWeekly } = useCompletion();
   const { complete: completePrep } = useCompletion();
   const { complete: completeImportance } = useCompletion();
+  const { complete: completeDuplicateReview } = useCompletion();
 
-  const [loading, setLoading] = useState(false);
+  const hasWarmCache = meetingNotesCache.ownerName === (identity?.name ?? null) && (
+    meetingNotesCache.notes.length > 0 ||
+    meetingNotesCache.preferences.length > 0 ||
+    meetingNotesCache.tasks.length > 0
+  );
+
+  const [loading, setLoading] = useState(!hasWarmCache);
   const [saving, setSaving] = useState(false);
   const [extractDebug, setExtractDebug] = useState<string | null>(null);
   const [gmailLoading, setGmailLoading] = useState(false);
@@ -583,6 +631,9 @@ export function MeetingNotesWidget() {
   };
   const [importanceAnalysis, setImportanceAnalysis] = useState<TaskImportanceResult | null>(null);
   const [showImportancePanel, setShowImportancePanel] = useState(false);
+  const [duplicateReviewLoading, setDuplicateReviewLoading] = useState(false);
+  const [duplicateReview, setDuplicateReview] = useState<DuplicateTaskReview | null>(null);
+  const [duplicateReviewOpen, setDuplicateReviewOpen] = useState(false);
 
   const [openComposer, setOpenComposer] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
@@ -657,23 +708,37 @@ export function MeetingNotesWidget() {
 
   async function load() {
     if (!identity?.name) return;
-    setLoading(true);
+    const usingWarmCache = meetingNotesCache.ownerName === identity.name && (
+      meetingNotesCache.notes.length > 0 ||
+      meetingNotesCache.preferences.length > 0 ||
+      meetingNotesCache.tasks.length > 0
+    );
+    if (!usingWarmCache) setLoading(true);
     setError(null);
     try {
-      // Load notes + prefs first (needed for notebook view), tasks in parallel
       const notePromise = db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } });
       const taskPromise = db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
       const prefPromise = db.notebook_section_preferences.list({ filter: { owner_name: identity.name } }).catch(() => [] as NotebookSectionPreference[]);
 
-      // Notes + prefs unblock the notebook view as soon as they're ready
       const [noteRows, prefRows] = await Promise.all([notePromise, prefPromise]);
       setRawNotes(noteRows);
       setPreferences(prefRows);
-      setLoading(false); // ← unblock UI immediately; tasks arrive shortly after
+      meetingNotesCache = {
+        ownerName: identity.name,
+        notes: noteRows,
+        preferences: prefRows,
+        tasks: meetingNotesCache.ownerName === identity.name ? meetingNotesCache.tasks : [],
+      };
+      setLoading(false);
 
-      // Tasks finish loading in the background
       const taskRows = await taskPromise;
       setTasks(taskRows);
+      meetingNotesCache = {
+        ownerName: identity.name,
+        notes: noteRows,
+        preferences: prefRows,
+        tasks: taskRows,
+      };
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
@@ -1049,7 +1114,7 @@ export function MeetingNotesWidget() {
     setManagementSection(DEFAULT_MANAGEMENT_SECTIONS[0]);
     setMeetingDate("");
     setSourceType("manual");
-    setTitle(mode === "management" ? "Management Meeting Notes" : "1:1 Meeting Summary");
+    setTitle(defaultMeetingTitle(mode));
     setSourceNotes("");
     setImportedMessageId(null);
     setImportedMessageSubject(null);
@@ -1088,7 +1153,7 @@ export function MeetingNotesWidget() {
     setSourceNotes(message.body || message.snippet || "");
     setImportedMessageId(message.id);
     setImportedMessageSubject(message.subject);
-    setTitle(message.subject?.trim() || "1:1 Meeting Summary");
+    setTitle(message.subject?.trim() || defaultMeetingTitle("individual", message.internalDate?.slice(0, 10) ?? ""));
     if (message.internalDate) setMeetingDate(message.internalDate.slice(0, 10));
 
     window.setTimeout(() => {
@@ -1478,6 +1543,45 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
     void db.personal_action_items.deleteById(task.id);
   }
 
+  async function addTaskToMyDay(task: PersonalActionItem) {
+    if (!identity?.name) return;
+    const myDayTitle = task.title.startsWith(MY_DAY_TAG) ? task.title : `${MY_DAY_TAG} ${task.title}`;
+    const existing = myOwnTasks.find((candidate) =>
+      candidate.title.trim().toLowerCase() === myDayTitle.trim().toLowerCase() &&
+      (candidate.details ?? "").trim().toLowerCase() === (task.details ?? "").trim().toLowerCase(),
+    );
+    if (existing) {
+      setError("This task is already in your My Day list.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await db.personal_action_items.insert({
+        employee_name: identity.name,
+        owner_name: identity.name,
+        note_id: task.note_id ?? null,
+        title: myDayTitle,
+        details: task.details ? `${task.details} · Added from Assigned to me` : "Added from Assigned to me",
+        status: task.status === "done" ? "open" : task.status,
+        priority: task.priority ?? "medium",
+        progress_percent: task.status === "done" ? 0 : task.progress_percent ?? 0,
+        due_date: task.due_date || null,
+        section_name: "My Day",
+        notebook_group: "other",
+        created_by: identity.name,
+      });
+      const taskRows = await db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
+      setTasks(taskRows);
+      setError("✅ Added to My Day");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function isOverdue(task: PersonalActionItem) {
     if (!task.due_date || task.status === "done" || task.status === "duplicate") return false;
     return task.due_date < TODAY;
@@ -1652,6 +1756,85 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
     } catch (err) {
       setError("AI analysis failed: " + (err instanceof Error ? err.message : String(err)));
     }
+  }
+
+  async function reviewDuplicateTasks() {
+    if (!identity?.name) return;
+    const candidateTasks = managerTaskRows.filter((task) => task.status !== "done" && task.status !== "duplicate");
+    if (candidateTasks.length < 2) {
+      setError("Need at least two active tasks to review duplicates.");
+      return;
+    }
+
+    setDuplicateReviewLoading(true);
+    setError(null);
+    try {
+      const taskLines = candidateTasks.map((task) => {
+        const owner = storedOwner(task) || "Unassigned";
+        return JSON.stringify({
+          id: task.id,
+          title: task.title,
+          details: task.details ?? "",
+          owner,
+          status: task.status,
+          due_date: task.due_date ?? null,
+          section_name: task.section_name ?? null,
+        });
+      }).join("\n");
+
+      const prompt = `You are reviewing a task list for duplicates. Identify only true duplicates or near-duplicates that clearly refer to the same action item. Be conservative: if unsure, do not mark as duplicate.
+
+Return ONLY valid JSON with this exact shape:
+{"summary":"short summary","groups":[{"canonicalTitle":"title for the duplicate set","reason":"why these are duplicates","taskIds":[1,2]}]}
+
+Rules:
+- taskIds must reference the provided IDs exactly.
+- Only include groups with 2 or more IDs.
+- Do not include completed tasks.
+- Prefer duplicates with very similar wording, same owner, same source/details, or obvious phrasing variants.
+- Do not merge related-but-different tasks.
+
+Tasks:\n${taskLines}`;
+
+      const raw = await completeDuplicateReview(prompt);
+      const match = raw?.match(/\{[\s\S]*\}/);
+      if (!match) throw new Error("AI did not return valid JSON.");
+      const parsed = JSON.parse(match[0]) as DuplicateTaskReview;
+      const validGroups = Array.isArray(parsed.groups)
+        ? parsed.groups
+            .map((group: { canonicalTitle?: unknown; reason?: unknown; taskIds?: unknown }) => ({
+              canonicalTitle: String(group.canonicalTitle ?? "Potential duplicate set").trim() || "Potential duplicate set",
+              reason: String(group.reason ?? "").trim(),
+              taskIds: Array.from(new Set((Array.isArray(group.taskIds) ? group.taskIds : []).map((id: unknown) => Number(id)).filter((id: number) => Number.isFinite(id)))),
+            }))
+            .filter((group: { taskIds: number[] }) => group.taskIds.length > 1)
+        : [];
+
+      setDuplicateReview({
+        summary: String(parsed.summary ?? "").trim() || (validGroups.length > 0 ? "Potential duplicate tasks found." : "No obvious duplicate tasks found."),
+        groups: validGroups,
+      });
+      setDuplicateReviewOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to review duplicate tasks.");
+    } finally {
+      setDuplicateReviewLoading(false);
+    }
+  }
+
+  async function deleteDuplicateGroup(taskIds: number[]) {
+    const duplicatesToDelete = taskIds.slice(1);
+    if (duplicatesToDelete.length === 0) return;
+    setTasks((prev) => prev.filter((task) => !duplicatesToDelete.includes(task.id)));
+    setSelectedTaskIds((prev) => {
+      const next = new Set(prev);
+      duplicatesToDelete.forEach((id) => next.delete(id));
+      return next;
+    });
+    for (const id of duplicatesToDelete) {
+      void db.personal_action_items.deleteById(id);
+    }
+    setDuplicateReview((prev: DuplicateTaskReview | null) => prev ? ({ ...prev, groups: prev.groups.filter((group) => group.taskIds.join(",") !== taskIds.join(",")) }) : prev);
   }
 
   async function extractAllTasks() {
@@ -2953,6 +3136,7 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                             <Group gap="xs" wrap="wrap">
                               <Button size="sm" variant="light" color="grape" leftSection={<IconSparkles size={14} />} onClick={() => void extractAllTasks()} loading={saving}>Extract all</Button>
                               <Button size="sm" variant="light" color="teal" leftSection={<IconBrandSlack size={14} />} onClick={() => void sendSlackDigest()} loading={digestSending}>Send digest</Button>
+                              <Button size="sm" variant="light" color="violet" leftSection={<IconSparkles size={14} />} onClick={() => void reviewDuplicateTasks()} loading={duplicateReviewLoading}>Review duplicates</Button>
                               <Button size="sm" variant={dueThisWeek ? "filled" : "light"} color="orange" leftSection={<IconCalendar size={14} />} onClick={() => setDueThisWeek(v => !v)}>
                                 Due this week
                               </Button>
@@ -3603,6 +3787,7 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                               <Table.Td>
                                 <Group gap="xs">
                                   {task.status !== "in_progress" && task.status !== "done" && <Button size="xs" variant="light" onClick={() => void updateTaskStatus(task, "in_progress")}>Start</Button>}
+                                  {task.status !== "blocked" && task.status !== "done" && <Button size="xs" variant="light" color="red" onClick={() => void updateTaskStatus(task, "blocked")}>Block</Button>}
                                   {task.status !== "done" && <Button size="xs" variant="light" color="green" onClick={() => void updateTaskStatus(task, "done")}>Done</Button>}
                                 </Group>
                               </Table.Td>
@@ -3655,7 +3840,20 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                                     <Text fw={600} size="sm">{task.title}</Text>
                                   </Group>
                                 </Table.Td>
-                                <Table.Td><Badge variant="light" color={task.status === "done" ? "green" : task.status === "duplicate" ? "gray" : task.status === "in_progress" ? "blue" : "yellow"}>{task.status}</Badge></Table.Td>
+                                <Table.Td>
+                                  <Stack gap={6}>
+                                    <Badge variant="light" color={task.status === "done" ? "green" : task.status === "duplicate" ? "gray" : task.status === "in_progress" ? "blue" : task.status === "blocked" ? "red" : "yellow"}>{task.status}</Badge>
+                                    <Select
+                                      size="xs"
+                                      w={92}
+                                      data={[{ value: "0", label: "0%" }, { value: "25", label: "25%" }, { value: "50", label: "50%" }, { value: "75", label: "75%" }, { value: "100", label: "100%" }]}
+                                      value={String(Math.max(0, Math.min(100, task.progress_percent ?? 0)))}
+                                      allowDeselect={false}
+                                      onChange={(value) => value && void updateTask(task, { progress_percent: Number(value), status: Number(value) >= 100 ? "done" : Number(value) > 0 ? (task.status === "blocked" ? "blocked" : "in_progress") : "open" })}
+                                    />
+                                    <Progress value={Math.max(0, Math.min(100, task.progress_percent ?? 0))} color={task.status === "blocked" ? "red" : (task.progress_percent ?? 0) >= 100 ? "green" : task.status === "in_progress" ? "blue" : "gray"} size="sm" radius="xl" />
+                                  </Stack>
+                                </Table.Td>
                                 <Table.Td><Text size="sm" c={od ? "red" : undefined}>{task.due_date || "—"}</Text></Table.Td>
                                 <Table.Td>
                                   {sourceNote
@@ -3664,10 +3862,12 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
                                 </Table.Td>
                                 <Table.Td>
                                   <Group gap="xs">
-                                    {task.status !== "in_progress" && task.status !== "done" && <Button size="xs" variant="light" onClick={() => void updateTaskStatus(task, "in_progress")}>Start</Button>}
-                                    {task.status !== "done" && <Button size="xs" variant="light" color="green" onClick={() => void updateTaskStatus(task, "done")}>Done</Button>}
+                                    {task.status !== "in_progress" && task.status !== "done" && <Button size="xs" variant="light" onClick={() => void updateTask(task, { status: "in_progress", progress_percent: Math.max(task.progress_percent ?? 0, 25) })}>Start</Button>}
+                                    {task.status !== "blocked" && task.status !== "done" && <Button size="xs" variant="light" color="red" onClick={() => void updateTask(task, { status: "blocked" })}>Block</Button>}
+                                    {task.status !== "done" && <Button size="xs" variant="light" color="green" onClick={() => void updateTask(task, { status: "done", progress_percent: 100 })}>Done</Button>}
                                   </Group>
                                 </Table.Td>
+                                <Table.Td><Button size="xs" variant="subtle" color="grape" onClick={() => void addTaskToMyDay(task)}>Add</Button></Table.Td>
                               </Table.Tr>
                             );
                           })}
@@ -3818,6 +4018,52 @@ Respond with ONLY a valid JSON object in this exact shape (no markdown, no expla
           onConfirm={(section) => void confirmDeleteSectionFolder(section)}
         />
       )}
+
+      <Modal opened={duplicateReviewOpen} onClose={() => setDuplicateReviewOpen(false)} title="AI duplicate task review" size="xl" centered>
+        <Stack gap="md">
+          <Alert color="violet" variant="light" icon={<IconSparkles size={16} />}>
+            {duplicateReview?.summary || "Review potential duplicate task groups below. Deleting a group keeps the first task and removes the rest in that group."}
+          </Alert>
+          {duplicateReview && duplicateReview.groups.length > 0 ? duplicateReview.groups.map((group, index) => {
+            const matchedTasks = group.taskIds
+              .map((id) => managerTaskRows.find((task) => task.id === id) ?? tasks.find((task) => task.id === id))
+              .filter(Boolean) as PersonalActionItem[];
+            return (
+              <Card key={`${group.canonicalTitle}-${index}`} withBorder radius="lg" p="md">
+                <Stack gap="sm">
+                  <Group justify="space-between" align="flex-start">
+                    <Stack gap={2}>
+                      <Text fw={700} size="sm">{group.canonicalTitle}</Text>
+                      <Text size="xs" c="dimmed">{group.reason || "Potential duplicate wording detected."}</Text>
+                    </Stack>
+                    <Button color="red" size="xs" leftSection={<IconTrash size={12} />} onClick={() => void deleteDuplicateGroup(group.taskIds)}>
+                      Delete duplicates
+                    </Button>
+                  </Group>
+                  <Stack gap="xs">
+                    {matchedTasks.map((task, taskIndex) => (
+                      <Card key={task.id} withBorder radius="md" p="sm" style={taskIndex === 0 ? { borderColor: "var(--mantine-color-green-6)" } : undefined}>
+                        <Stack gap={2}>
+                          <Group gap="xs">
+                            <Badge size="xs" color={taskIndex === 0 ? "green" : "gray"} variant="light">{taskIndex === 0 ? "Keep" : "Delete"}</Badge>
+                            <Text size="sm" fw={600}>{task.title}</Text>
+                          </Group>
+                          <Text size="xs" c="dimmed">Owner: {storedOwner(task) || "Unassigned"} · Status: {task.status} · Due: {task.due_date || "—"}</Text>
+                          {task.details && <Text size="xs" c="dimmed">Source: {task.details}</Text>}
+                        </Stack>
+                      </Card>
+                    ))}
+                  </Stack>
+                </Stack>
+              </Card>
+            );
+          }) : (
+            <Card withBorder radius="lg" p="lg">
+              <Text size="sm" c="dimmed" ta="center">No obvious duplicate tasks were found.</Text>
+            </Card>
+          )}
+        </Stack>
+      </Modal>
 
       <Modal
         opened={Boolean(managedSection)}

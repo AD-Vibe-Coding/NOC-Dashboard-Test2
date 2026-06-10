@@ -516,3 +516,72 @@ export const metric_disputes = pgTable("metric_disputes", {
   reviewed_at: text("reviewed_at"),                    // ISO timestamp of review
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+// =============================================================================
+// Reminder Queue widget — server-side meeting reminders (Vercel Cron + Supabase)
+//
+//   - calendar_meetings      Synced Google Calendar meetings to remind on
+//   - meeting_reminder_jobs  One row per (meeting, offset) reminder to deliver
+//   - notification_targets   Where to deliver (Slack DM / channel) per person
+//   - reminder_policies      Per-person reminder offsets + toggles
+// =============================================================================
+
+export const calendar_meetings = pgTable("calendar_meetings", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  employee_email: text("employee_email"),
+  calendar_event_id: text("calendar_event_id").notNull(),
+  title: text("title"),
+  description: text("description"),
+  location: text("location"),
+  start_at: text("start_at").notNull(),   // ISO timestamp
+  end_at: text("end_at"),                 // ISO timestamp
+  join_link: text("join_link"),
+  provider: text("provider"),             // "Google Meet" | "Zoom" | "Teams" | ...
+  status: text("status"),                 // "confirmed" | "cancelled" | ...
+  raw_json: text("raw_json"),             // full event payload
+  synced_at: text("synced_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const meeting_reminder_jobs = pgTable("meeting_reminder_jobs", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  employee_email: text("employee_email"),
+  calendar_event_id: text("calendar_event_id").notNull(),
+  meeting_start_at: text("meeting_start_at").notNull(),  // ISO timestamp
+  reminder_offset_minutes: integer("reminder_offset_minutes").notNull(),
+  scheduled_for: text("scheduled_for").notNull(),        // ISO timestamp the reminder fires
+  dedupe_key: text("dedupe_key").notNull(),
+  join_link: text("join_link"),
+  payload_json: text("payload_json"),                    // { title, timeLabel, ... }
+  status: text("status").notNull(),                      // pending|sending|sent|failed|dead_letter|cancelled
+  attempt_count: integer("attempt_count"),
+  last_error: text("last_error"),
+  sent_at: text("sent_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const notification_targets = pgTable("notification_targets", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  employee_email: text("employee_email"),
+  channel_type: text("channel_type").notNull(),   // "slack_dm" | "slack_channel"
+  slack_user_id: text("slack_user_id"),
+  slack_channel_id: text("slack_channel_id"),
+  enabled: boolean("enabled"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const reminder_policies = pgTable("reminder_policies", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  employee_email: text("employee_email"),
+  timezone: text("timezone"),
+  meeting_enabled: boolean("meeting_enabled"),
+  offset_30_enabled: boolean("offset_30_enabled"),
+  offset_15_enabled: boolean("offset_15_enabled"),
+  offset_5_enabled: boolean("offset_5_enabled"),
+  only_with_join_link: boolean("only_with_join_link"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});

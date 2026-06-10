@@ -20,14 +20,12 @@ import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
 interface TicketEntry {
   _key: string;
   ticket_id: string;
-  description: string;
   status: string;
-  current_action: string;
   next_plan: string;
   due_date: string;
   assigned_to: string;
-  owner_in_threads: boolean;
-  summary_in_ticket: boolean;
+  owner_in_threads: "Yes" | "No" | "";
+  summary_in_ticket: "Yes" | "No" | "";
 }
 
 interface BridgeEntry {
@@ -54,17 +52,6 @@ const SHIFT_OPTIONS = [
   { value: "Night Shift",       label: "🌑 Night Shift (after 6 PM)" },
 ];
 
-const STATUS_OPTIONS = [
-  { value: "Carrier Investigating", label: "Carrier Investigating" },
-  { value: "Outage Ongoing",        label: "Outage Ongoing" },
-  { value: "Pending Dispatch",      label: "Pending Dispatch" },
-  { value: "Pending Callback",      label: "Pending Callback" },
-  { value: "Escalated",             label: "Escalated" },
-  { value: "Resolved",              label: "Resolved" },
-  { value: "Monitoring",            label: "Monitoring" },
-  { value: "Other",                 label: "Other" },
-];
-
 function autoDetectShift(): string {
   const h = new Date().getHours();
   if (h >= 2 && h < 7)  return "Early Shift";
@@ -81,9 +68,13 @@ function isWeekendToday(): boolean {
 function newTicket(o?: Partial<TicketEntry>): TicketEntry {
   return {
     _key: crypto.randomUUID(),
-    ticket_id: "", description: "", status: "Carrier Investigating",
-    current_action: "", next_plan: "", due_date: "", assigned_to: "",
-    owner_in_threads: false, summary_in_ticket: false,
+    ticket_id: "",
+    status: "Carrier Investigating",
+    next_plan: "",
+    due_date: "",
+    assigned_to: "",
+    owner_in_threads: "",
+    summary_in_ticket: "",
     ...o,
   };
 }
@@ -190,10 +181,8 @@ function generateBody(p: BodyParams): string {
     lines.push("1. High-Priority Incidents (P1/P2)");
     for (const t of p.tickets) {
       lines.push("");
-      const heading = [t.ticket_id && `#${t.ticket_id}`, t.description].filter(Boolean).join(": ");
-      if (heading) lines.push(`Ticket ${heading}`);
+      if (t.ticket_id)      lines.push(`Ticket #${t.ticket_id}`);
       if (t.status)         lines.push(`   Status: ${t.status}`);
-      if (t.current_action) lines.push(`   Current Action: ${t.current_action}`);
       if (t.next_plan)      lines.push(`   Next Plan of Action: ${t.next_plan}`);
       if (t.due_date)       lines.push(`   Due Date: ${t.due_date}`);
       if (t.assigned_to)    lines.push(`   Assigned to: ${t.assigned_to}`);
@@ -269,44 +258,39 @@ function TicketCard({ ticket, index, agents, onChange, onRemove }: {
           <ActionIcon variant="subtle" color="red" size="sm" onClick={onRemove}><IconTrash size={13} /></ActionIcon>
         </Group>
         <Group grow gap="xs">
-          <TextInput label="Ticket #" placeholder="12345" value={ticket.ticket_id}
+          <TextInput label="Ticket # *" placeholder="12345" value={ticket.ticket_id}
             onChange={e => set("ticket_id", e.currentTarget.value)} size="xs" />
-          <TextInput label="Brief Description" placeholder="e.g. BGP Flapping" value={ticket.description}
-            onChange={e => set("description", e.currentTarget.value)} size="xs" />
+          <Select label="Assigned To *" data={agents} value={ticket.assigned_to || null}
+            onChange={v => set("assigned_to", v ?? "")} searchable allowDeselect={false} size="xs" />
         </Group>
-        <Group grow gap="xs">
-          <Select label="Status" data={STATUS_OPTIONS} value={ticket.status}
-            onChange={v => v && set("status", v)} size="xs" />
-          <Select label="Assigned To" data={agents} value={ticket.assigned_to}
-            onChange={v => set("assigned_to", v ?? "")} searchable clearable size="xs" />
-        </Group>
-        <Textarea label="Current Action" placeholder="e.g. Awaiting field tech ETA at 08:00 PST"
-          value={ticket.current_action} onChange={e => set("current_action", e.currentTarget.value)}
-          size="xs" minRows={2} autosize />
-        <Textarea label="Next Plan of Action" placeholder="e.g. Follow up with carrier for dispatch status"
+        <TextInput label="Status *" placeholder="Carrier Investigating"
+          value={ticket.status} onChange={e => set("status", e.currentTarget.value)} size="xs" />
+        <Textarea label="Next Plan of Action *" placeholder="e.g. Follow up with carrier for dispatch status"
           value={ticket.next_plan} onChange={e => set("next_plan", e.currentTarget.value)}
           size="xs" minRows={2} autosize />
-        <TextInput label="Due Date" placeholder="e.g. 02/18/2026 08:10 AM" value={ticket.due_date}
+        <TextInput label="Due Date *" placeholder="e.g. 02/18/2026 08:10 AM" value={ticket.due_date}
           onChange={e => set("due_date", e.currentTarget.value)} size="xs" />
-        <Group gap="xl" mt={4}>
-          <Checkbox
+        <Group grow gap="xs" mt={4}>
+          <Select
             size="xs"
             label="Next owner added to email threads *"
-            checked={ticket.owner_in_threads === true}
-            indeterminate={ticket.owner_in_threads === null}
-            onChange={e => set("owner_in_threads", e.currentTarget.checked)}
+            data={[{ value: "Yes", label: "Yes" }, { value: "No", label: "No" }]}
+            value={ticket.owner_in_threads || null}
+            onChange={v => set("owner_in_threads", (v ?? "") as TicketEntry["owner_in_threads"])}
+            allowDeselect={false}
           />
-          <Checkbox
+          <Select
             size="xs"
             label="Ticket summary added to ticket *"
-            checked={ticket.summary_in_ticket === true}
-            indeterminate={ticket.summary_in_ticket === null}
-            onChange={e => set("summary_in_ticket", e.currentTarget.checked)}
+            data={[{ value: "Yes", label: "Yes" }, { value: "No", label: "No" }]}
+            value={ticket.summary_in_ticket || null}
+            onChange={v => set("summary_in_ticket", (v ?? "") as TicketEntry["summary_in_ticket"])}
+            allowDeselect={false}
           />
         </Group>
-        {(ticket.owner_in_threads === null || ticket.summary_in_ticket === null) && (
+        {(!ticket.ticket_id.trim() || !ticket.assigned_to.trim() || !ticket.status.trim() || !ticket.next_plan.trim() || !ticket.due_date.trim() || !ticket.owner_in_threads || !ticket.summary_in_ticket) && (
           <Alert color="yellow" variant="light" icon={<IconAlertCircle size={14} />}>
-            Both pre-checklist items are required for each high-priority ticket.
+            Ticket #, Assigned To, Status, Next Plan of Action, Due Date, and both pre-checklist items are required for each high-priority ticket.
           </Alert>
         )}
       </Stack>
@@ -408,8 +392,6 @@ function HandoverDetailCard({ row }: { row: HandoverRow }) {
                       {t.status && <Badge color={STATUS_COLORS[t.status] ?? "gray"} variant="light" size="xs">{t.status}</Badge>}
                       {t.assigned_to && <Text size="xs" c="dimmed">→ {t.assigned_to}</Text>}
                     </Group>
-                    {t.description    && <Text size="sm" fw={600}>{t.description}</Text>}
-                    {t.current_action && <Text size="xs"><Text span c="dimmed">Current: </Text>{t.current_action}</Text>}
                     {t.next_plan      && <Text size="xs"><Text span c="dimmed">Next: </Text>{t.next_plan}</Text>}
                     {t.due_date       && <Text size="xs" c="dimmed">Due: {t.due_date}</Text>}
                     {(t.owner_in_threads || t.summary_in_ticket) && (

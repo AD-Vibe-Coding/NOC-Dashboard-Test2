@@ -130,6 +130,10 @@ type TicketAuditRow = typeof schema.ticket_audits.$inferSelect;
 type MetricDisputeRow = typeof schema.metric_disputes.$inferSelect;
 type AppEventRow = typeof schema.app_events.$inferSelect;
 type ZoomQueueSnapshotRow = typeof schema.zoom_queue_snapshots.$inferSelect;
+type CalendarMeetingRow = typeof schema.calendar_meetings.$inferSelect;
+type MeetingReminderJobRow = typeof schema.meeting_reminder_jobs.$inferSelect;
+type NotificationTargetRow = typeof schema.notification_targets.$inferSelect;
+type ReminderPolicyRow = typeof schema.reminder_policies.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
@@ -160,4 +164,8 @@ export const db = {
   metric_disputes: tableClient<MetricDisputeRow>("metric_disputes"),
   app_events: tableClient<AppEventRow>("app_events"),
   zoom_queue_snapshots: tableClient<ZoomQueueSnapshotRow>("zoom_queue_snapshots"),
+  calendar_meetings: tableClient<CalendarMeetingRow>("calendar_meetings"),
+  meeting_reminder_jobs: tableClient<MeetingReminderJobRow>("meeting_reminder_jobs"),
+  notification_targets: tableClient<NotificationTargetRow>("notification_targets"),
+  reminder_policies: tableClient<ReminderPolicyRow>("reminder_policies"),
 };

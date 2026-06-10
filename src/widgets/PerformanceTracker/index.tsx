@@ -693,7 +693,7 @@ export function PerformanceTrackerWidget() {
               </Card>
             )
           ))}
-        <Tabs value={activeTab} onChange={setActiveTab}>
+        <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
           <Tabs.List>
             <Tabs.Tab
               value="overview"

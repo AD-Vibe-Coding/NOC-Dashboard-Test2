@@ -1,9 +1,3 @@
-/**
- * ManagerDay — personal daily planner for managers.
- * - Tasks stored in localStorage keyed by manager name + date
- * - Google Calendar integration via /api/calendar/* OAuth flow
- */
-
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionIcon,
@@ -13,11 +7,12 @@ import {
   Button,
   Card,
   Checkbox,
-  Divider,
+  Grid,
   Group,
   Loader,
-  Progress,
+  ScrollArea,
   Select,
+  SimpleGrid,
   Stack,
   Text,
   Textarea,
@@ -28,24 +23,18 @@ import {
 import {
   IconAlertCircle,
   IconCalendar,
-  IconCalendarEvent,
-  IconCheck,
-  IconClipboardList,
   IconExternalLink,
-  IconFlag,
-  IconFocus2,
   IconMapPin,
-  IconPlus,
   IconRefresh,
   IconTrash,
   IconUnlink,
 } from "@tabler/icons-react";
 import { useIdentity } from "../../lib/identity";
-
-// ── Types ────────────────────────────────────────────────────────────────────
+import { db } from "../../db";
 
 type Priority = "high" | "medium" | "low";
 type Category = "1-on-1s" | "audits" | "reports" | "team" | "admin" | "other";
+type MeetingTaskStatus = "open" | "in_progress" | "blocked" | "done";
 
 interface Task {
   id: string;
@@ -60,6 +49,8 @@ interface DayState {
   focus: string;
   tasks: Task[];
 }
+
+type MeetingTask = Awaited<ReturnType<typeof db.personal_action_items.list>>[number];
 
 interface CalendarEvent {
   id: string;
@@ -78,8 +69,6 @@ interface CalendarResult {
   error?: string;
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
 const PRIORITY_CONFIG: Record<Priority, { label: string; color: string }> = {
   high: { label: "High", color: "red" },
   medium: { label: "Medium", color: "orange" },
@@ -97,8 +86,11 @@ const CATEGORY_CONFIG: Record<Category, { label: string; color: string }> = {
 
 const CATEGORIES: Category[] = ["1-on-1s", "audits", "reports", "team", "admin", "other"];
 const PRIORITIES: Priority[] = ["high", "medium", "low"];
-
-// ── Storage helpers ───────────────────────────────────────────────────────────
+const EVENT_COLORS: Record<string, string> = {
+  "1": "blue", "2": "teal", "3": "gray", "4": "red",
+  "5": "yellow", "6": "orange", "7": "cyan", "8": "dark",
+  "9": "blue", "10": "green", "11": "violet",
+};
 
 function todayKey(name: string) {
   return `manager-day:${name}:${new Date().toISOString().slice(0, 10)}`;
@@ -107,15 +99,39 @@ function loadDay(name: string): DayState {
   try {
     const raw = localStorage.getItem(todayKey(name));
     if (raw) return JSON.parse(raw) as DayState;
-  } catch { /* ignore */ }
+  } catch {}
   return { focus: "", tasks: [] };
 }
 function saveDay(name: string, state: DayState) {
-  try { localStorage.setItem(todayKey(name), JSON.stringify(state)); } catch { /* ignore */ }
+  try { localStorage.setItem(todayKey(name), JSON.stringify(state)); } catch {}
 }
-
-// ── Google Calendar popup ─────────────────────────────────────────────────────
-
+function meetingPlanKey(name: string) {
+  return `manager-day:meeting-plan:${name}:${new Date().toISOString().slice(0, 10)}`;
+}
+function loadMeetingPlan(name: string): number[] {
+  try {
+    const raw = localStorage.getItem(meetingPlanKey(name));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isFinite) : [];
+  } catch {
+    return [];
+  }
+}
+function saveMeetingPlan(name: string, taskIds: number[]) {
+  try { localStorage.setItem(meetingPlanKey(name), JSON.stringify(taskIds)); } catch {}
+}
+function samePerson(a: string | null | undefined, b: string | null | undefined) {
+  return String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+}
+function formatDueDate(value?: string | null) {
+  if (!value) return "No due date";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+function meetingTaskSource(task: MeetingTask) {
+  return task.details || task.section_name || task.notebook_group || "Meeting notes";
+}
 function openCalendarPopup(): Promise<boolean> {
   return new Promise((resolve) => {
     const w = 520, h = 640;
@@ -139,14 +155,10 @@ function openCalendarPopup(): Promise<boolean> {
     const poll = setInterval(() => { if (popup.closed) { cleanup(); resolve(false); } }, 500);
   });
 }
-
-// ── Calendar hook ─────────────────────────────────────────────────────────────
-
 function useCalendar() {
   const [result, setResult] = useState<CalendarResult | null>(null);
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
-
   const fetchEvents = useCallback(async () => {
     setLoading(true);
     try {
@@ -158,32 +170,19 @@ function useCalendar() {
       setLoading(false);
     }
   }, []);
-
-  useEffect(() => { fetchEvents(); }, [fetchEvents]);
-
+  useEffect(() => { void fetchEvents(); }, [fetchEvents]);
   async function connect() {
     setConnecting(true);
     const ok = await openCalendarPopup();
     if (ok) await fetchEvents();
     setConnecting(false);
   }
-
   async function disconnect() {
     await fetch("/api/calendar/disconnect", { method: "POST", credentials: "include" });
     setResult({ connected: false, events: [] });
   }
-
   return { result, loading, connecting, connect, disconnect, refresh: fetchEvents };
 }
-
-// ── Calendar event helpers ────────────────────────────────────────────────────
-
-const EVENT_COLORS: Record<string, string> = {
-  "1": "blue", "2": "teal", "3": "gray", "4": "red",
-  "5": "yellow", "6": "orange", "7": "cyan", "8": "dark",
-  "9": "blue", "10": "green", "11": "violet",
-};
-
 function formatTime(event: CalendarEvent): string {
   if (event.start.date && !event.start.dateTime) return "All day";
   if (!event.start.dateTime) return "";
@@ -192,356 +191,359 @@ function formatTime(event: CalendarEvent): string {
   const fmt = (d: Date) => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
   return e ? `${fmt(s)} – ${fmt(e)}` : fmt(s);
 }
-
 function isNow(event: CalendarEvent): boolean {
   if (!event.start.dateTime || !event.end.dateTime) return false;
   const now = Date.now();
   return now >= new Date(event.start.dateTime).getTime() && now <= new Date(event.end.dateTime).getTime();
 }
-
 function isPast(event: CalendarEvent): boolean {
   if (event.start.date && !event.start.dateTime) return false;
   if (!event.end.dateTime) return false;
   return new Date(event.end.dateTime).getTime() < Date.now();
 }
+function isSoon(event: CalendarEvent): boolean {
+  if (!event.start.dateTime) return false;
+  const diff = new Date(event.start.dateTime).getTime() - Date.now();
+  return diff > 0 && diff <= 30 * 60 * 1000;
+}
+function getNextMeeting(events: CalendarEvent[]) {
+  const now = Date.now();
+  return [...events]
+    .filter((event) => event.status !== "cancelled" && event.start.dateTime && new Date(event.start.dateTime).getTime() >= now)
+    .sort((a, b) => new Date(a.start.dateTime!).getTime() - new Date(b.start.dateTime!).getTime())[0] ?? null;
+}
+function formatRelativeMeetingStart(event: CalendarEvent | null) {
+  if (!event?.start.dateTime) return "No upcoming meetings";
+  const diffMs = new Date(event.start.dateTime).getTime() - Date.now();
+  const minutes = Math.max(0, Math.round(diffMs / 60000));
+  if (minutes < 1) return "Starting now";
+  if (minutes < 60) return `Starts in ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return remainder === 0 ? `Starts in ${hours}h` : `Starts in ${hours}h ${remainder}m`;
+}
 
-// ── CalendarSection component ─────────────────────────────────────────────────
-
-function CalendarSection() {
-  const { result, loading, connecting, connect, disconnect, refresh } = useCalendar();
-
+function CalendarSection({ result, loading, connecting, connect, disconnect, refresh }: ReturnType<typeof useCalendar>) {
   if (loading) {
-    return (
-      <Group gap="xs" py="xs">
-        <Loader size="xs" color="appdirect" />
-        <Text size="xs" c="dimmed">Loading calendar…</Text>
-      </Group>
-    );
+    return <Group gap="xs"><Loader size="xs" /><Text size="xs" c="dimmed">Loading calendar…</Text></Group>;
   }
-
   if (!result?.connected) {
     return (
-      <Card withBorder radius="md" p="sm"
-        style={{ borderStyle: "dashed", borderColor: "var(--mantine-color-appdirect-7)" }}>
-        <Group justify="space-between" wrap="nowrap" align="center">
+      <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
+        <Group justify="space-between" wrap="nowrap">
           <Group gap="xs" wrap="nowrap">
-            <ThemeIcon size="sm" variant="light" color="appdirect" radius="sm">
-              <IconCalendar size={14} />
-            </ThemeIcon>
+            <ThemeIcon size="sm" variant="light" color="appdirect"><IconCalendar size={14} /></ThemeIcon>
             <Box>
               <Text size="sm" fw={600}>Google Calendar</Text>
-              <Text size="xs" c="dimmed">See today's meetings alongside your tasks</Text>
+              <Text size="xs" c="dimmed">Connect to show today’s meetings</Text>
             </Box>
           </Group>
-          <Button size="xs" variant="light" color="appdirect"
-            leftSection={<IconCalendar size={13} />}
-            loading={connecting} onClick={connect}>
-            Connect
-          </Button>
+          <Button size="xs" variant="light" color="appdirect" loading={connecting} onClick={connect}>Connect</Button>
         </Group>
-        {result?.error && (
-          <Alert color="yellow" variant="light" icon={<IconAlertCircle size={13} />}
-            radius="md" mt="xs" p="xs">
-            <Text size="xs">{result.error}</Text>
-          </Alert>
-        )}
+        {result?.error && <Alert mt="sm" p="xs" radius="md" color="yellow" icon={<IconAlertCircle size={14} />}><Text size="xs">{result.error}</Text></Alert>}
       </Card>
     );
   }
-
   const events = result.events.filter((e) => e.status !== "cancelled");
-
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="center">
-        <Group gap="xs">
-          <ThemeIcon size="sm" variant="light" color="appdirect" radius="sm">
-            <IconCalendarEvent size={14} />
-          </ThemeIcon>
-          <Text size="sm" fw={600}>Today's Calendar</Text>
-          {events.length > 0 && <Badge size="xs" variant="light" color="appdirect">{events.length}</Badge>}
-        </Group>
+        <Text size="sm" fw={700}>Today’s meetings</Text>
         <Group gap={4}>
-          <Tooltip label="Refresh" withArrow>
-            <ActionIcon size="xs" variant="subtle" color="gray" onClick={refresh}>
-              <IconRefresh size={12} />
-            </ActionIcon>
-          </Tooltip>
-          <Tooltip label="Disconnect calendar" withArrow>
-            <ActionIcon size="xs" variant="subtle" color="red" onClick={disconnect}>
-              <IconUnlink size={12} />
-            </ActionIcon>
-          </Tooltip>
+          <Tooltip label="Refresh"><ActionIcon size="xs" variant="subtle" color="gray" onClick={() => void refresh()}><IconRefresh size={12} /></ActionIcon></Tooltip>
+          <Tooltip label="Disconnect"><ActionIcon size="xs" variant="subtle" color="red" onClick={() => void disconnect()}><IconUnlink size={12} /></ActionIcon></Tooltip>
         </Group>
       </Group>
-
-      {result.error && (
-        <Alert color="yellow" variant="light" icon={<IconAlertCircle size={13} />} radius="md" p="xs">
-          <Text size="xs">{result.error}</Text>
-        </Alert>
-      )}
-
-      {events.length === 0 ? (
-        <Text size="xs" c="dimmed" ta="center" py="xs">No events scheduled for today 🎉</Text>
-      ) : (
-        <Stack gap={6}>
-          {events.map((event) => {
-            const current = isNow(event);
-            const past = isPast(event);
-            const color = EVENT_COLORS[event.colorId ?? ""] ?? "appdirect";
-            const time = formatTime(event);
-            return (
-              <Card key={event.id} withBorder radius="md" p="xs"
-                style={{
-                  opacity: past ? 0.5 : 1,
-                  borderLeft: `3px solid var(--mantine-color-${current ? "green" : color}-${current ? "5" : "7"})`,
-                  background: current
-                    ? "color-mix(in srgb, var(--mantine-color-green-9) 15%, var(--mantine-color-body))"
-                    : undefined,
-                  transition: "opacity 200ms",
-                }}>
-                <Group justify="space-between" wrap="nowrap" gap="xs">
-                  <Box style={{ minWidth: 0, flex: 1 }}>
-                    <Group gap={6} wrap="nowrap">
-                      {current && <Badge size="xs" color="green" variant="filled" style={{ flexShrink: 0 }}>NOW</Badge>}
-                      <Text size="sm" fw={current ? 700 : 500} c={past ? "dimmed" : "bright"}
-                        style={{ wordBreak: "break-word" }} lineClamp={2}>
-                        {event.summary ?? "Untitled event"}
-                      </Text>
-                    </Group>
-                    <Group gap="xs" mt={2} wrap="wrap">
-                      {time && <Text size="xs" c="dimmed" ff="monospace">{time}</Text>}
-                      {event.location && (
-                        <Group gap={3} wrap="nowrap">
-                          <IconMapPin size={10} style={{ color: "var(--mantine-color-dimmed)", flexShrink: 0 }} />
-                          <Text size="xs" c="dimmed" lineClamp={1}>{event.location}</Text>
-                        </Group>
-                      )}
-                    </Group>
-                  </Box>
-                  {event.htmlLink && (
-                    <Tooltip label="Open in Google Calendar" withArrow>
-                      <ActionIcon component="a" href={event.htmlLink} target="_blank"
-                        rel="noopener noreferrer" size="xs" variant="subtle" color="gray"
-                        style={{ flexShrink: 0 }}>
-                        <IconExternalLink size={12} />
-                      </ActionIcon>
-                    </Tooltip>
-                  )}
-                </Group>
-              </Card>
-            );
-          })}
-        </Stack>
+      {events.length === 0 ? <Text size="sm" c="dimmed">No meetings scheduled for today.</Text> : (
+        <ScrollArea.Autosize mah={440} offsetScrollbars>
+          <Stack gap="xs">
+            {events.map((event) => {
+              const current = isNow(event);
+              const past = isPast(event);
+              const state = current ? { label: "now", color: "green" } : isSoon(event) ? { label: "soon", color: "yellow" } : past ? { label: "done", color: "gray" } : { label: "later", color: "blue" };
+              const color = EVENT_COLORS[event.colorId ?? ""] ?? "appdirect";
+              return (
+                <Card key={event.id} withBorder radius="md" p="sm" style={{ opacity: past ? 0.55 : 1, borderLeft: `3px solid var(--mantine-color-${current ? "green" : color}-${current ? "5" : "7"})` }}>
+                  <Group justify="space-between" wrap="nowrap" gap="xs">
+                    <Box style={{ minWidth: 0, flex: 1 }}>
+                      <Group gap={6} wrap="nowrap">
+                        <Badge size="xs" color={state.color} variant={current ? "filled" : "light"}>{state.label}</Badge>
+                        <Text size="sm" fw={current ? 700 : 500} lineClamp={2}>{event.summary ?? "Untitled event"}</Text>
+                      </Group>
+                      <Group gap="xs" mt={3} wrap="wrap">
+                        <Text size="xs" c="dimmed" ff="monospace">{formatTime(event)}</Text>
+                        {event.location ? <Group gap={3} wrap="nowrap"><IconMapPin size={10} /><Text size="xs" c="dimmed" lineClamp={1}>{event.location}</Text></Group> : null}
+                      </Group>
+                    </Box>
+                    {event.htmlLink ? <ActionIcon component="a" href={event.htmlLink} target="_blank" rel="noopener noreferrer" size="xs" variant="subtle" color="gray"><IconExternalLink size={12} /></ActionIcon> : null}
+                  </Group>
+                </Card>
+              );
+            })}
+          </Stack>
+        </ScrollArea.Autosize>
       )}
     </Stack>
   );
 }
 
-// ── Main widget ───────────────────────────────────────────────────────────────
-
 export function ManagerDayWidget() {
   const { identity } = useIdentity();
   const managerName = identity?.name ?? "manager";
-
+  const calendar = useCalendar();
   const [state, setState] = useState<DayState>(() => loadDay(managerName));
   const [newText, setNewText] = useState("");
   const [newPriority, setNewPriority] = useState<Priority>("medium");
   const [newCategory, setNewCategory] = useState<Category>("other");
-  const [catFilter, setCatFilter] = useState<Category | "all">("all");
+  const [meetingTasks, setMeetingTasks] = useState<MeetingTask[]>([]);
+  const [plannedMeetingTaskIds, setPlannedMeetingTaskIds] = useState<number[]>(() => loadMeetingPlan(managerName));
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { saveDay(managerName, state); }, [managerName, state]);
+  useEffect(() => { saveMeetingPlan(managerName, plannedMeetingTaskIds); }, [managerName, plannedMeetingTaskIds]);
+  useEffect(() => { setPlannedMeetingTaskIds(loadMeetingPlan(managerName)); }, [managerName]);
+  useEffect(() => {
+    function syncFromStorage(event: StorageEvent) {
+      if (!identity?.name) return;
+      if (event.key === meetingPlanKey(identity.name)) setPlannedMeetingTaskIds(loadMeetingPlan(identity.name));
+    }
+    window.addEventListener("storage", syncFromStorage);
+    return () => window.removeEventListener("storage", syncFromStorage);
+  }, [identity?.name]);
 
+  const loadMeetingTasks = useCallback(async () => {
+    if (!identity?.name) {
+      setMeetingTasks([]);
+      return;
+    }
+    try {
+      const rows = await db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
+      setMeetingTasks(rows.filter((task) => !!task.note_id && (samePerson(task.owner_name, identity.name) || samePerson(task.employee_name, identity.name))));
+    } catch {
+      setMeetingTasks([]);
+    }
+  }, [identity?.name]);
+  useEffect(() => { void loadMeetingTasks(); }, [loadMeetingTasks]);
+
+  async function updateMeetingTaskStatus(task: MeetingTask, status: MeetingTaskStatus) {
+    const nextProgress = status === "done" ? 100 : status === "open" ? 0 : (task.progress_percent ?? 0);
+    setMeetingTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, status, progress_percent: nextProgress } : item)));
+    try {
+      await db.personal_action_items.updateById(task.id, { status, progress_percent: nextProgress });
+    } finally {
+      await loadMeetingTasks();
+    }
+  }
+  function addMeetingTaskToPlan(task: MeetingTask) {
+    setPlannedMeetingTaskIds((prev) => (prev.includes(task.id) ? prev : [task.id, ...prev]));
+  }
+  function removeMeetingTaskFromPlan(taskId: number) {
+    setPlannedMeetingTaskIds((prev) => prev.filter((id) => id !== taskId));
+  }
   function addTask() {
     const text = newText.trim();
     if (!text) return;
-    const task: Task = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      text, priority: newPriority, category: newCategory, done: false, createdAt: Date.now(),
-    };
+    const task: Task = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, text, priority: newPriority, category: newCategory, done: false, createdAt: Date.now() };
     setState((s) => ({ ...s, tasks: [...s.tasks, task] }));
     setNewText("");
     inputRef.current?.focus();
   }
-
   function toggleTask(id: string) {
     setState((s) => ({ ...s, tasks: s.tasks.map((t) => t.id === id ? { ...t, done: !t.done } : t) }));
   }
-
   function deleteTask(id: string) {
     setState((s) => ({ ...s, tasks: s.tasks.filter((t) => t.id !== id) }));
   }
 
-  const visibleTasks = useMemo(() => {
-    const tasks = catFilter === "all" ? state.tasks : state.tasks.filter((t) => t.category === catFilter);
-    return [...tasks].sort((a, b) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
-      const pr = (p: Priority) => p === "high" ? 0 : p === "medium" ? 1 : 2;
-      return pr(a.priority) - pr(b.priority);
-    });
-  }, [state.tasks, catFilter]);
-
-  const total = state.tasks.length;
-  const done = state.tasks.filter((t) => t.done).length;
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
-  const firstName = identity?.name?.split(" ")[0] ?? "Manager";
+  const personalTasks = useMemo(() => [...state.tasks].sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const pr = (p: Priority) => p === "high" ? 0 : p === "medium" ? 1 : 2;
+    return pr(a.priority) - pr(b.priority);
+  }), [state.tasks]);
+  const meetingOpenTasks = useMemo(() => meetingTasks.filter((task) => task.status === "open"), [meetingTasks]);
+  const meetingDoingTasks = useMemo(() => meetingTasks.filter((task) => task.status === "in_progress"), [meetingTasks]);
+  const meetingBlockedTasks = useMemo(() => meetingTasks.filter((task) => task.status === "blocked"), [meetingTasks]);
+  const pinnedToday = useMemo(() => meetingTasks.filter((task) => plannedMeetingTaskIds.includes(task.id) && task.status !== "done"), [meetingTasks, plannedMeetingTaskIds]);
+  const nextMeeting = getNextMeeting((calendar.result?.events ?? []).filter((event) => event.status !== "cancelled"));
+  const openPersonalTasks = personalTasks.filter((task) => !task.done);
+  const totalActionCount = openPersonalTasks.length + meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length;
 
   return (
     <Stack gap="md">
-      {/* Header */}
       <Group justify="space-between" align="center" wrap="nowrap">
         <Box>
-          <Text size="xs" c="dimmed" fw={500}>{greeting},</Text>
-          <Text size="xl" fw={700} c="bright" style={{ letterSpacing: "-0.02em", lineHeight: 1.2 }}>
-            {firstName}
-          </Text>
-          <Text size="xs" c="dimmed">
-            {new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}
-          </Text>
+          <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.08em" }}>My Day</Text>
+          <Text size="sm" c="dimmed">{new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</Text>
         </Box>
-        {total > 0 && (
-          <Box ta="right">
-            <Text size="sm" fw={700} c={pct === 100 ? "green" : "bright"}>{done}/{total} done</Text>
-            <Progress value={pct} color={pct === 100 ? "green" : pct > 60 ? "teal" : "appdirect"}
-              size="sm" radius="xl" w={120} mt={4} />
-            {pct === 100 && <Text size="xs" c="green" fw={600} mt={2}>All done! 🎉</Text>}
-          </Box>
-        )}
+        <Box style={{ flex: 1, maxWidth: 420 }}>
+          <Group gap="xs" wrap="nowrap" align="flex-start">
+            <TextInput ref={inputRef} placeholder="Quick add a task…" value={newText} onChange={(e) => setNewText(e.currentTarget.value)} onKeyDown={(e) => e.key === "Enter" && addTask()} size="sm" style={{ flex: 1 }} />
+            <Button size="sm" onClick={addTask} disabled={!newText.trim()} color="appdirect">Add</Button>
+          </Group>
+          <Group gap="xs" mt={8} wrap="wrap" justify="flex-end">
+            <Select size="xs" w={110} value={newPriority} onChange={(v) => v && setNewPriority(v as Priority)} data={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_CONFIG[p].label }))} />
+            <Select size="xs" w={130} value={newCategory} onChange={(v) => v && setNewCategory(v as Category)} data={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_CONFIG[c].label }))} />
+          </Group>
+        </Box>
       </Group>
 
-      {/* Focus */}
-      <Card withBorder radius="md" p="sm"
-        style={{ borderLeft: "3px solid var(--mantine-color-appdirect-6)" }}>
-        <Group gap="xs" mb={4}>
-          <ThemeIcon size="xs" variant="transparent" color="appdirect">
-            <IconFocus2 size={13} />
-          </ThemeIcon>
-          <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.06em" }}>
-            Today's focus
-          </Text>
-        </Group>
-        <Textarea
-          placeholder="What's your main priority for today?"
-          value={state.focus}
-          onChange={(e) => setState((s) => ({ ...s, focus: e.currentTarget.value }))}
-          size="xs" autosize minRows={1} maxRows={3} variant="unstyled"
-          styles={{ input: { fontWeight: 500, fontSize: 13 } }}
-        />
+      <Card withBorder radius="lg" p="sm">
+        <SimpleGrid cols={{ base: 2, xl: 4 }} spacing="sm">
+          <Box>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Next</Text>
+            <Text size="sm" fw={700} lineClamp={1}>{nextMeeting?.summary ?? "No upcoming meetings"}</Text>
+            <Text size="xs" c="dimmed">{nextMeeting ? formatRelativeMeetingStart(nextMeeting) : "Calendar clear"}</Text>
+          </Box>
+          <Box>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Open</Text>
+            <Text size="lg" fw={700}>{totalActionCount}</Text>
+            <Text size="xs" c="dimmed">{openPersonalTasks.length} personal · {meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length} meeting</Text>
+          </Box>
+          <Box>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Doing</Text>
+            <Text size="lg" fw={700}>{meetingDoingTasks.length}</Text>
+            <Text size="xs" c="dimmed">Active follow-ups in progress</Text>
+          </Box>
+          <Box>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Blocked</Text>
+            <Text size="lg" fw={700} c={meetingBlockedTasks.length > 0 ? "red.4" : undefined}>{meetingBlockedTasks.length}</Text>
+            <Text size="xs" c="dimmed">Needs follow-up or escalation</Text>
+          </Box>
+        </SimpleGrid>
       </Card>
 
-      {/* Google Calendar */}
-      <CalendarSection />
-
-      <Divider label="Tasks" labelPosition="left" />
-
-      {/* Add task */}
-      <Card withBorder radius="md" p="sm">
-        <Stack gap="xs">
-          <Group gap="xs" wrap="nowrap">
-            <TextInput
-              ref={inputRef}
-              placeholder="Add a task…"
-              value={newText}
-              onChange={(e) => setNewText(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && addTask()}
-              size="xs" style={{ flex: 1 }}
-            />
-            <Button size="xs" leftSection={<IconPlus size={13} />}
-              onClick={addTask} disabled={!newText.trim()} color="appdirect">
-              Add
-            </Button>
-          </Group>
-          <Group gap="xs">
-            <Select size="xs" w={110} value={newPriority}
-              onChange={(v) => v && setNewPriority(v as Priority)}
-              data={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_CONFIG[p].label }))}
-              leftSection={<IconFlag size={12} color={`var(--mantine-color-${PRIORITY_CONFIG[newPriority].color}-5)`} />}
-            />
-            <Select size="xs" w={130} value={newCategory}
-              onChange={(v) => v && setNewCategory(v as Category)}
-              data={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_CONFIG[c].label }))}
-            />
-          </Group>
-        </Stack>
-      </Card>
-
-      {/* Category filter */}
-      {state.tasks.length > 0 && (
-        <Group gap={6} wrap="wrap">
-          <Badge size="xs" variant={catFilter === "all" ? "filled" : "outline"} color="appdirect"
-            style={{ cursor: "pointer" }} onClick={() => setCatFilter("all")}>
-            All ({state.tasks.length})
-          </Badge>
-          {CATEGORIES.filter((c) => state.tasks.some((t) => t.category === c)).map((c) => (
-            <Badge key={c} size="xs"
-              variant={catFilter === c ? "filled" : "light"}
-              color={CATEGORY_CONFIG[c].color}
-              style={{ cursor: "pointer" }}
-              onClick={() => setCatFilter(catFilter === c ? "all" : c)}>
-              {CATEGORY_CONFIG[c].label} ({state.tasks.filter((t) => t.category === c).length})
-            </Badge>
-          ))}
-        </Group>
-      )}
-
-      {/* Task list */}
-      {visibleTasks.length === 0 ? (
-        <Box ta="center" py="lg">
-          <ThemeIcon size={40} radius="xl" variant="light" color="gray" mx="auto">
-            <IconClipboardList size={20} />
-          </ThemeIcon>
-          <Text size="sm" c="dimmed" mt="sm">
-            {state.tasks.length === 0 ? "No tasks yet — add your first task above" : "No tasks in this category"}
-          </Text>
-        </Box>
-      ) : (
-        <Stack gap="xs">
-          {visibleTasks.map((task) => (
-            <Card key={task.id} withBorder radius="md" p="xs"
-              style={{
-                opacity: task.done ? 0.55 : 1,
-                borderLeft: `3px solid var(--mantine-color-${PRIORITY_CONFIG[task.priority].color}-${task.done ? "9" : "6"})`,
-                transition: "opacity 200ms",
-              }}>
-              <Group justify="space-between" wrap="nowrap" gap="xs">
-                <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
-                  <Checkbox checked={task.done} onChange={() => toggleTask(task.id)}
-                    size="xs" color="appdirect" radius="sm" />
-                  <Box style={{ minWidth: 0, flex: 1 }}>
-                    <Text size="sm" fw={500} c={task.done ? "dimmed" : "bright"}
-                      style={{ textDecoration: task.done ? "line-through" : undefined, wordBreak: "break-word" }}>
-                      {task.text}
-                    </Text>
-                    <Group gap={4} mt={2}>
-                      <Badge size="xs" variant="dot" color={PRIORITY_CONFIG[task.priority].color}>
-                        {PRIORITY_CONFIG[task.priority].label}
-                      </Badge>
-                      <Badge size="xs" variant="light" color={CATEGORY_CONFIG[task.category].color}>
-                        {CATEGORY_CONFIG[task.category].label}
-                      </Badge>
-                    </Group>
-                  </Box>
-                </Group>
-                <Group gap={4} wrap="nowrap">
-                  {task.done && (
-                    <ThemeIcon size="xs" variant="light" color="green" radius="sm">
-                      <IconCheck size={10} />
-                    </ThemeIcon>
-                  )}
-                  <Tooltip label="Remove task" withArrow>
-                    <ActionIcon size="xs" variant="subtle" color="red" onClick={() => deleteTask(task.id)}>
-                      <IconTrash size={12} />
-                    </ActionIcon>
-                  </Tooltip>
-                </Group>
-              </Group>
+      <Grid gutter="md" align="flex-start">
+        <Grid.Col span={{ base: 12, xl: 8 }}>
+          <Stack gap="md">
+            <Card withBorder radius="lg" p="md" style={{ borderLeft: "3px solid var(--mantine-color-appdirect-6)" }}>
+              <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" mb={6} style={{ letterSpacing: "0.06em" }}>Focus</Text>
+              <Textarea placeholder="What matters most today?" value={state.focus} onChange={(e) => setState((s) => ({ ...s, focus: e.currentTarget.value }))} size="sm" autosize minRows={2} maxRows={3} variant="unstyled" styles={{ input: { fontWeight: 500, fontSize: 14, padding: 0 } }} />
             </Card>
-          ))}
-        </Stack>
-      )}
+
+            <Card withBorder radius="lg" p="md">
+              <Stack gap="sm">
+                <Group justify="space-between" align="center">
+                  <Text size="sm" fw={700}>Tasks</Text>
+                  <Group gap="xs" wrap="wrap">
+                    {pinnedToday.length > 0 && <Badge size="xs" color="appdirect" variant="light">Pinned {pinnedToday.length}</Badge>}
+                    {meetingBlockedTasks.length > 0 && <Badge size="xs" color="red" variant="light">Needs attention {meetingBlockedTasks.length}</Badge>}
+                    {meetingDoingTasks.length > 0 && <Badge size="xs" color="blue" variant="light">Doing {meetingDoingTasks.length}</Badge>}
+                  </Group>
+                </Group>
+
+                <ScrollArea.Autosize mah={520} offsetScrollbars>
+                  <Stack gap="sm">
+                    {pinnedToday.length > 0 && (
+                      <Stack gap="xs">
+                        <Text size="xs" fw={700} tt="uppercase" c="dimmed">Pinned today</Text>
+                        {pinnedToday.slice(0, 3).map((task) => (
+                          <Card key={`pinned-${task.id}`} withBorder radius="md" p="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={600} lineClamp={1}>{task.title}</Text>
+                                <Text size="xs" c="dimmed">{meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
+                              </Box>
+                              <ActionIcon size="sm" variant="subtle" color="red" onClick={() => removeMeetingTaskFromPlan(task.id)}><IconTrash size={13} /></ActionIcon>
+                            </Group>
+                          </Card>
+                        ))}
+                      </Stack>
+                    )}
+
+                    {meetingBlockedTasks.length > 0 && (
+                      <Stack gap="xs">
+                        <Text size="xs" fw={700} tt="uppercase" c="red.4">Needs attention</Text>
+                        {meetingBlockedTasks.map((task) => (
+                          <Card key={`blocked-${task.id}`} withBorder radius="md" p="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
+                              </Box>
+                              <Group gap={6} wrap="nowrap">
+                                <Button size="compact-xs" variant="light" color="blue" onClick={() => void updateMeetingTaskStatus(task, "in_progress")}>Start</Button>
+                                <Button size="compact-xs" variant="light" color="green" onClick={() => void updateMeetingTaskStatus(task, "done")}>Done</Button>
+                              </Group>
+                            </Group>
+                          </Card>
+                        ))}
+                      </Stack>
+                    )}
+
+                    {meetingDoingTasks.length > 0 && (
+                      <Stack gap="xs">
+                        <Text size="xs" fw={700} tt="uppercase" c="blue.4">In progress</Text>
+                        {meetingDoingTasks.map((task) => (
+                          <Card key={`doing-${task.id}`} withBorder radius="md" p="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
+                              </Box>
+                              <Button size="compact-xs" variant="light" color="green" onClick={() => void updateMeetingTaskStatus(task, "done")}>Done</Button>
+                            </Group>
+                          </Card>
+                        ))}
+                      </Stack>
+                    )}
+
+                    {meetingOpenTasks.length > 0 && (
+                      <Stack gap="xs">
+                        <Text size="xs" fw={700} tt="uppercase" c="dimmed">Meeting tasks</Text>
+                        {meetingOpenTasks.slice(0, 6).map((task) => (
+                          <Card key={`meeting-${task.id}`} withBorder radius="md" p="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
+                              </Box>
+                              <Group gap={6} wrap="nowrap">
+                                <Button size="compact-xs" variant="subtle" color="appdirect" onClick={() => addMeetingTaskToPlan(task)} disabled={plannedMeetingTaskIds.includes(task.id)}>{plannedMeetingTaskIds.includes(task.id) ? "Pinned" : "Pin"}</Button>
+                                <Button size="compact-xs" variant="light" color="blue" onClick={() => void updateMeetingTaskStatus(task, "in_progress")}>Start</Button>
+                              </Group>
+                            </Group>
+                          </Card>
+                        ))}
+                      </Stack>
+                    )}
+
+                    <Stack gap="xs">
+                      <Text size="xs" fw={700} tt="uppercase" c="dimmed">Personal tasks</Text>
+                      {openPersonalTasks.length === 0 ? <Text size="sm" c="dimmed">No personal tasks yet.</Text> : openPersonalTasks.map((task) => (
+                        <Card key={`personal-${task.id}`} withBorder radius="md" p="sm">
+                          <Group justify="space-between" wrap="nowrap" gap="sm">
+                            <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+                              <Checkbox checked={task.done} onChange={() => toggleTask(task.id)} size="xs" color="appdirect" radius="sm" />
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="sm" fw={500} lineClamp={2}>{task.text}</Text>
+                                <Text size="xs" c="dimmed">Personal · {PRIORITY_CONFIG[task.priority].label} · {CATEGORY_CONFIG[task.category].label}</Text>
+                              </Box>
+                            </Group>
+                            <ActionIcon size="xs" variant="subtle" color="red" onClick={() => deleteTask(task.id)}><IconTrash size={12} /></ActionIcon>
+                          </Group>
+                        </Card>
+                      ))}
+                    </Stack>
+                  </Stack>
+                </ScrollArea.Autosize>
+              </Stack>
+            </Card>
+          </Stack>
+        </Grid.Col>
+
+        <Grid.Col span={{ base: 12, xl: 4 }}>
+          <Card withBorder radius="lg" p="md" style={{ position: "sticky", top: 0 }}>
+            <Stack gap="sm">
+              <Group justify="space-between" align="center">
+                <Text size="sm" fw={700}>Meetings</Text>
+                <Badge size="xs" variant="light" color="appdirect">{(calendar.result?.events ?? []).filter((event) => event.status !== "cancelled").length}</Badge>
+              </Group>
+              <Text size="xs" c="dimmed">{nextMeeting ? `${nextMeeting.summary ?? "Next meeting"} · ${formatRelativeMeetingStart(nextMeeting)}` : "No upcoming meetings today."}</Text>
+              <CalendarSection {...calendar} />
+            </Stack>
+          </Card>
+        </Grid.Col>
+      </Grid>
     </Stack>
   );
 }

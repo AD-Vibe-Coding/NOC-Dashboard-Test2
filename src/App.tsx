@@ -18,20 +18,17 @@ import {
   Box,
   Card,
   Center,
-  Container,
   Grid,
   Group,
   Loader,
   Text,
   Breadcrumbs,
   Anchor,
-  ScrollArea,
   SimpleGrid,
   Stack,
   ThemeIcon,
   Badge,
   Tooltip,
-  Burger,
   UnstyledButton,
   useMantineColorScheme,
   useComputedColorScheme,
@@ -51,12 +48,9 @@ import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { NotificationBell } from "./widgets/NotificationBell";
 import { useIdentity } from "./lib/identity";
-import { useTrainingNotifications } from "./lib/training-notifications";
 import {
   canAccess,
   ROLE_COLORS,
-  ROLE_LABELS,
-  ROLE_SHORT_LABELS,
 } from "./lib/roles";
 import TechDashboard from "./TechDashboard";
 import SignInPage from "./SignInPage";
@@ -87,7 +81,6 @@ function AppInner() {
   const { identity, loading: identityLoading } = useIdentity();
   const { template } = useDashboardPreferences();
   const { windows, openWindow } = useWindowManager();
-  const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
   const [overviewOpen, { open: openOverview, close: closeOverview }] = useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
@@ -100,8 +93,6 @@ function AppInner() {
     if (!identity) return WIDGETS;
     return WIDGETS.filter((w) => canAccess(identity.role, w.roles));
   }, [identity]);
-
-  const { pendingCount: trainingNotificationCount } = useTrainingNotifications();
 
   const featuredWidgets = useMemo(
     () => visibleWidgets.filter((w) => w.featured),
@@ -162,7 +153,6 @@ function AppInner() {
     if (!w) return;
     trackWidgetOpen(id, w.title);
     openWindow(w);
-    closeNav();
   }
 
   // Role-tinted accent under the header. Falls back to the AppDirect brand teal
@@ -176,7 +166,6 @@ function AppInner() {
     <AppShell
       data-dashboard-template={template}
       header={{ height: 68 }}
-      navbar={{ width: 260, breakpoint: "sm", collapsed: { mobile: !navOpened } }}
       padding={0}
     >
       <AppShell.Header
@@ -218,15 +207,9 @@ function AppInner() {
             pointerEvents: "none",
           }}
         />
-        <Container size="xl" h="100%" px="md">
+        <Box h="100%" px="xl">
           <Group h="100%" justify="space-between" wrap="nowrap">
             <Group gap="md" style={{ minWidth: 0 }} wrap="nowrap">
-              <Burger
-                opened={navOpened}
-                onClick={toggleNav}
-                hiddenFrom="sm"
-                size="sm"
-              />
               <Box
                 style={{
                   position: "relative",
@@ -323,66 +306,8 @@ function AppInner() {
               </Text>
             </Group>
           </Group>
-        </Container>
+        </Box>
       </AppShell.Header>
-
-      <AppShell.Navbar
-        p={0}
-        style={{
-          background: isDark
-            ? "var(--dashboard-navbar-bg-dark)"
-            : "var(--dashboard-navbar-bg-light)",
-          borderRight: isDark
-            ? "1px solid rgba(148,197,221,0.10)"
-            : "1px solid rgba(0, 96, 128,0.10)",
-        }}
-      >
-        <ScrollArea style={{ height: "100%" }} scrollbarSize={6}>
-          <Stack gap={2} p="md">
-            {/* Dashboard "home" link */}
-            <SidebarItem
-              icon={IconLayoutDashboard}
-              iconColor="appdirect"
-              label="Dashboard"
-              description="Your shift overview"
-              active={false}
-              onClick={() => {}}
-            />
-
-            <Text
-              size="xs"
-              fw={700}
-              c="dimmed"
-              tt="uppercase"
-              mt="lg"
-              mb={6}
-              style={{ letterSpacing: "0.08em", paddingLeft: 6 }}
-            >
-              Tools
-            </Text>
-
-            {sidebarWidgets.map((widget) => {
-              const isOpen = windows.some((w) => w.id === widget.id);
-              const isMinimized = windows.find((w) => w.id === widget.id)?.minimized;
-              return (
-                <SidebarItem
-                  key={widget.id}
-                  icon={widget.icon}
-                  iconColor={widget.iconColor}
-                  label={widget.title}
-                  description={widget.description}
-                  role={widget.roles?.[0]}
-                  active={isOpen && !isMinimized}
-                  badge={isOpen ? (isMinimized ? "minimized" : "open") : undefined}
-                  extraBadge={widget.id === "training-updates" && trainingNotificationCount > 0 ? `${trainingNotificationCount}` : undefined}
-                  extraBadgeColor={widget.id === "training-updates" && trainingNotificationCount > 0 ? "red" : undefined}
-                  onClick={() => expand(widget.id)}
-                />
-              );
-            })}
-          </Stack>
-        </ScrollArea>
-      </AppShell.Navbar>
 
       <AppShell.Main
         style={{
@@ -438,10 +363,9 @@ function AppInner() {
           }}
         />
         <Box className="dot-grid-bg" />
-        <Container
-          size="xl"
+        <Box
+          px="xl"
           py="lg"
-          px="md"
           style={{ position: "relative", zIndex: 1 }}
         >
           <ManagerHome
@@ -449,7 +373,7 @@ function AppInner() {
             onExpand={expand}
             template={template}
           />
-        </Container>
+        </Box>
       </AppShell.Main>
 
       {/* ── Floating Windows ── */}
@@ -557,28 +481,46 @@ const MANAGER_QUICK_GROUPS: Array<{
   items: Array<{ id: string; emoji: string; label: string; desc: string; color: string }>;
 }> = [
   {
+    label: "Search & AI Tools",
+    items: [
+      { id: "smart-search",        emoji: "🔎", label: "Smart Search",      desc: "AI dashboard search",         color: "indigo" },
+      { id: "ticket-summary",      emoji: "📄", label: "Ticket Summary",    desc: "Summarize tickets",           color: "indigo" },
+      { id: "escalation-email",    emoji: "✉️", label: "ESC Email",         desc: "Draft escalation alerts",     color: "teal" },
+      { id: "email-polisher",      emoji: "📝", label: "Email Polisher",    desc: "Polish customer drafts",      color: "lime" },
+      { id: "noc-troubleshooter",  emoji: "🩺", label: "NOC Troubleshooter",desc: "AI network troubleshooting",   color: "cyan" },
+      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",      desc: "AI-powered QA audits",        color: "pink" },
+    ],
+  },
+  {
     label: "Team Management",
     items: [
-      { id: "performance-tracker", emoji: "📊", label: "Performance",   desc: "Team metrics & audits",    color: "green"    },
-      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",  desc: "AI-powered QA audits",     color: "pink"     },
-      { id: "break-tracker",       emoji: "☕", label: "Breaks",        desc: "Team break log",           color: "orange"   },
-      { id: "wfh",                 emoji: "🏠", label: "WFH Requests",  desc: "Review & approve WFH",     color: "appdirect"},
+      { id: "performance-tracker", emoji: "📊", label: "Performance",       desc: "Team metrics & audits",       color: "green" },
+      { id: "wfh",                 emoji: "🏠", label: "WFH Requests",      desc: "Review & approve WFH",        color: "appdirect" },
+      { id: "training-updates",    emoji: "🎓", label: "Training Updates",  desc: "Requests, reviews, sessions", color: "blue" },
+      { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
+      { id: "training-progress",   emoji: "📚", label: "Training Progress", desc: "Completions by agent",        color: "grape" },
+      { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
     ],
   },
   {
-    label: "Monitoring",
+    label: "Monitoring & Operations",
     items: [
-      { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",  desc: "Alerts & alert analyzer",  color: "red"      },
-      { id: "zoom-queue",          emoji: "📞", label: "Zoom Queue",    desc: "Live call queue",          color: "appdirect"},
-      { id: "qs-escalations",      emoji: "📋", label: "Escalations",   desc: "Carrier contacts",         color: "grape"    },
+      { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",      desc: "Alerts & alert analyzer",     color: "red" },
+      { id: "zoom-queue",          emoji: "📞", label: "Team Availability", desc: "Live queue + meetings",       color: "appdirect" },
+      { id: "zoom-call-metrics",   emoji: "📈", label: "Zoom Call Metrics", desc: "Queue call data",             color: "green" },
+      { id: "qs-escalations",      emoji: "📋", label: "Escalations",       desc: "Carrier contacts",            color: "grape" },
+      { id: "shift-checklist",     emoji: "🔄", label: "Shift Handover",    desc: "Structured handover",         color: "teal" },
+      { id: "data-health",         emoji: "🗄️", label: "Data Health",       desc: "App data table counts",       color: "orange" },
     ],
   },
   {
-    label: "AI Tools",
+    label: "Admin & Knowledge",
     items: [
-      { id: "ticket-summary",      emoji: "📄", label: "Ticket Summary",desc: "Summarize tickets",        color: "indigo"   },
-      { id: "escalation-email",    emoji: "✉️",  label: "ESC Email",     desc: "Draft escalation alerts",  color: "teal"     },
-      { id: "shift-handover",      emoji: "🔄", label: "Handover",      desc: "Create shift handover",    color: "blue"     },
+      { id: "access-control",      emoji: "🛡️", label: "Access Control",    desc: "Manage roles & access",       color: "red" },
+      { id: "app-usage",           emoji: "📉", label: "App Usage",         desc: "Tool adoption & DAU",         color: "teal" },
+      { id: "kb-gap-finder",       emoji: "📘", label: "Knowledge Base",    desc: "Runbooks & missing docs",     color: "indigo" },
+      { id: "timezone-helper",     emoji: "🌍", label: "Timezone Helper",   desc: "DST-aware time conversion",   color: "cyan" },
+      { id: "mobility-troubleshooter", emoji: "📱", label: "Mobility Troubleshooter", desc: "Wireless/device troubleshooting", color: "violet" },
     ],
   },
 ];
@@ -633,132 +575,3 @@ function ManagerQuickLaunch({ onExpand }: { onExpand: (id: string) => void }) {
 }
 
 
-
-/* -------------------------------------------------------------------------- */
-/*                                Sidebar item                                */
-/* -------------------------------------------------------------------------- */
-
-function SidebarItem({
-  icon: Icon,
-  iconColor,
-  label,
-  description,
-  active,
-  onClick,
-  role,
-  badge,
-  extraBadge,
-  extraBadgeColor,
-}: {
-  icon: React.ComponentType<{ size?: number }>;
-  iconColor: string;
-  label: string;
-  description?: string;
-  active?: boolean;
-  onClick: () => void;
-  role?: string;
-  badge?: "open" | "minimized";
-  extraBadge?: string;
-  extraBadgeColor?: string;
-}) {
-  return (
-    <Box
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onClick();
-        }
-      }}
-      className="sidebar-item"
-      data-active={active || undefined}
-      style={{
-        cursor: "pointer",
-        padding: "8px 10px",
-        borderRadius: 10,
-        border: active
-          ? `1px solid color-mix(in srgb, var(--mantine-color-${iconColor}-6) 45%, transparent)`
-          : "1px solid transparent",
-        background: active
-          ? `linear-gradient(135deg, color-mix(in srgb, var(--mantine-color-${iconColor}-6) 18%, var(--widget-tile-surface)) 0%, var(--widget-tile-surface) 100%)`
-          : "transparent",
-        position: "relative",
-        transition:
-          "background 140ms ease, border-color 140ms ease, transform 140ms ease",
-      }}
-    >
-      {/* Left accent bar when active */}
-      {active && (
-        <Box
-          style={{
-            position: "absolute",
-            left: -1,
-            top: 8,
-            bottom: 8,
-            width: 3,
-            background: `var(--mantine-color-${iconColor}-6)`,
-            borderRadius: 2,
-          }}
-        />
-      )}
-      <Group wrap="nowrap" gap="sm" align="center">
-        <ThemeIcon
-          size="md"
-          radius="md"
-          variant={active ? "filled" : "light"}
-          color={iconColor}
-        >
-          <Icon size={16} />
-        </ThemeIcon>
-        <Box style={{ minWidth: 0, flex: 1 }}>
-          <Group gap={6} wrap="nowrap">
-            <Text
-              size="sm"
-              fw={active ? 700 : 600}
-              c="bright"
-              truncate
-              style={{ lineHeight: 1.2 }}
-            >
-              {label}
-            </Text>
-            {badge && (
-              <Badge size="xs" variant="dot" color={badge === "open" ? "green" : "yellow"}>
-                {badge}
-              </Badge>
-            )}
-            {extraBadge ? (
-              <Badge size="xs" variant="filled" color={extraBadgeColor ?? "red"}>
-                {extraBadge}
-              </Badge>
-            ) : null}
-            {role && (
-              <Tooltip label={`Restricted to ${ROLE_LABELS[role as keyof typeof ROLE_LABELS] ?? role}`}>
-                <Badge
-                  size="xs"
-                  variant="light"
-                  color={ROLE_COLORS[role as keyof typeof ROLE_COLORS] ?? "gray"}
-                >
-                  {ROLE_SHORT_LABELS[role as keyof typeof ROLE_SHORT_LABELS] ??
-                    role}
-                </Badge>
-              </Tooltip>
-            )}
-          </Group>
-          {description && (
-            <Text
-              size="xs"
-              c="dimmed"
-              truncate
-              lh={1.25}
-              mt={1}
-            >
-              {description}
-            </Text>
-          )}
-        </Box>
-      </Group>
-    </Box>
-  );
-}
