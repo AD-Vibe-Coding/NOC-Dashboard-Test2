@@ -19,6 +19,7 @@ interface WidgetTileProps {
   iconColor: string;
   status?: { label: string; color: string; tooltip?: string };
   onExpand: () => void;
+  headerActions?: ReactNode;
   /** Featured tiles (My Day, Zoom Queue, Break Tracker) get an extra prominent
    *  treatment — bigger icon, stronger shadow, more pronounced hover lift. */
   featured?: boolean;
@@ -45,6 +46,7 @@ export function WidgetTile({
   iconColor,
   status,
   onExpand,
+  headerActions,
   featured,
   children,
 }: WidgetTileProps) {
@@ -147,7 +149,8 @@ export function WidgetTile({
               )}
             </Stack>
           </Group>
-          <Group gap={6} wrap="nowrap">
+          <Group gap={6} wrap="nowrap" align="center">
+            {headerActions}
             {status && (
               <Tooltip
                 label={status.tooltip ?? status.label}

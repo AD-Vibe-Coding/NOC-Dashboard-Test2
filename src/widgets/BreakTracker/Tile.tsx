@@ -1,26 +1,86 @@
-import { Stack, Group, Text, Title, Box, Badge, Divider } from "@mantine/core";
-import { IconCoffee, IconUser } from "@tabler/icons-react";
+import { useState, type MouseEvent } from "react";
+import { Stack, Group, Text, Title, Box, Badge, Divider, Button, Select } from "@mantine/core";
+import { IconCoffee, IconPlayerStop, IconUser } from "@tabler/icons-react";
 import { WidgetTile } from "../WidgetTile";
 import { useBreakData } from "./data";
-import { BREAK_TYPE_COLORS } from "../../lib/slack";
+import { BREAK_TYPE_COLORS, emojiForBreak, formatBreakStartMessage, postSlackMessage } from "../../lib/slack";
 import { useIdentity } from "../../lib/identity";
 import { formatElapsedIso } from "../../lib/format";
+import { db } from "../../db";
 
 interface Props {
   onExpand: () => void;
 }
 
-export function BreakTrackerTile({ onExpand }: Props) {
-  const { active, tick } = useBreakData();
-  const { identity } = useIdentity();
+const QUICK_BREAK_TYPES = [
+  { value: "Coffee", label: "Coffee" },
+  { value: "Lunch", label: "Lunch" },
+  { value: "Restroom", label: "Restroom" },
+  { value: "Personal", label: "Personal" },
+  { value: "Other", label: "Other" },
+];
 
-  // Highlight "you" on the tile if the current user is on a break right now.
+export function BreakTrackerTile({ onExpand }: Props) {
+  const { active, tick, refresh } = useBreakData();
+  const { identity } = useIdentity();
+  const [breakType, setBreakType] = useState<string | null>("Coffee");
+  const [posting, setPosting] = useState(false);
+
   const youOnBreak = identity?.name
     ? active.find((b) => b.employee_name === identity.name) ?? null
     : null;
 
-  // Show up to 3 active break-takers in the tile preview.
   const preview = active.slice(0, 3);
+  const canQuickControl = identity?.role !== "manager" && !!identity?.name;
+
+  async function startBreakQuick() {
+    if (!identity?.name || !breakType) return;
+    setPosting(true);
+    let slackTs: string | null = null;
+    let slackPosted = false;
+    try {
+      const result = await postSlackMessage(formatBreakStartMessage(breakType), {
+        username: identity.name,
+        icon_emoji: emojiForBreak(breakType),
+      });
+      slackTs = result.ts ?? null;
+      slackPosted = !!result.posted;
+    } catch {
+      // non-fatal; still record the break locally
+    }
+    try {
+      await db.breaks.insert({
+        employee_name: identity.name,
+        break_type: breakType,
+        start_time: new Date().toISOString(),
+        is_active: true,
+        slack_message_ts: slackTs,
+        slack_posted: slackPosted,
+      });
+      await refresh();
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  async function endBreakQuick() {
+    if (!youOnBreak) return;
+    setPosting(true);
+    try {
+      await db.breaks.updateById(youOnBreak.id, {
+        end_time: new Date().toISOString(),
+        duration_minutes: Math.max(1, Math.round((Date.now() - new Date(youOnBreak.start_time).getTime()) / 60000)),
+        is_active: false,
+      });
+      await refresh();
+    } finally {
+      setPosting(false);
+    }
+  }
+
+  function stopTileExpand(event: MouseEvent<HTMLElement>) {
+    event.stopPropagation();
+  }
 
   return (
     <WidgetTile
@@ -29,6 +89,21 @@ export function BreakTrackerTile({ onExpand }: Props) {
       icon={IconCoffee}
       iconColor="orange"
       onExpand={onExpand}
+      headerActions={canQuickControl && youOnBreak ? (
+        <Button
+          size="compact-xs"
+          variant="light"
+          color="orange"
+          leftSection={<IconPlayerStop size={12} />}
+          loading={posting}
+          onClick={(event) => {
+            stopTileExpand(event);
+            void endBreakQuick();
+          }}
+        >
+          End break
+        </Button>
+      ) : undefined}
     >
       <Stack gap="sm" style={{ height: "100%" }}>
         <Group align="flex-end" justify="space-between" wrap="nowrap">
@@ -40,9 +115,7 @@ export function BreakTrackerTile({ onExpand }: Props) {
               {active.length}
             </Title>
             <Text size="xs" c="dimmed" mt={2}>
-              {active.length === 0
-                ? "Nobody on a break"
-                : `${active.length} currently away`}
+              {active.length === 0 ? "Nobody on a break" : `${active.length} currently away`}
             </Text>
           </Box>
           {identity?.name && (
@@ -59,12 +132,33 @@ export function BreakTrackerTile({ onExpand }: Props) {
           )}
         </Group>
 
+        {canQuickControl && !youOnBreak && (
+          <Group gap="xs" wrap="nowrap" onClick={stopTileExpand}>
+            <Select
+              size="xs"
+              flex={1}
+              data={QUICK_BREAK_TYPES}
+              value={breakType}
+              onChange={setBreakType}
+              allowDeselect={false}
+            />
+            <Button
+              size="xs"
+              variant="light"
+              color="orange"
+              loading={posting}
+              onClick={() => void startBreakQuick()}
+            >
+              Start break
+            </Button>
+          </Group>
+        )}
+
         {active.length > 0 ? (
           <>
             <Divider variant="dashed" />
             <Stack gap={4}>
               {preview.map((b, idx) => {
-                // eslint-disable-next-line @typescript-eslint/no-unused-expressions
                 tick;
                 return (
                   <Group
@@ -74,18 +168,11 @@ export function BreakTrackerTile({ onExpand }: Props) {
                     gap={6}
                   >
                     <Group gap={6} wrap="nowrap" style={{ minWidth: 0 }}>
-                      <IconCoffee
-                        size={12}
-                        color="var(--mantine-color-yellow-5)"
-                      />
+                      <IconCoffee size={12} color="var(--mantine-color-yellow-5)" />
                       <Text size="sm" truncate fw={500}>
                         {b.employee_name}
                       </Text>
-                      <Badge
-                        size="xs"
-                        variant="light"
-                        color={BREAK_TYPE_COLORS[b.break_type] ?? "gray"}
-                      >
+                      <Badge size="xs" variant="light" color={BREAK_TYPE_COLORS[b.break_type] ?? "gray"}>
                         {b.break_type}
                       </Badge>
                     </Group>

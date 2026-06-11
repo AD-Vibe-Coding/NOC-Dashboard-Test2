@@ -60,6 +60,7 @@ interface CalendarEvent {
   location?: string;
   status?: string;
   htmlLink?: string;
+  joinLink?: string | null;
   colorId?: string;
 }
 
@@ -206,6 +207,10 @@ function isSoon(event: CalendarEvent): boolean {
   const diff = new Date(event.start.dateTime).getTime() - Date.now();
   return diff > 0 && diff <= 30 * 60 * 1000;
 }
+function isTodayLocal(event: CalendarEvent): boolean {
+  if (!event.start.dateTime) return false;
+  return new Date(event.start.dateTime).toDateString() === new Date().toDateString();
+}
 function getNextMeeting(events: CalendarEvent[]) {
   const now = Date.now();
   return [...events]
@@ -244,7 +249,7 @@ function CalendarSection({ result, loading, connecting, connect, disconnect, ref
       </Card>
     );
   }
-  const events = result.events.filter((e) => e.status !== "cancelled");
+  const events = result.events.filter((e) => e.status !== "cancelled" && !isPast(e));
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="center">
@@ -272,10 +277,24 @@ function CalendarSection({ result, loading, connecting, connect, disconnect, ref
                       </Group>
                       <Group gap="xs" mt={3} wrap="wrap">
                         <Text size="xs" c="dimmed" ff="monospace">{formatTime(event)}</Text>
-                        {event.location ? <Group gap={3} wrap="nowrap"><IconMapPin size={10} /><Text size="xs" c="dimmed" lineClamp={1}>{event.location}</Text></Group> : null}
+                        {event.location ? <Group gap={3} wrap="nowrap" align="flex-start"><IconMapPin size={10} style={{ flexShrink: 0, marginTop: 2 }} /><Text size="xs" c="dimmed" style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{event.location}</Text></Group> : null}
                       </Group>
                     </Box>
-                    {event.htmlLink ? <ActionIcon component="a" href={event.htmlLink} target="_blank" rel="noopener noreferrer" size="xs" variant="subtle" color="gray"><IconExternalLink size={12} /></ActionIcon> : null}
+                    {(event.joinLink ?? event.htmlLink) ? (
+                      <Button
+                        component="a"
+                        href={event.joinLink ?? event.htmlLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        size="compact-xs"
+                        variant="light"
+                        color={current ? "green" : "appdirect"}
+                        rightSection={<IconExternalLink size={12} />}
+                        style={{ flexShrink: 0 }}
+                      >
+                        Join
+                      </Button>
+                    ) : null}
                   </Group>
                 </Card>
               );
@@ -364,74 +383,89 @@ export function ManagerDayWidget() {
   const meetingDoingTasks = useMemo(() => meetingTasks.filter((task) => task.status === "in_progress"), [meetingTasks]);
   const meetingBlockedTasks = useMemo(() => meetingTasks.filter((task) => task.status === "blocked"), [meetingTasks]);
   const pinnedToday = useMemo(() => meetingTasks.filter((task) => plannedMeetingTaskIds.includes(task.id) && task.status !== "done"), [meetingTasks, plannedMeetingTaskIds]);
-  const nextMeeting = getNextMeeting((calendar.result?.events ?? []).filter((event) => event.status !== "cancelled"));
+  const nextMeeting = getNextMeeting((calendar.result?.events ?? []).filter((event) => event.status !== "cancelled" && isTodayLocal(event)));
   const openPersonalTasks = personalTasks.filter((task) => !task.done);
   const totalActionCount = openPersonalTasks.length + meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length;
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="center" wrap="nowrap">
-        <Box>
-          <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.08em" }}>My Day</Text>
-          <Text size="sm" c="dimmed">{new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" })}</Text>
-        </Box>
-        <Box style={{ flex: 1, maxWidth: 420 }}>
-          <Group gap="xs" wrap="nowrap" align="flex-start">
-            <TextInput ref={inputRef} placeholder="Quick add a task…" value={newText} onChange={(e) => setNewText(e.currentTarget.value)} onKeyDown={(e) => e.key === "Enter" && addTask()} size="sm" style={{ flex: 1 }} />
-            <Button size="sm" onClick={addTask} disabled={!newText.trim()} color="appdirect">Add</Button>
+      <Card withBorder radius="lg" p="md">
+        <Stack gap="md">
+          <Group justify="space-between" align="flex-start" wrap="wrap">
+            <Box>
+              <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.08em" }}>My Day</Text>
+              <Text size="xl" fw={700}>Plan the day, then work the list.</Text>
+              <Text size="sm" c="dimmed">{new Date().toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })}</Text>
+            </Box>
+            <Badge variant="light" color="appdirect" size="lg">{totalActionCount} active items</Badge>
           </Group>
-          <Group gap="xs" mt={8} wrap="wrap" justify="flex-end">
-            <Select size="xs" w={110} value={newPriority} onChange={(v) => v && setNewPriority(v as Priority)} data={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_CONFIG[p].label }))} />
-            <Select size="xs" w={130} value={newCategory} onChange={(v) => v && setNewCategory(v as Category)} data={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_CONFIG[c].label }))} />
-          </Group>
-        </Box>
-      </Group>
 
-      <Card withBorder radius="lg" p="sm">
-        <SimpleGrid cols={{ base: 2, xl: 4 }} spacing="sm">
-          <Box>
-            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Next</Text>
-            <Text size="sm" fw={700} lineClamp={1}>{nextMeeting?.summary ?? "No upcoming meetings"}</Text>
-            <Text size="xs" c="dimmed">{nextMeeting ? formatRelativeMeetingStart(nextMeeting) : "Calendar clear"}</Text>
-          </Box>
-          <Box>
-            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Open</Text>
-            <Text size="lg" fw={700}>{totalActionCount}</Text>
-            <Text size="xs" c="dimmed">{openPersonalTasks.length} personal · {meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length} meeting</Text>
-          </Box>
-          <Box>
-            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Doing</Text>
-            <Text size="lg" fw={700}>{meetingDoingTasks.length}</Text>
-            <Text size="xs" c="dimmed">Active follow-ups in progress</Text>
-          </Box>
-          <Box>
-            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Blocked</Text>
-            <Text size="lg" fw={700} c={meetingBlockedTasks.length > 0 ? "red.4" : undefined}>{meetingBlockedTasks.length}</Text>
-            <Text size="xs" c="dimmed">Needs follow-up or escalation</Text>
-          </Box>
-        </SimpleGrid>
+          <Group gap="sm" align="flex-start" wrap="wrap">
+            <TextInput
+              ref={inputRef}
+              placeholder="Quick add a task…"
+              value={newText}
+              onChange={(e) => setNewText(e.currentTarget.value)}
+              onKeyDown={(e) => e.key === "Enter" && addTask()}
+              size="md"
+              style={{ flex: 1, minWidth: 260 }}
+            />
+            <Button size="md" onClick={addTask} disabled={!newText.trim()} color="appdirect">Add task</Button>
+            <Select size="sm" w={120} value={newPriority} onChange={(v) => v && setNewPriority(v as Priority)} data={PRIORITIES.map((p) => ({ value: p, label: PRIORITY_CONFIG[p].label }))} />
+            <Select size="sm" w={140} value={newCategory} onChange={(v) => v && setNewCategory(v as Category)} data={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_CONFIG[c].label }))} />
+          </Group>
+        </Stack>
       </Card>
 
+      <SimpleGrid cols={{ base: 1, md: 3 }} spacing="md">
+        <Card withBorder radius="lg" p="md">
+          <Stack gap={4}>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Next meeting</Text>
+            <Text size="md" fw={700} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{nextMeeting?.summary ?? "No upcoming meetings"}</Text>
+            <Text size="sm" c="dimmed">{nextMeeting ? formatRelativeMeetingStart(nextMeeting) : "Calendar clear"}</Text>
+          </Stack>
+        </Card>
+        <Card withBorder radius="lg" p="md">
+          <Stack gap={4}>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Tasks due today</Text>
+            <Text size="xl" fw={700}>{openPersonalTasks.length + meetingOpenTasks.length}</Text>
+            <Text size="sm" c="dimmed">{openPersonalTasks.length} personal · {meetingOpenTasks.length} meeting tasks waiting</Text>
+          </Stack>
+        </Card>
+        <Card withBorder radius="lg" p="md">
+          <Stack gap={4}>
+            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Needs attention</Text>
+            <Text size="xl" fw={700} c={meetingBlockedTasks.length > 0 ? "red.4" : undefined}>{meetingBlockedTasks.length + meetingDoingTasks.length}</Text>
+            <Text size="sm" c="dimmed">{meetingBlockedTasks.length} blocked · {meetingDoingTasks.length} in progress</Text>
+          </Stack>
+        </Card>
+      </SimpleGrid>
+
       <Grid gutter="md" align="flex-start">
-        <Grid.Col span={{ base: 12, xl: 8 }}>
+        <Grid.Col span={{ base: 12, xl: 7 }}>
           <Stack gap="md">
             <Card withBorder radius="lg" p="md" style={{ borderLeft: "3px solid var(--mantine-color-appdirect-6)" }}>
-              <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" mb={6} style={{ letterSpacing: "0.06em" }}>Focus</Text>
-              <Textarea placeholder="What matters most today?" value={state.focus} onChange={(e) => setState((s) => ({ ...s, focus: e.currentTarget.value }))} size="sm" autosize minRows={2} maxRows={3} variant="unstyled" styles={{ input: { fontWeight: 500, fontSize: 14, padding: 0 } }} />
+              <Stack gap={6}>
+                <Text size="xs" fw={700} tt="uppercase" c="appdirect.5" style={{ letterSpacing: "0.06em" }}>Focus</Text>
+                <Textarea placeholder="What matters most today?" value={state.focus} onChange={(e) => setState((s) => ({ ...s, focus: e.currentTarget.value }))} size="sm" autosize minRows={2} maxRows={4} variant="unstyled" styles={{ input: { fontWeight: 500, fontSize: 16, padding: 0, lineHeight: 1.5 } }} />
+              </Stack>
             </Card>
 
             <Card withBorder radius="lg" p="md">
               <Stack gap="sm">
-                <Group justify="space-between" align="center">
-                  <Text size="sm" fw={700}>Tasks</Text>
+                <Group justify="space-between" align="center" wrap="wrap">
+                  <Box>
+                    <Text size="lg" fw={700}>Action list</Text>
+                    <Text size="sm" c="dimmed">Personal tasks and meeting follow-ups in one working queue.</Text>
+                  </Box>
                   <Group gap="xs" wrap="wrap">
-                    {pinnedToday.length > 0 && <Badge size="xs" color="appdirect" variant="light">Pinned {pinnedToday.length}</Badge>}
-                    {meetingBlockedTasks.length > 0 && <Badge size="xs" color="red" variant="light">Needs attention {meetingBlockedTasks.length}</Badge>}
-                    {meetingDoingTasks.length > 0 && <Badge size="xs" color="blue" variant="light">Doing {meetingDoingTasks.length}</Badge>}
+                    {pinnedToday.length > 0 && <Badge size="sm" color="appdirect" variant="light">Pinned {pinnedToday.length}</Badge>}
+                    {meetingBlockedTasks.length > 0 && <Badge size="sm" color="red" variant="light">Blocked {meetingBlockedTasks.length}</Badge>}
+                    {meetingDoingTasks.length > 0 && <Badge size="sm" color="blue" variant="light">Doing {meetingDoingTasks.length}</Badge>}
                   </Group>
                 </Group>
 
-                <ScrollArea.Autosize mah={520} offsetScrollbars>
+                <ScrollArea.Autosize mah={560} offsetScrollbars>
                   <Stack gap="sm">
                     {pinnedToday.length > 0 && (
                       <Stack gap="xs">
@@ -440,7 +474,7 @@ export function ManagerDayWidget() {
                           <Card key={`pinned-${task.id}`} withBorder radius="md" p="sm">
                             <Group justify="space-between" wrap="nowrap" gap="sm">
                               <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="sm" fw={600} lineClamp={1}>{task.title}</Text>
+                                <Text size="sm" fw={600} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.title}</Text>
                                 <Text size="xs" c="dimmed">{meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
                               </Box>
                               <ActionIcon size="sm" variant="subtle" color="red" onClick={() => removeMeetingTaskFromPlan(task.id)}><IconTrash size={13} /></ActionIcon>
@@ -455,9 +489,9 @@ export function ManagerDayWidget() {
                         <Text size="xs" fw={700} tt="uppercase" c="red.4">Needs attention</Text>
                         {meetingBlockedTasks.map((task) => (
                           <Card key={`blocked-${task.id}`} withBorder radius="md" p="sm">
-                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm" align="flex-start">
                               <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="sm" fw={600} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.title}</Text>
                                 <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
                               </Box>
                               <Group gap={6} wrap="nowrap">
@@ -475,9 +509,9 @@ export function ManagerDayWidget() {
                         <Text size="xs" fw={700} tt="uppercase" c="blue.4">In progress</Text>
                         {meetingDoingTasks.map((task) => (
                           <Card key={`doing-${task.id}`} withBorder radius="md" p="sm">
-                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm" align="flex-start">
                               <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="sm" fw={600} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.title}</Text>
                                 <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
                               </Box>
                               <Button size="compact-xs" variant="light" color="green" onClick={() => void updateMeetingTaskStatus(task, "done")}>Done</Button>
@@ -492,9 +526,9 @@ export function ManagerDayWidget() {
                         <Text size="xs" fw={700} tt="uppercase" c="dimmed">Meeting tasks</Text>
                         {meetingOpenTasks.slice(0, 6).map((task) => (
                           <Card key={`meeting-${task.id}`} withBorder radius="md" p="sm">
-                            <Group justify="space-between" wrap="nowrap" gap="sm">
+                            <Group justify="space-between" wrap="nowrap" gap="sm" align="flex-start">
                               <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="sm" fw={600} lineClamp={2}>{task.title}</Text>
+                                <Text size="sm" fw={600} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.title}</Text>
                                 <Text size="xs" c="dimmed">Meeting · {meetingTaskSource(task)} · {formatDueDate(task.due_date)}</Text>
                               </Box>
                               <Group gap={6} wrap="nowrap">
@@ -511,11 +545,11 @@ export function ManagerDayWidget() {
                       <Text size="xs" fw={700} tt="uppercase" c="dimmed">Personal tasks</Text>
                       {openPersonalTasks.length === 0 ? <Text size="sm" c="dimmed">No personal tasks yet.</Text> : openPersonalTasks.map((task) => (
                         <Card key={`personal-${task.id}`} withBorder radius="md" p="sm">
-                          <Group justify="space-between" wrap="nowrap" gap="sm">
+                          <Group justify="space-between" wrap="nowrap" gap="sm" align="flex-start">
                             <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
                               <Checkbox checked={task.done} onChange={() => toggleTask(task.id)} size="xs" color="appdirect" radius="sm" />
                               <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="sm" fw={500} lineClamp={2}>{task.text}</Text>
+                                <Text size="sm" fw={500} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.text}</Text>
                                 <Text size="xs" c="dimmed">Personal · {PRIORITY_CONFIG[task.priority].label} · {CATEGORY_CONFIG[task.category].label}</Text>
                               </Box>
                             </Group>
@@ -531,17 +565,42 @@ export function ManagerDayWidget() {
           </Stack>
         </Grid.Col>
 
-        <Grid.Col span={{ base: 12, xl: 4 }}>
-          <Card withBorder radius="lg" p="md" style={{ position: "sticky", top: 0 }}>
-            <Stack gap="sm">
-              <Group justify="space-between" align="center">
-                <Text size="sm" fw={700}>Meetings</Text>
-                <Badge size="xs" variant="light" color="appdirect">{(calendar.result?.events ?? []).filter((event) => event.status !== "cancelled").length}</Badge>
-              </Group>
-              <Text size="xs" c="dimmed">{nextMeeting ? `${nextMeeting.summary ?? "Next meeting"} · ${formatRelativeMeetingStart(nextMeeting)}` : "No upcoming meetings today."}</Text>
+        <Grid.Col span={{ base: 12, xl: 5 }}>
+          <Stack gap="md" style={{ position: "sticky", top: 0 }}>
+            <Card withBorder radius="xl" p="lg" style={{ background: "color-mix(in srgb, var(--mantine-color-appdirect-9) 14%, var(--mantine-color-body))" }}>
+              <Stack gap="sm">
+                <Group justify="space-between" align="center">
+                  <Box>
+                    <Text size="xs" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.08em" }}>Agenda</Text>
+                    <Text size="xl" fw={800} style={{ letterSpacing: "-0.02em" }}>Today at a glance</Text>
+                  </Box>
+                  <Badge size="lg" variant="light" color="appdirect">{(calendar.result?.events ?? []).filter((event) => event.status !== "cancelled" && !isPast(event)).length}</Badge>
+                </Group>
+                <Text size="sm" c="dimmed">{nextMeeting ? `${nextMeeting.summary ?? "Next meeting"} · ${formatRelativeMeetingStart(nextMeeting)}` : "No upcoming meetings today."}</Text>
+              </Stack>
+            </Card>
+
+            {pinnedToday.length > 0 && (
+              <Card withBorder radius="xl" p="lg">
+                <Stack gap="xs">
+                  <Text size="xs" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.08em" }}>Priorities</Text>
+                  <Text size="lg" fw={700}>Today’s priorities</Text>
+                  {pinnedToday.slice(0, 4).map((task) => (
+                    <Card key={`agenda-${task.id}`} withBorder radius="md" p="sm">
+                      <Stack gap={4}>
+                        <Text size="sm" fw={600} style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{task.title}</Text>
+                        <Text size="xs" c="dimmed">{meetingTaskSource(task)}</Text>
+                      </Stack>
+                    </Card>
+                  ))}
+                </Stack>
+              </Card>
+            )}
+
+            <Card withBorder radius="lg" p="md">
               <CalendarSection {...calendar} />
-            </Stack>
-          </Card>
+            </Card>
+          </Stack>
         </Grid.Col>
       </Grid>
     </Stack>

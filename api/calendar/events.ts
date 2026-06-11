@@ -97,7 +97,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
             const accessOpts = `; Path=/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${expiresIn}`;
             res.setHeader("Set-Cookie", `${ACCESS_COOKIE}=${encodeURIComponent(refreshed.access_token)}${accessOpts}`);
             // Filter out all-day events (they have start.date but no start.dateTime)
-            const timedEvents = (data.items ?? []).filter((e) => !!e.start.dateTime);
+            const timedEvents = normalizeEvents((data.items ?? []).filter((e) => !!e.start.dateTime));
             return res.end(JSON.stringify({ connected: true, events: timedEvents }));
           }
         }
@@ -112,7 +112,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
     const data = await r.json() as { items?: CalendarEvent[] };
     // Filter out all-day events (they have start.date but no start.dateTime)
-    const timedEvents = (data.items ?? []).filter((e) => !!e.start.dateTime);
+    const timedEvents = normalizeEvents((data.items ?? []).filter((e) => !!e.start.dateTime));
     res.end(JSON.stringify({ connected: true, events: timedEvents }));
   } catch (e) {
     res.statusCode = 500;
@@ -123,10 +123,59 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 interface CalendarEvent {
   id: string;
   summary?: string;
+  description?: string;
   start: { dateTime?: string; date?: string };
   end:   { dateTime?: string; date?: string };
   location?: string;
   status?: string;
   htmlLink?: string;
+  hangoutLink?: string;
+  joinLink?: string | null;
+  conferenceData?: {
+    conferenceSolution?: { name?: string };
+    entryPoints?: Array<{
+      entryPointType?: string;
+      uri?: string;
+      label?: string;
+    }>;
+  };
   colorId?: string;
+}
+
+function firstUrl(text?: string | null): string | null {
+  if (!text) return null;
+  const match = text.match(/https?:\/\/[^\s<>")]+/i);
+  return match?.[0] ?? null;
+}
+
+function isDirectMeetingUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return /meet\.google\.com|zoom\.us\/(j|my|wc)|teams\.microsoft\.com|webex\.com|gotomeeting\.com|ringcentral\.com|bluejeans\.com/i.test(url);
+}
+
+function extractJoinLink(event: CalendarEvent): string | null {
+  const conferenceEntryPoint = event.conferenceData?.entryPoints?.find((entry) => {
+    const uri = entry.uri ?? "";
+    return entry.entryPointType === "video" || entry.entryPointType === "more" || isDirectMeetingUrl(uri);
+  })?.uri;
+
+  const candidates = [
+    event.hangoutLink,
+    conferenceEntryPoint,
+    firstUrl(event.location),
+    firstUrl(event.description),
+  ];
+
+  for (const candidate of candidates) {
+    if (isDirectMeetingUrl(candidate)) return candidate!;
+  }
+
+  return null;
+}
+
+function normalizeEvents(events: CalendarEvent[]): CalendarEvent[] {
+  return events.map((event) => ({
+    ...event,
+    joinLink: extractJoinLink(event),
+  }));
 }

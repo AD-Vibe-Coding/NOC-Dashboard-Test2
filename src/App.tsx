@@ -11,11 +11,12 @@
 //     tile grid.
 //   - Widgets can declare `roles: ["lead", "manager"]` to restrict access.
 //     Deep-links to restricted widgets fall back to the dashboard.
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   AppShell,
   Box,
+  Button,
   Card,
   Center,
   Grid,
@@ -36,6 +37,8 @@ import {
 import { useDisclosure } from "@mantine/hooks";
 import {
   IconLayoutDashboard,
+  IconLogin2,
+  IconLogout2,
   IconMoon,
   IconSun,
 } from "@tabler/icons-react";
@@ -52,7 +55,6 @@ import {
   canAccess,
   ROLE_COLORS,
 } from "./lib/roles";
-import TechDashboard from "./TechDashboard";
 import SignInPage from "./SignInPage";
 import { ManagerDayWidget } from "./widgets/ManagerDay";
 import { WindowManagerProvider, useWindowManager } from "./lib/window-manager";
@@ -62,6 +64,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppOverview } from "./components/AppOverview";
 import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { type DashboardTemplate, useDashboardPreferences } from "./lib/dashboard-preferences";
+import { db } from "./db";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -80,6 +83,7 @@ export default function App() {
 function AppInner() {
   const { identity, loading: identityLoading } = useIdentity();
   const { template } = useDashboardPreferences();
+  const [punchPosting, setPunchPosting] = useState<"punch_in" | "punch_out" | null>(null);
   const { windows, openWindow } = useWindowManager();
   const [overviewOpen, { open: openOverview, close: closeOverview }] = useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
@@ -142,17 +146,29 @@ function AppInner() {
     return <SignInPage />;
   }
 
-  // Techs (Tier 1/2/3) → streamlined personal dashboard
-  if (identity.role !== "manager") {
-    return <TechDashboard />;
-  }
-
-  // Managers → full admin dashboard below
+  // All signed-in users now use the same dashboard shell/layout.
+  // Role-based widget visibility still comes from canAccess(...).
   function expand(id: string) {
     const w = WIDGETS.find((x) => x.id === id);
     if (!w) return;
     trackWidgetOpen(id, w.title);
     openWindow(w);
+  }
+
+  async function quickPunch(action: "punch_in" | "punch_out") {
+    if (!identity?.name || punchPosting) return;
+    setPunchPosting(action);
+    try {
+      await db.punch_events.insert({
+        employee_name: identity.name,
+        action,
+        message: action === "punch_in" ? "Punched in" : "Punched out",
+        slack_posted: false,
+        punched_at: new Date().toISOString(),
+      });
+    } finally {
+      setPunchPosting(null);
+    }
   }
 
   // Role-tinted accent under the header. Falls back to the AppDirect brand teal
@@ -271,6 +287,30 @@ function AppInner() {
               </Box>
             </Group>
             <Group gap="sm" wrap="nowrap">
+              {identity.role !== "manager" && (
+                <Group gap={6} wrap="nowrap">
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="green"
+                    leftSection={<IconLogin2 size={14} />}
+                    loading={punchPosting === "punch_in"}
+                    onClick={() => void quickPunch("punch_in")}
+                  >
+                    Punch In
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="light"
+                    color="red"
+                    leftSection={<IconLogout2 size={14} />}
+                    loading={punchPosting === "punch_out"}
+                    onClick={() => void quickPunch("punch_out")}
+                  >
+                    Punch Out
+                  </Button>
+                </Group>
+              )}
               <DashboardTemplatePicker />
               <Tooltip
                 label={isDark ? "Switch to light mode" : "Switch to dark mode"}
