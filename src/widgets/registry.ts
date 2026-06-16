@@ -22,8 +22,6 @@ import {
   IconStar,
   IconClipboardList,
   IconBook,
-
-  IconSchool as IconSchoolReg,
 } from "@tabler/icons-react";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
@@ -43,6 +41,7 @@ import {
   MobilityTroubleshooterWidget,
   MobilityTroubleshooterTile,
 } from "./MobilityTroubleshooter";
+import { VelocloudTroubleshooterWidget, VelocloudTroubleshooterTile } from "./VelocloudTroubleshooter";
 import {
   PerformanceTrackerWidget,
   PerformanceTrackerTile,
@@ -82,7 +81,6 @@ import {
 import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
-import { TrainingProgressWidget, TrainingProgressTile } from "./TrainingProgress";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -183,8 +181,8 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "training-updates",
-    title: "Training Updates",
-    description: "Training requests, reviews, and upcoming sessions",
+    title: "Training Hub",
+    description: "Requests, upcoming sessions, and progress",
     icon: IconSchool,
     iconColor: "blue",
     tileSize: "sm",
@@ -286,6 +284,16 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: MobilityTroubleshooterWidget,
   },
   {
+    id: "velocloud-troubleshooter",
+    title: "VeloCloud Troubleshooter",
+    description: "AI assistant for Arista VeloCloud SD-WAN troubleshooting",
+    icon: IconActivityHeartbeat,
+    iconColor: "cyan",
+    tileSize: "sm",
+    Tile: VelocloudTroubleshooterTile,
+    Full: VelocloudTroubleshooterWidget,
+  },
+  {
     id: "ticket-audit",
     title: "Ticket Audit",
     description: "AI quality audits from MHTML tickets — scores pushed to Performance Tracker",
@@ -336,14 +344,5 @@ export const WIDGETS: WidgetDefinition[] = [
     Tile: KbGapFinderTile,
     Full: KbGapFinderWidget,
   },
-  {
-    id: "training-progress",
-    title: "Training Progress",
-    description: "Track training completions per agent — manager overview included",
-    icon: IconSchoolReg,
-    iconColor: "grape",
-    tileSize: "sm",
-    Tile: TrainingProgressTile,
-    Full: TrainingProgressWidget,
-  },
+
 ];

@@ -494,8 +494,20 @@ export const training_completions = pgTable("training_completions", {
   training_id: integer("training_id").notNull(), // FK → upcoming_trainings.id
   agent_name: text("agent_name").notNull(),
   status: text("status").notNull(),              // not_started | in_progress | completed
+  progress_percent: integer("progress_percent").notNull().default(0), // 0..100
+  target_date: text("target_date"),              // YYYY-MM-DD target date set by agent
   completed_at: text("completed_at"),            // ISO timestamp
+  updated_at: text("updated_at"),                // ISO timestamp (last update)
   note: text("note"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const training_comments = pgTable("training_comments", {
+  id: serial("id").primaryKey(),
+  training_id: integer("training_id").notNull(),
+  author_name: text("author_name").notNull(),
+  author_role: text("author_role").notNull(),
+  message: text("message").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

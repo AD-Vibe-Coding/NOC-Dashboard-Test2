@@ -12,6 +12,7 @@ import {
   Select,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
 } from "@mantine/core";
 import {
@@ -731,6 +732,54 @@ function formatConverterDateTime(date: Date, timeZone: string) {
   }).format(date);
 }
 
+function getDatePartsInTimezone(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const pick = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+  return {
+    year: pick("year"),
+    month: pick("month"),
+    day: pick("day"),
+    hour: pick("hour"),
+    minute: pick("minute"),
+  };
+}
+
+function buildSourceInstantFromTimezoneWallTime(dateStr: string, timeStr: string, sourceTz: string): Date | null {
+  if (!dateStr || !timeStr || !sourceTz) return null;
+
+  const dateMatch = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = timeStr.match(/^(\d{2}):(\d{2})$/);
+  if (!dateMatch || !timeMatch) return null;
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  if ([year, month, day, hour, minute].some(Number.isNaN)) return null;
+
+  let guess = new Date(Date.UTC(year, month - 1, day, hour, minute, 0));
+  for (let i = 0; i < 4; i += 1) {
+    const seen = getDatePartsInTimezone(guess, sourceTz);
+    const desiredUtcMinutes = Date.UTC(year, month - 1, day, hour, minute, 0) / 60000;
+    const seenUtcMinutes = Date.UTC(seen.year, seen.month - 1, seen.day, seen.hour, seen.minute, 0) / 60000;
+    const delta = desiredUtcMinutes - seenUtcMinutes;
+    if (delta === 0) break;
+    guess = new Date(guess.getTime() + delta * 60000);
+  }
+
+  return guess;
+}
+
 function getSupportStatus(date: Date): "within" | "boundary" | "outside" {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", hour: "numeric", minute: "numeric", hour12: false }).formatToParts(date);
   const h = parseInt(parts.find(p => p.type === "hour")?.value ?? "0");
@@ -813,7 +862,15 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
   const [helperTab] = useState<string>("lookup");
   const [fromTimezone, setFromTimezone] = useState<string>("Etc/GMT");
   const [toTimezone, setToTimezone] = useState<string>("America/Chicago");
+  const [converterDate, setConverterDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [converterTime, setConverterTime] = useState<string>(() => {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  });
   const [converterError, setConverterError] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState<number>(Date.now());
   const [location, setLocation] = useState("");
   const [result, setResult] = useState<ConversionResult | null>(null);
   const [resolvedRef, setResolvedRef] = useState<ResolveResult | null>(null);
@@ -836,6 +893,11 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
   useEffect(() => () => {
     if (tickRef.current) clearInterval(tickRef.current);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(id);
   }, []);
 
   const runFor = useCallback((loc: string) => {
@@ -876,15 +938,12 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
   const normalizedFromTimezone = normalizeTimezoneInput(fromTimezone);
   const normalizedToTimezone = normalizeTimezoneInput(toTimezone);
 
-  const converterResult = useMemo(() => {
-    if (!normalizedFromTimezone || !normalizedToTimezone) {
-      return null;
-    }
+  const converterCurrentResult = useMemo(() => {
+    if (!normalizedFromTimezone || !normalizedToTimezone) return null;
     try {
-      const now = new Date();
+      const now = new Date(nowTick);
       Intl.DateTimeFormat("en-US", { timeZone: normalizedFromTimezone }).format(now);
       Intl.DateTimeFormat("en-US", { timeZone: normalizedToTimezone }).format(now);
-
       return {
         source: formatConverterDateTime(now, normalizedFromTimezone),
         target: formatConverterDateTime(now, normalizedToTimezone),
@@ -894,19 +953,41 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
     } catch {
       return null;
     }
-  }, [normalizedFromTimezone, normalizedToTimezone]);
+  }, [normalizedFromTimezone, normalizedToTimezone, nowTick]);
+
+  const converterSpecificResult = useMemo(() => {
+    if (!normalizedFromTimezone || !normalizedToTimezone) return null;
+    try {
+      const sourceInstant = buildSourceInstantFromTimezoneWallTime(converterDate, converterTime, normalizedFromTimezone);
+      if (!sourceInstant) return null;
+      Intl.DateTimeFormat("en-US", { timeZone: normalizedFromTimezone }).format(sourceInstant);
+      Intl.DateTimeFormat("en-US", { timeZone: normalizedToTimezone }).format(sourceInstant);
+      return {
+        source: formatConverterDateTime(sourceInstant, normalizedFromTimezone),
+        target: formatConverterDateTime(sourceInstant, normalizedToTimezone),
+        sourceAbbr: getTzAbbr(sourceInstant, normalizedFromTimezone),
+        targetAbbr: getTzAbbr(sourceInstant, normalizedToTimezone),
+      };
+    } catch {
+      return null;
+    }
+  }, [normalizedFromTimezone, normalizedToTimezone, converterDate, converterTime]);
 
   useEffect(() => {
     if (!normalizedFromTimezone || !normalizedToTimezone) {
       setConverterError("Choose both a source and target timezone.");
       return;
     }
-    if (!converterResult) {
+    if (!converterCurrentResult) {
       setConverterError("Could not convert that timezone pair. Try selecting valid timezones.");
       return;
     }
+    if (!converterSpecificResult) {
+      setConverterError("Enter a valid source date/time to convert.");
+      return;
+    }
     setConverterError(null);
-  }, [converterResult, normalizedFromTimezone, normalizedToTimezone]);
+  }, [converterCurrentResult, converterSpecificResult, normalizedFromTimezone, normalizedToTimezone]);
 
   // Build flat suggestion list from all known data
   const suggestions = useMemo(() => {
@@ -1073,6 +1154,20 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
             </Group>
 
             <Group align="end" wrap="wrap">
+              <TextInput
+                label="Source date"
+                type="date"
+                value={converterDate}
+                onChange={(event) => setConverterDate(event.currentTarget.value)}
+                style={{ minWidth: 170 }}
+              />
+              <TextInput
+                label="Source time"
+                type="time"
+                value={converterTime}
+                onChange={(event: React.ChangeEvent<HTMLInputElement>) => setConverterTime(event.currentTarget.value)}
+                style={{ minWidth: 140 }}
+              />
               <Select
                 label="From"
                 searchable
@@ -1118,23 +1213,51 @@ export function TimezoneHelperWidget(_props: { onCollapse?: () => void }) {
               <Alert color="yellow" variant="light" radius="md" icon={<IconAlertTriangle size={14} />}>
                 <Text size="sm">{converterError}</Text>
               </Alert>
-            ) : converterResult ? (
-              <Card withBorder radius="md" p="md">
-                <Group justify="space-between" align="stretch" wrap="wrap" gap="md">
-                  <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
-                    <Text size="xs" fw={700} c="dimmed" tt="uppercase">Source time</Text>
-                    <Text fw={800} size="xl" ff="monospace">{converterResult.source}</Text>
-                    <Text size="xs" c="dimmed">{normalizedFromTimezone}{converterResult.sourceAbbr ? ` · ${converterResult.sourceAbbr}` : ""}</Text>
-                  </Stack>
-                  <Divider orientation="vertical" visibleFrom="sm" />
-                  <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
-                    <Text size="xs" fw={700} c="dimmed" tt="uppercase">Converted time</Text>
-                    <Text fw={800} size="xl" ff="monospace">{converterResult.target}</Text>
-                    <Text size="xs" c="dimmed">{normalizedToTimezone}{converterResult.targetAbbr ? ` · ${converterResult.targetAbbr}` : ""}</Text>
-                  </Stack>
-                </Group>
-              </Card>
-            ) : null}
+            ) : (
+              <Stack gap="sm">
+                {converterCurrentResult && (
+                  <Card withBorder radius="md" p="md">
+                    <Stack gap="xs">
+                      <Text size="xs" fw={700} c="dimmed" tt="uppercase">Current time conversion (live)</Text>
+                      <Group justify="space-between" align="stretch" wrap="wrap" gap="md">
+                        <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                          <Text size="xs" fw={700} c="dimmed" tt="uppercase">From</Text>
+                          <Text fw={800} size="xl" ff="monospace">{converterCurrentResult.source}</Text>
+                          <Text size="xs" c="dimmed">{normalizedFromTimezone}{converterCurrentResult.sourceAbbr ? ` · ${converterCurrentResult.sourceAbbr}` : ""}</Text>
+                        </Stack>
+                        <Divider orientation="vertical" visibleFrom="sm" />
+                        <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                          <Text size="xs" fw={700} c="dimmed" tt="uppercase">To</Text>
+                          <Text fw={800} size="xl" ff="monospace">{converterCurrentResult.target}</Text>
+                          <Text size="xs" c="dimmed">{normalizedToTimezone}{converterCurrentResult.targetAbbr ? ` · ${converterCurrentResult.targetAbbr}` : ""}</Text>
+                        </Stack>
+                      </Group>
+                    </Stack>
+                  </Card>
+                )}
+
+                {converterSpecificResult && (
+                  <Card withBorder radius="md" p="md">
+                    <Stack gap="xs">
+                      <Text size="xs" fw={700} c="dimmed" tt="uppercase">Specific source time conversion</Text>
+                      <Group justify="space-between" align="stretch" wrap="wrap" gap="md">
+                        <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                          <Text size="xs" fw={700} c="dimmed" tt="uppercase">From</Text>
+                          <Text fw={800} size="xl" ff="monospace">{converterSpecificResult.source}</Text>
+                          <Text size="xs" c="dimmed">{normalizedFromTimezone}{converterSpecificResult.sourceAbbr ? ` · ${converterSpecificResult.sourceAbbr}` : ""}</Text>
+                        </Stack>
+                        <Divider orientation="vertical" visibleFrom="sm" />
+                        <Stack gap={4} style={{ flex: 1, minWidth: 240 }}>
+                          <Text size="xs" fw={700} c="dimmed" tt="uppercase">To</Text>
+                          <Text fw={800} size="xl" ff="monospace">{converterSpecificResult.target}</Text>
+                          <Text size="xs" c="dimmed">{normalizedToTimezone}{converterSpecificResult.targetAbbr ? ` · ${converterSpecificResult.targetAbbr}` : ""}</Text>
+                        </Stack>
+                      </Group>
+                    </Stack>
+                  </Card>
+                )}
+              </Stack>
+            )}
           </Stack>
         </Card>
 

@@ -114,7 +114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const apiKey = process.env.AI_API_KEY;
   const platformUrl = process.env.AI_PLATFORM_URL || "https://devs.ai";
-  const model = process.env.AUDIT_MODEL || process.env.AI_AGENT_ID || "gpt-4o";
+  const model = "d5b2744f-ccc0-44cd-8db8-15ed75fd652a";
 
   if (!apiKey) return res.status(500).json({ error: "AI_API_KEY not configured" });
 

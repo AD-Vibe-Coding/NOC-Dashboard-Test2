@@ -1,47 +1,53 @@
-import { Badge, Box, Group, Stack, Text, Title } from "@mantine/core";
-import { IconSchool } from "@tabler/icons-react";
+import { Badge, Group, Stack, Text, ThemeIcon, Title } from "@mantine/core";
+import { IconSchool, IconTargetArrow } from "@tabler/icons-react";
 import { WidgetTile } from "../WidgetTile";
-import { useEffect, useState } from "react";
-import { useTrainingNotifications } from "../../lib/training-notifications";
+import { useEffect, useMemo, useState } from "react";
+import { useIdentity } from "../../lib/identity";
 
-type TrainingRequest = { id: number; status: string };
-type UpcomingTraining = { id: number };
+type UpcomingTraining = { id: number; title: string; audience: string };
+type TrainingCompletion = { id: number; training_id: number; agent_name: string; status: "not_started" | "in_progress" | "completed" };
 
 export function TrainingUpdatesTile({ onExpand }: { onExpand: () => void }) {
-  const [requests, setRequests] = useState<TrainingRequest[]>([]);
+  const { identity } = useIdentity();
   const [trainings, setTrainings] = useState<UpcomingTraining[]>([]);
+  const [completions, setCompletions] = useState<TrainingCompletion[]>([]);
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/training_requests").then((r) => r.json()).catch(() => ({ requests: [] })),
       fetch("/api/upcoming_trainings").then((r) => r.json()).catch(() => ({ trainings: [] })),
+      fetch("/api/training_completions").then((r) => r.json()).catch(() => ({ completions: [] })),
     ]).then(([a, b]) => {
-      setRequests(a.requests ?? []);
-      setTrainings(b.trainings ?? []);
+      setTrainings(a.trainings ?? []);
+      setCompletions(b.completions ?? []);
     });
   }, []);
 
-  const requested = requests.filter((r) => r.status === "requested").length;
-  const submitted = requests.filter((r) => r.status === "submitted").length;
-  const { pendingCount: notificationCount } = useTrainingNotifications();
+  const myRows = useMemo(() => {
+    if (!identity?.name) return [] as TrainingCompletion[];
+    return completions.filter((c) => c.agent_name === identity.name);
+  }, [completions, identity?.name]);
+
+  const completed = myRows.filter((r) => r.status === "completed").length;
+  const inProgress = myRows.filter((r) => r.status === "in_progress").length;
 
   return (
     <WidgetTile
-      title="Training Updates"
-      description="Requests, reviews, and upcoming trainings"
+      title="Training Hub"
+      description="Certifications assigned, completion tracking, target dates"
       icon={IconSchool}
       iconColor="blue"
       onExpand={onExpand}
-      status={{ label: notificationCount > 0 ? `${notificationCount} new` : `${requested} pending`, color: notificationCount > 0 ? "red" : requested > 0 ? "yellow" : "green" }}
+      status={{ label: `${trainings.length} active`, color: "blue" }}
     >
       <Stack gap="sm" style={{ height: "100%" }}>
-        <Group justify="space-between" align="flex-end" wrap="nowrap">
-          <Box>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={600}>Training requests</Text>
-            <Title order={1} c="blue" style={{ lineHeight: 1 }} mt={2}>{requests.length}</Title>
-            <Text size="xs" c="dimmed" mt={2}>{trainings.length} upcoming sessions</Text>
-          </Box>
-          <Badge size="sm" variant="light" color="blue">{submitted} submitted</Badge>
+        <Group gap="sm" wrap="nowrap">
+          <ThemeIcon radius="md" variant="light" color="blue"><IconTargetArrow size={16} /></ThemeIcon>
+          <div style={{ flex: 1 }}>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Progress snapshot</Text>
+            <Title order={3} c="blue.4" style={{ lineHeight: 1.1 }}>{completed}</Title>
+            <Text size="xs" c="dimmed">completed · {inProgress} in progress</Text>
+          </div>
+          <Badge variant="light" color={completed > 0 ? "green" : "gray"}>{completed} done</Badge>
         </Group>
       </Stack>
     </WidgetTile>

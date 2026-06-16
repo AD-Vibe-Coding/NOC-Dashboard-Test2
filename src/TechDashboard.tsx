@@ -43,7 +43,6 @@ import {
   IconNotes,
   IconReportAnalytics,
   IconSearch,
-  IconSchool,
   IconStar,
   IconBook,
 
@@ -134,7 +133,6 @@ const NAV_SECTIONS: NavSection[] = [
     items: [
       { id: "wfh", label: "WFH Request", icon: IconHome, color: "appdirect", description: "Apply for work-from-home" },
       { id: "training-updates", label: "Training Updates", icon: IconFileText, color: "blue", description: "Submit and track training requests" },
-      { id: "training-progress", label: "Training Progress", icon: IconSchool, color: "grape", description: "Track training completion" },
     ],
   },
   {

@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Accordion,
   ActionIcon,
   Alert,
   Badge,
@@ -51,12 +50,13 @@ import {
   IconStarFilled,
   IconTrash,
   IconUser,
-  IconUsersGroup,
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
 import { LOCKED_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
 import { useIdentity } from "../../lib/identity";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
+import { getDefaultAgentId } from "../../lib/devs-ai/agents";
+import { AiAgentSelector } from "../../components/AiAgentSelector";
 import { postSlackMessage } from "../../lib/slack";
 import { db } from "../../db";
 import { defaultRoleFor } from "../../lib/roles";
@@ -568,12 +568,13 @@ const TaskRow = memo(function TaskRow({
 export function MeetingNotesWidget() {
   const { identity } = useIdentity();
   const isManager = identity?.role === "manager";
-  const { complete, result: aiResult, isLoading: aiLoading, error: aiError } = useCompletion();
-  const { complete: completePattern } = useCompletion();
-  const { complete: completeWeekly } = useCompletion();
-  const { complete: completePrep } = useCompletion();
-  const { complete: completeImportance } = useCompletion();
-  const { complete: completeDuplicateReview } = useCompletion();
+  const [selectedAgentId, setSelectedAgentId] = useState<string>(getDefaultAgentId());
+  const { complete, result: aiResult, isLoading: aiLoading, error: aiError } = useCompletion({ model: selectedAgentId });
+  const { complete: completePattern } = useCompletion({ model: selectedAgentId });
+  const { complete: completeWeekly } = useCompletion({ model: selectedAgentId });
+  const { complete: completePrep } = useCompletion({ model: selectedAgentId });
+  const { complete: completeImportance } = useCompletion({ model: selectedAgentId });
+  const { complete: completeDuplicateReview } = useCompletion({ model: selectedAgentId });
 
   const hasWarmCache = meetingNotesCache.ownerName === (identity?.name ?? null) && (
     meetingNotesCache.notes.length > 0 ||
@@ -602,7 +603,8 @@ export function MeetingNotesWidget() {
   const [renameAreaValue, setRenameAreaValue] = useState<string>("");
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
-  const [accordionValues, setAccordionValues] = useState<string[]>(["favorites", "individual", "management", "other"]);
+  const [workspaceView, setWorkspaceView] = useState<NotebookMode>("individual");
+  const setAccordionValues = (_updater: (prev: string[]) => string[]) => {};
   const [managerView, setManagerView] = useState<"notebook" | "actions">("notebook");
   const [allNotesModalOpen, setAllNotesModalOpen] = useState(false);
   const [noteGroupFilter, setNoteGroupFilter] = useState<string>("all");
@@ -698,12 +700,7 @@ export function MeetingNotesWidget() {
     setContextMenu({ type: "section", x: event.clientX, y: event.clientY, sectionKey: section.key });
   }
 
-  function openAreaContextMenu(event: React.MouseEvent, areaName: string) {
-    event.preventDefault();
-    event.stopPropagation();
-    setContextMenu({ type: "area", x: event.clientX, y: event.clientY, areaName });
-  }
-
+  
   const notes = useMemo(() => rawNotes.map(normalizeNote), [rawNotes]);
 
   async function load() {
@@ -861,7 +858,9 @@ export function MeetingNotesWidget() {
     const hiddenKeys = new Set(
       preferences
         .filter((pref) => pref.owner_name === identity?.name && pref.section_key.startsWith("hidden:"))
-        .map((pref) => pref.section_key.slice("hidden:".length)),
+        .map((pref) => pref.section_key.slice("hidden:".length))
+        // Never hide locked employee folders — they should always be visible.
+        .filter((key) => !key.startsWith("individual:")),
     );
 
     const ensureSection = (notebook_group: NotebookMode, label: string) => {
@@ -918,80 +917,6 @@ export function MeetingNotesWidget() {
       .sort((a, b) => a.localeCompare(b)),
     [preferences, identity?.name],
   );
-  const defaultOtherSections = useMemo(
-    () => otherSections.filter((section) => !customAreaNames.some((area) => section.label === area || section.label.startsWith(`${area}${SECTION_PATH_SEPARATOR}`))),
-    [otherSections, customAreaNames],
-  );
-
-  function buildSectionTree(sections: SectionRecord[], notebook_group: NotebookMode): SectionTreeNode[] {
-    const nodeMap = new Map<string, SectionTreeNode>();
-    const roots: SectionTreeNode[] = [];
-
-    const ensureNode = (fullLabel: string) => {
-      const key = `${notebook_group}:${fullLabel}`;
-      if (!nodeMap.has(key)) {
-        const matching = sections.find((section) => section.key === key);
-        nodeMap.set(key, {
-          key,
-          label: splitSectionPath(fullLabel).slice(-1)[0] ?? fullLabel,
-          fullLabel,
-          notebook_group,
-          notes: matching?.notes ?? [],
-          favorite: matching?.favorite ?? false,
-          children: [],
-        });
-      }
-      return nodeMap.get(key)!;
-    };
-
-    sections.forEach((section) => {
-      const parts = splitSectionPath(section.label);
-      let currentPath = "";
-      let parentNode: SectionTreeNode | null = null;
-
-      parts.forEach((part, index) => {
-        currentPath = currentPath ? `${currentPath}${SECTION_PATH_SEPARATOR}${part}` : part;
-        const node = ensureNode(currentPath);
-        if (index === parts.length - 1) {
-          node.notes = section.notes;
-          node.favorite = section.favorite;
-        }
-        if (parentNode) {
-          if (!parentNode.children.some((child) => child.key === node.key)) parentNode.children.push(node);
-        } else if (!roots.some((root) => root.key === node.key)) {
-          roots.push(node);
-        }
-        parentNode = node;
-      });
-    });
-
-    const sortNodes = (nodes: SectionTreeNode[]) => {
-      nodes.sort((a, b) => a.label.localeCompare(b.label));
-      nodes.forEach((node) => sortNodes(node.children));
-      return nodes;
-    };
-
-    return sortNodes(roots);
-  }
-
-  const individualTree = useMemo(() => buildSectionTree(individualSections, "individual"), [individualSections]);
-  const managementTree = useMemo(() => buildSectionTree(managementSections, "management"), [managementSections]);
-  const otherTree = useMemo(() => buildSectionTree(defaultOtherSections, "other"), [defaultOtherSections]);
-  const customAreaTrees = useMemo(
-    () => Object.fromEntries(
-      customAreaNames.map((area) => {
-        const scopedSections = otherSections
-          .filter((section) => section.label.startsWith(`${area}${SECTION_PATH_SEPARATOR}`))
-          .map((section) => ({
-            ...section,
-            label: section.label.slice(`${area}${SECTION_PATH_SEPARATOR}`.length),
-          }));
-        return [area, buildSectionTree(scopedSections, "other")];
-      }),
-    ) as Record<string, SectionTreeNode[]>,
-    [customAreaNames, otherSections],
-  );
-
   useEffect(() => {
     const firstKey = isManager
       ? (favoriteSections[0]?.key ?? individualSections[0]?.key ?? managementSections[0]?.key ?? null)
@@ -1162,15 +1087,15 @@ export function MeetingNotesWidget() {
     }, 50);
   }
 
-  async function loadGmailNotes() {
-    if (!isManager) return;
+  async function loadGmailNotes(): Promise<GmailNoteMessage[]> {
+    if (!isManager) return [] as GmailNoteMessage[];
     if (!gmailStartDate || !gmailEndDate) {
       setError("Choose both a start date and end date for the Gmail import range.");
-      return;
+      return [] as GmailNoteMessage[];
     }
     if (gmailStartDate > gmailEndDate) {
       setError("The Gmail start date must be on or before the end date.");
-      return;
+      return [] as GmailNoteMessage[];
     }
 
     gmailRequestInFlightRef.current = true;
@@ -1191,8 +1116,10 @@ export function MeetingNotesWidget() {
       if (messages.length === 0) {
         setError(`No Gemini notes were found in Gmail between ${gmailStartDate} and ${gmailEndDate}.`);
       }
+      return messages;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return [];
     } finally {
       gmailRequestInFlightRef.current = false;
       setGmailLoading(false);
@@ -1291,9 +1218,58 @@ CRITICAL RULES for action item assignment:
 Keep each bullet concise and factual. Notes:\n\n${noteText}`;
   }
 
-  async function autoOrganizeLoadedNotes() {
+  async function upsertSyncedNoteActionItems(input: {
+    noteId: number;
+    noteTitle: string;
+    sectionName: string;
+    notebookGroup: NotebookMode;
+    managerItems: string[];
+    employeeItems: string[];
+  }) {
     if (!identity?.name) return;
-    const pendingMessages = gmailMessages.filter((message) => !message.imported);
+
+    const existing = await db.personal_action_items.list({
+      filter: { note_id: input.noteId },
+      orderBy: { column: "created_at", ascending: false },
+    });
+
+    const signatures = new Set(
+      existing.map((row) => `${String(row.title ?? "").trim().toLowerCase()}::${String(row.owner_name ?? row.employee_name ?? "").trim().toLowerCase()}`),
+    );
+
+    const rows: any[] = [];
+    const pushIfMissing = (title: string, owner: string) => {
+      const t = title.trim();
+      if (!t) return;
+      const key = `${t.toLowerCase()}::${owner.trim().toLowerCase()}`;
+      if (signatures.has(key)) return;
+      signatures.add(key);
+      rows.push({
+        employee_name: owner,
+        owner_name: owner,
+        note_id: input.noteId,
+        title: t,
+        details: `Auto-created from synced meeting note: ${input.noteTitle}`,
+        status: "open",
+        priority: "medium",
+        progress_percent: 0,
+        due_date: null,
+        section_name: input.sectionName,
+        notebook_group: input.notebookGroup,
+        created_by: identity.name,
+      });
+    };
+
+    input.managerItems.forEach((item) => pushIfMissing(item, identity.name));
+    const employeeOwner = input.notebookGroup === "individual" ? input.sectionName : identity.name;
+    input.employeeItems.forEach((item) => pushIfMissing(item, employeeOwner));
+
+    if (rows.length) await db.personal_action_items.insert(rows);
+  }
+
+  async function autoOrganizeLoadedNotes(messagesToProcess?: GmailNoteMessage[]) {
+    if (!identity?.name) return;
+    const pendingMessages = (messagesToProcess ?? gmailMessages).filter((message) => !message.imported);
     if (pendingMessages.length === 0) {
       setError("There are no new Gmail notes to auto-organize in this date range.");
       return;
@@ -1314,7 +1290,7 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
             ? `${OTHER_PREFIX}${classification.sectionName}`
             : classification.sectionName;
 
-        await db.one_on_one_notes.insert({
+        const inserted = await db.one_on_one_notes.insert({
           manager_name: identity.name,
           employee_name: employeeValue,
           title: parsed.title || classification.title,
@@ -1338,6 +1314,18 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
           updated_at: new Date().toISOString(),
           shared_at: new Date().toISOString(),
         });
+
+        const created = inserted[0];
+        if (created?.id) {
+          await upsertSyncedNoteActionItems({
+            noteId: created.id,
+            noteTitle: created.title ?? classification.title,
+            sectionName: classification.sectionName,
+            notebookGroup: classification.mode,
+            managerItems: parsed.managerActionItems ?? [],
+            employeeItems: parsed.employeeActionItems ?? [],
+          });
+        }
       }
 
       await load();
@@ -1347,6 +1335,12 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
     } finally {
       setSaving(false);
     }
+  }
+
+  async function syncGmailNotesOneClick() {
+    const loaded = await loadGmailNotes();
+    if (!loaded.length) return;
+    await autoOrganizeLoadedNotes(loaded);
   }
 
   async function saveNote(status: "draft" | "shared") {
@@ -1563,7 +1557,7 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
         owner_name: identity.name,
         note_id: task.note_id ?? null,
         title: myDayTitle,
-        details: task.details ? `${task.details} · Added from Assigned to me` : "Added from Assigned to me",
+        details: task.details ? `${task.details} · Added from Assigned to me` : "Added from Assigned to me", // kept for backward compatibility
         status: task.status === "done" ? "open" : task.status,
         priority: task.priority ?? "medium",
         progress_percent: task.status === "done" ? 0 : task.progress_percent ?? 0,
@@ -2824,6 +2818,19 @@ Tasks:\n${taskLines}`;
       ? `${activeSection.notebook_group === "management" ? "Management" : activeSection.notebook_group === "other" ? "Others" : "Individual"} section · ${activeSection.label}`
       : "Select a section";
 
+  const workspaceSections: SectionRecord[] = sectionRecords
+    .filter((section) => section.notebook_group === workspaceView)
+    .slice()
+    .sort((a, b) => {
+      if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
+      const aRecent = a.notes.map((n) => new Date(n.updated_at ?? n.meeting_date ?? n.created_at ?? 0).getTime()).sort((x, y) => y - x)[0] ?? 0;
+      const bRecent = b.notes.map((n) => new Date(n.updated_at ?? n.meeting_date ?? n.created_at ?? 0).getTime()).sort((x, y) => y - x)[0] ?? 0;
+      if (aRecent !== bRecent) return bRecent - aRecent;
+      return a.label.localeCompare(b.label);
+    });
+
+  void renderSectionTree;
+
   return (
     <WidgetFrame
       title="Meeting Notes"
@@ -2842,6 +2849,8 @@ Tasks:\n${taskLines}`;
       <Stack gap="md">
         {error && <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">{error}</Alert>}
         {aiError && <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light">AI assistant: {aiError}</Alert>}
+
+        <AiAgentSelector value={selectedAgentId} onChange={setSelectedAgentId} />
 
         {isManager ? (
           <>
@@ -2889,108 +2898,74 @@ Tasks:\n${taskLines}`;
                       size="sm"
                     />
 
-                    <Accordion multiple value={accordionValues} onChange={setAccordionValues} chevronPosition="right" variant="separated" radius="md">
-                      {favoriteSections.length > 0 && (
-                        <Accordion.Item value="favorites">
-                          <Accordion.Control icon={<IconStar size={14} />}><Text size="sm">Pinned</Text></Accordion.Control>
-                          <Accordion.Panel>
-                            <Stack gap="xs">
-                              {favoriteSections.map((section) => (
-                                <Card key={section.key} withBorder radius="md" p="xs" style={{ cursor: "pointer", background: activeSectionKey === section.key ? "rgba(0, 96, 128, 0.12)" : undefined, borderColor: activeSectionKey === section.key ? "rgba(0, 128, 166, 0.45)" : undefined }} onClick={() => setActiveSectionKey(section.key)}>
-                                  <Group justify="space-between" wrap="nowrap">
-                                    <Group gap="xs" wrap="nowrap">
-                                      <ThemeIcon size={22} radius="sm" variant="light" color="yellow"><IconStarFilled size={11} /></ThemeIcon>
-                                      <div>
-                                        <Text fw={600} size="xs">{section.label}</Text>
-                                        <Text size="xs" c="dimmed">{section.notes.length} pages</Text>
-                                      </div>
+                    <SegmentedControl
+                      value={workspaceView}
+                      onChange={(value) => setWorkspaceView(value as NotebookMode)}
+                      data={[
+                        { value: "individual", label: `1:1 (${individualSections.length})` },
+                        { value: "management", label: `Management (${managementSections.length})` },
+                        { value: "other", label: `Other (${otherSections.length})` },
+                      ]}
+                      fullWidth
+                      size="xs"
+                    />
+
+                    <Card withBorder radius="md" p="xs" bg="rgba(255,255,255,0.01)">
+                      <Stack gap="xs">
+                        <Group justify="space-between" align="center">
+                          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Folders</Text>
+                          <Badge size="xs" variant="light">{workspaceSections.length}</Badge>
+                        </Group>
+                        <ScrollArea.Autosize mah={420} offsetScrollbars>
+                          <Stack gap="xs">
+                            {workspaceSections.length === 0 ? (
+                              <Text size="xs" c="dimmed" ta="center" py="sm">No folders yet in this workspace.</Text>
+                            ) : workspaceSections.map((section) => {
+                              const latestTs = section.notes
+                                .map((n) => new Date(n.updated_at ?? n.meeting_date ?? n.created_at ?? 0).getTime())
+                                .sort((a, b) => b - a)[0];
+                              const latestLabel = latestTs ? new Date(latestTs).toLocaleDateString([], { month: "short", day: "numeric" }) : "No updates";
+                              const active = activeSectionKey === section.key;
+                              return (
+                                <Card
+                                  key={section.key}
+                                  withBorder
+                                  radius="md"
+                                  p="xs"
+                                  onClick={() => setActiveSectionKey(section.key)}
+                                  style={{
+                                    cursor: "pointer",
+                                    background: active ? "rgba(0, 96, 128, 0.12)" : undefined,
+                                    borderColor: active ? "rgba(0, 128, 166, 0.45)" : undefined,
+                                  }}
+                                >
+                                  <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+                                    <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+                                      <ThemeIcon size={22} radius="sm" variant="light" color={section.notebook_group === "management" ? "blue" : section.notebook_group === "other" ? "orange" : "grape"}>
+                                        <IconFolders size={12} />
+                                      </ThemeIcon>
+                                      <Stack gap={1} style={{ minWidth: 0 }}>
+                                        <Text fw={600} size="xs" truncate>{section.label}</Text>
+                                        <Group gap={6}>
+                                          <Text size="xs" c="dimmed">{section.notes.length} pages</Text>
+                                          <Text size="xs" c="dimmed">• Updated {latestLabel}</Text>
+                                        </Group>
+                                      </Stack>
                                     </Group>
-                                    <ActionIcon size="xs" variant="subtle" color="yellow" onClick={(e) => { e.stopPropagation(); void toggleFavoriteSection(section); }}>
-                                      <IconStarFilled size={11} />
+                                    <ActionIcon size="xs" variant="subtle" color={section.favorite ? "yellow" : "gray"} onClick={(e) => { e.stopPropagation(); void toggleFavoriteSection(section); }}>
+                                      {section.favorite ? <IconStarFilled size={12} /> : <IconStar size={12} />}
                                     </ActionIcon>
                                   </Group>
                                 </Card>
-                              ))}
-                            </Stack>
-                          </Accordion.Panel>
-                        </Accordion.Item>
-                      )}
-
-                      <Accordion.Item value="individual">
-                        <Accordion.Control icon={<IconUser size={14} />}>
-                          <Group justify="space-between" wrap="nowrap" pr="xs">
-                            <Text size="sm">1:1 sections</Text>
-                            <Badge size="xs" variant="light" color="grape">{individualTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
-                          </Group>
-                        </Accordion.Control>
-                        <Accordion.Panel>
-                          <Stack gap="xs">
-                            <ScrollArea.Autosize mah={320} offsetScrollbars>
-                              <Stack gap="xs">{renderSectionTree(individualTree)}</Stack>
-                            </ScrollArea.Autosize>
-                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("individual"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
+                              );
+                            })}
                           </Stack>
-                        </Accordion.Panel>
-                      </Accordion.Item>
-
-                      <Accordion.Item value="management">
-                        <Accordion.Control icon={<IconUsersGroup size={14} />}>
-                          <Group justify="space-between" wrap="nowrap" pr="xs">
-                            <Text size="sm">Management</Text>
-                            <Badge size="xs" variant="light" color="blue">{managementTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
-                          </Group>
-                        </Accordion.Control>
-                        <Accordion.Panel>
-                          <Stack gap="xs">
-                            <ScrollArea.Autosize mah={320} offsetScrollbars>
-                              <Stack gap="xs">{renderSectionTree(managementTree)}</Stack>
-                            </ScrollArea.Autosize>
-                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("management"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
-                          </Stack>
-                        </Accordion.Panel>
-                      </Accordion.Item>
-
-                      <Accordion.Item value="other">
-                        <Accordion.Control icon={<IconBook size={14} />}>
-                          <Group justify="space-between" wrap="nowrap" pr="xs">
-                            <Text size="sm">Other</Text>
-                            <Badge size="xs" variant="light" color="orange">{otherTree.reduce((acc, n) => acc + 1 + n.children.length, 0)}</Badge>
-                          </Group>
-                        </Accordion.Control>
-                        <Accordion.Panel>
-                          <Stack gap="xs">
-                            <ScrollArea.Autosize mah={260} offsetScrollbars>
-                              <Stack gap="xs">{renderSectionTree(otherTree)}</Stack>
-                            </ScrollArea.Autosize>
-                            <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>Add folder</Button>
-                          </Stack>
-                        </Accordion.Panel>
-                      </Accordion.Item>
-
-                      {customAreaNames.map((area) => (
-                        <Accordion.Item key={area} value={area}>
-                          <Accordion.Control icon={<IconBook size={16} />} onContextMenu={(event) => openAreaContextMenu(event, area)}>{area}</Accordion.Control>
-                          <Accordion.Panel>
-                            <Stack gap="sm">
-                              <Group justify="space-between">
-                                <Text size="xs" tt="uppercase" fw={700} c="dimmed">Notebook area</Text>
-                                <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={12} />} onClick={() => openCreateSectionModal("other", area)}>Add section</Button>
-                              </Group>
-                              <Divider />
-                              <ScrollArea.Autosize mah={260} offsetScrollbars>
-                                <Stack gap="xs">
-                                  {(customAreaTrees[area] ?? []).length === 0 ? (
-                                    <Card withBorder radius="lg" p="md" bg="transparent">
-                                      <Text size="sm" c="dimmed">No sections in this area yet.</Text>
-                                    </Card>
-                                  ) : renderSectionTree(customAreaTrees[area] ?? [])}
-                                </Stack>
-                              </ScrollArea.Autosize>
-                            </Stack>
-                          </Accordion.Panel>
-                        </Accordion.Item>
-                      ))}
-                    </Accordion>
+                        </ScrollArea.Autosize>
+                        <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup(workspaceView); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
+                          Add folder
+                        </Button>
+                      </Stack>
+                    </Card>
                   </Stack>
                 </Card>
 
@@ -3744,6 +3719,7 @@ Tasks:\n${taskLines}`;
                       <Text size="xs" c="dimmed">Personal follow-ups you created for yourself</Text>
                     </Stack>
                     <Badge variant="light" color="grape">{myOwnTasks.length}</Badge>
+                    <Badge variant="light" color="gray">{tasks.length} total meeting tasks</Badge>
                   </Group>
                   <Card withBorder radius="lg" p="md">
                     <Stack gap="sm">
@@ -4293,23 +4269,23 @@ Tasks:\n${taskLines}`;
                   <Group justify="space-between" align="flex-end" wrap="wrap">
                     <Stack gap={2}>
                       <Text fw={700}>Gmail Gemini notes</Text>
-                      <Text size="sm" c="dimmed">Gmail label source: <strong>label:gemini-notes</strong>. Change the date range below, then load matching notes.</Text>
+                      <Text size="sm" c="dimmed">Gmail label source: <strong>label:gemini-notes</strong>. Pick a date range and click one button to sync everything.</Text>
                     </Stack>
                     <Group gap="xs">
                       <Badge variant="light" color="grape">{gmailMessages.length} loaded</Badge>
                       <Button
                         size="xs"
-                        variant="light"
                         color="grape"
                         leftSection={<IconSparkles size={14} />}
-                        onClick={() => void autoOrganizeLoadedNotes()}
-                        loading={saving || aiLoading}
-                        disabled={gmailMessages.filter((message) => !message.imported).length === 0}
+                        onClick={() => void syncGmailNotesOneClick()}
+                        loading={gmailLoading || saving || aiLoading}
                       >
-                        Auto-organize all
+                        Sync Gmail notes (one click)
                       </Button>
                     </Group>
                   </Group>
+
+                  <Text size="xs" c="dimmed">One click performs: pull Gmail notes → generate summary → route to sections/pages → add action items.</Text>
 
                   <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
                     <TextInput

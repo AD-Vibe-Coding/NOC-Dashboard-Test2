@@ -10,6 +10,24 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        const resetKey = "__preview_app_reset_v1";
+        try {
+          if (!sessionStorage.getItem(resetKey)) {
+            localStorage.clear();
+            sessionStorage.clear();
+            sessionStorage.setItem(resetKey, "done");
+            if ("caches" in window) {
+              caches.keys().then((keys) => Promise.all(keys.map((key) => caches.delete(key)))).catch(() => {});
+            }
+            if ("serviceWorker" in navigator) {
+              navigator.serviceWorker.getRegistrations().then((regs) => Promise.all(regs.map((reg) => reg.unregister()))).catch(() => {});
+            }
+          }
+        } catch {}
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script src="/devs-inspect.js"></script>
   </body>

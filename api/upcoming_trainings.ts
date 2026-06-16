@@ -14,13 +14,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "POST") {
-      if (!requireManager(req, res)) return;
-      const session = getSession(req)!;
+      const session = getSession(req);
+      if (!session) return res.status(401).json({ error: "Not authenticated" });
+
       const body = (req.body ?? {}) as Record<string, unknown>;
       const title = String(body.title ?? "").trim();
       const description = String(body.description ?? "").trim();
       const training_date = String(body.training_date ?? "").trim();
       const audience = String(body.audience ?? "all").trim();
+      const assignee = String(body.assignee ?? "").trim() || null;
+      const self_start = Boolean(body.self_start);
 
       if (!title || !description || !training_date) {
         return res.status(400).json({ error: "title, description, and training_date are required" });
@@ -29,9 +32,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: "training_date must be YYYY-MM-DD" });
       }
 
+      // Managers can assign to all/role/user.
+      // Non-managers can only self-start for themselves.
+      let effectiveAudience = audience;
+      if (self_start) {
+        if (session.role === "manager") {
+          return res.status(400).json({ error: "Managers should use assignment mode" });
+        }
+        effectiveAudience = `user:${session.name}`;
+      } else {
+        if (!requireManager(req, res)) return;
+        effectiveAudience = assignee ? `user:${assignee}` : audience;
+      }
+
       const { data, error } = await supabaseAdmin
         .from("upcoming_trainings")
-        .insert({ title, description, training_date, audience, posted_by: session.name })
+        .insert({ title, description, training_date, audience: effectiveAudience, posted_by: session.name })
         .select()
         .single();
 
