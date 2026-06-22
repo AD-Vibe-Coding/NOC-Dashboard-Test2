@@ -47,7 +47,7 @@ import { db } from "../../db";
 import { postSlackMessage } from "../../lib/slack";
 import { formatElapsedIso } from "../../lib/format";
 import { BreakScheduleModal } from "./BreakScheduleModal";
-import { defaultRoleFor } from "../../lib/roles";
+import { defaultRoleFor, ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 
 export { ZoomQueueTile } from "./Tile";
 
@@ -275,7 +275,11 @@ export function ZoomQueueWidget() {
   const { active: activeBreaks, history: breakHistory, refresh: refreshBreaks } = useBreakData();
   const { data: rosterData, isInShift, isRosterListed } = useRosterShift();
   const { identity } = useIdentity();
-  const isManager = identity?.role === "manager";
+  const normalizedEmail = identity?.email?.toLowerCase().trim() ?? "";
+  const isManager =
+    identity?.role === "manager" ||
+    (!!identity?.name && ROLE_BY_NAME[identity.name.trim()] === "manager") ||
+    (!!normalizedEmail && ROSTER_BY_EMAIL[normalizedEmail]?.role === "manager");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [statusType, setStatusType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
@@ -295,6 +299,13 @@ export function ZoomQueueWidget() {
   });
 
   const effectiveName = (isManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")).trim();
+  const effectiveNormalizedEmail = effectiveName
+    ? `${effectiveName.toLowerCase().replace(/\s+/g, ".")}@vcom.local`
+    : "";
+  const effectiveIsManager =
+    (!!effectiveName && ROLE_BY_NAME[effectiveName] === "manager") ||
+    (!!effectiveNormalizedEmail && ROSTER_BY_EMAIL[effectiveNormalizedEmail]?.role === "manager") ||
+    isManager;
 
   function showToast(t: Omit<Toast, "id">) {
     const id = Date.now() + Math.random();
@@ -399,9 +410,12 @@ export function ZoomQueueWidget() {
       return;
     }
 
-    // Lunch break limit — max 2 non-managers on Lunch at a time
-    if (statusType === "Lunch") {
-      const lunchCount = activeBreaks.filter((b) => b.break_type === "Lunch" && defaultRoleFor(b.employee_name) !== "manager").length;
+    // Lunch break limit — max 2 non-managers on Lunch at a time.
+    // Managers are excluded from this rule entirely.
+    if (!effectiveIsManager && statusType === "Lunch") {
+      const lunchCount = activeBreaks.filter(
+        (b) => b.break_type === "Lunch" && defaultRoleFor(b.employee_name) !== "manager",
+      ).length;
       if (lunchCount >= 2) {
         showToast({
           color: "red",

@@ -4,11 +4,13 @@ import {
   IconAddressBook,
   IconChartArea,
   IconChartBar,
+  IconClockRecord,
   IconDatabase,
   IconDeviceMobileMessage,
   IconFileText,
   IconGavel,
   IconHeadset,
+  IconShieldLock,
   IconHome,
   IconMail,
   IconMailForward,
@@ -42,6 +44,8 @@ import {
   MobilityTroubleshooterTile,
 } from "./MobilityTroubleshooter";
 import { VelocloudTroubleshooterWidget, VelocloudTroubleshooterTile } from "./VelocloudTroubleshooter";
+import { FortigateTroubleshooterWidget, FortigateTroubleshooterTile } from "./FortigateTroubleshooter";
+import { VelocloudApiWidget, VelocloudApiTile } from "./VelocloudApi";
 import {
   PerformanceTrackerWidget,
   PerformanceTrackerTile,
@@ -81,6 +85,7 @@ import {
 import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
+import { AttendanceTrackerWidget, AttendanceTrackerTile } from "./AttendanceTracker";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -137,6 +142,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: LogicMonitorTile,
     Full: LogicMonitorWidget,
+  },
+  {
+    id: "velocloud-api",
+    title: "VeloCloud API",
+    description: "SD-WAN alerts, link status, and health summary",
+    icon: IconWorldPin,
+    iconColor: "cyan",
+    tileSize: "sm",
+    Tile: VelocloudApiTile,
+    Full: VelocloudApiWidget,
   },
   {
     id: "zoom-queue",
@@ -274,6 +289,17 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: ZoomCallMetricsWidget,
   },
   {
+    id: "attendance-tracker",
+    title: "Attendance & Reminders",
+    description: "Punch in/out activity and queue/break reminder counts",
+    icon: IconClockRecord,
+    iconColor: "orange",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: AttendanceTrackerTile,
+    Full: AttendanceTrackerWidget,
+  },
+  {
     id: "mobility-troubleshooter",
     title: "Mobility Troubleshooter",
     description: "AI agent for wireless + device troubleshooting",
@@ -292,6 +318,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: VelocloudTroubleshooterTile,
     Full: VelocloudTroubleshooterWidget,
+  },
+  {
+    id: "fortigate-troubleshooter",
+    title: "Fortigate Troubleshooting Agent",
+    description: "AI assistant for FortiGate troubleshooting",
+    icon: IconShieldLock,
+    iconColor: "orange",
+    tileSize: "sm",
+    Tile: FortigateTroubleshooterTile,
+    Full: FortigateTroubleshooterWidget,
   },
   {
     id: "ticket-audit",

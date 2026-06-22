@@ -530,6 +530,7 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "email-polisher",      emoji: "📝", label: "Email Polisher",    desc: "Polish customer drafts",      color: "lime" },
       { id: "noc-troubleshooter",  emoji: "🩺", label: "NOC Troubleshooter",desc: "AI network troubleshooting",   color: "cyan" },
       { id: "velocloud-troubleshooter", emoji: "🌐", label: "VeloCloud Troubleshooter", desc: "Arista SD-WAN troubleshooting", color: "cyan" },
+      { id: "fortigate-troubleshooter", emoji: "🛡️", label: "Fortigate Troubleshooting Agent", desc: "FortiGate troubleshooting", color: "orange" },
       { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",      desc: "AI-powered QA audits",        color: "pink" },
     ],
   },
@@ -539,6 +540,7 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "performance-tracker", emoji: "📊", label: "Performance",       desc: "Team metrics & audits",       color: "green" },
       { id: "wfh",                 emoji: "🏠", label: "WFH Requests",      desc: "Review & approve WFH",        color: "appdirect" },
       { id: "training-updates",    emoji: "🎓", label: "Training Hub",      desc: "Requests, sessions, progress", color: "blue" },
+      { id: "attendance-tracker",  emoji: "🕒", label: "Attendance & Reminders", desc: "Punches + reminder counts", color: "orange" },
       { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
     ],
@@ -547,6 +549,7 @@ const MANAGER_QUICK_GROUPS: Array<{
     label: "Monitoring & Operations",
     items: [
       { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",      desc: "Alerts & alert analyzer",     color: "red" },
+      { id: "velocloud-api",       emoji: "🌐", label: "VeloCloud API",     desc: "SD-WAN alerts & link status", color: "cyan" },
       { id: "zoom-queue",          emoji: "📞", label: "Team Availability", desc: "Live queue + meetings",       color: "appdirect" },
       { id: "zoom-call-metrics",   emoji: "📈", label: "Zoom Call Metrics", desc: "Queue call data",             color: "green" },
       { id: "qs-escalations",      emoji: "📋", label: "Escalations",       desc: "Carrier contacts",            color: "grape" },

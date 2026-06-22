@@ -497,8 +497,32 @@ export const training_completions = pgTable("training_completions", {
   progress_percent: integer("progress_percent").notNull().default(0), // 0..100
   target_date: text("target_date"),              // YYYY-MM-DD target date set by agent
   completed_at: text("completed_at"),            // ISO timestamp
+  approval_status: text("approval_status").notNull().default("not_required"), // not_required | pending | approved | rejected
+  approval_note: text("approval_note"),
+  approved_by: text("approved_by"),
+  approved_at: text("approved_at"),
+  evidence_link: text("evidence_link"),
+  evidence_file_url: text("evidence_file_url"),
   updated_at: text("updated_at"),                // ISO timestamp (last update)
   note: text("note"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const training_certifications = pgTable("training_certifications", {
+  id: serial("id").primaryKey(),
+  certification: text("certification").notNull(),
+  badge: text("badge").notNull(),
+  holder_name: text("holder_name").notNull(),
+  issuer: text("issuer"),
+  cert_id: text("cert_id"),
+  issue_date: text("issue_date"),
+  expires_on: text("expires_on"),
+  proof_link: text("proof_link"),
+  proof_file_url: text("proof_file_url"),
+  status: text("status").notNull().default("active"), // active | expired | renewed
+  renewed_from_id: integer("renewed_from_id"),
+  created_by: text("created_by").notNull(),
+  updated_at: text("updated_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 

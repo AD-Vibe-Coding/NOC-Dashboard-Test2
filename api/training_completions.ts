@@ -4,6 +4,11 @@ import { getSession } from "./_lib/auth-middleware.js";
 
 const VALID_STATUS = new Set(["not_started", "in_progress", "completed"]);
 
+function isMissingColumnError(message: string) {
+  const m = message.toLowerCase();
+  return m.includes("column") && (m.includes("evidence_link") || m.includes("evidence_file_url") || m.includes("approval_status"));
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = getSession(req);
@@ -32,6 +37,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const status = String(body.status ?? "").trim();
       const target_date = String(body.target_date ?? "").trim() || null;
       const note = String(body.note ?? "").trim() || null;
+      const evidence_link = String(body.evidence_link ?? "").trim() || null;
+      const evidence_file_url = String(body.evidence_file_url ?? "").trim() || null;
       const progress_percent_raw = Number(body.progress_percent ?? (status === "completed" ? 100 : 0));
       const agent_name = String(body.agent_name ?? session.name).trim();
 
@@ -52,12 +59,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const now = new Date().toISOString();
       const progress_percent = status === "completed" ? 100 : Math.round(progress_percent_raw);
       const completed_at = status === "completed" ? now : null;
+      const approval_status = status === "completed" ? "pending" : "not_required";
 
-      const { data, error } = await supabaseAdmin
+      const modernPayload = {
+        training_id,
+        agent_name,
+        status,
+        progress_percent,
+        target_date,
+        note,
+        evidence_link,
+        evidence_file_url,
+        completed_at,
+        approval_status,
+        updated_at: now,
+      };
+
+      let { data, error } = await supabaseAdmin
         .from("training_completions")
-        .insert({ training_id, agent_name, status, progress_percent, target_date, note, completed_at, updated_at: now })
+        .insert(modernPayload)
         .select()
         .single();
+
+      if (error && isMissingColumnError(error.message)) {
+        ({ data, error } = await supabaseAdmin
+          .from("training_completions")
+          .insert({
+            training_id,
+            agent_name,
+            status,
+            progress_percent,
+            target_date,
+            note,
+            completed_at,
+            updated_at: now,
+          })
+          .select()
+          .single());
+      }
 
       if (error) return res.status(500).json({ error: error.message });
       return res.status(201).json({ completion: data });

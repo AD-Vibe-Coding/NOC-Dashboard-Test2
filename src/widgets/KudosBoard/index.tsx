@@ -35,6 +35,25 @@ function timeAgo(ts: Date | string) {
   return `${Math.floor(sec / 86400)}d ago`;
 }
 
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    if ("error" in error && typeof (error as { error?: unknown }).error === "string") {
+      return (error as { error: string }).error;
+    }
+    if ("message" in error && typeof (error as { message?: unknown }).message === "string") {
+      return (error as { message: string }).message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return "Something went wrong";
+    }
+  }
+  return "Something went wrong";
+}
+
 export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   const { identity } = useIdentity();
   const isManager = identity?.role === "manager";
@@ -44,7 +63,6 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [filterTo, setFilterTo] = useState<string | null>(null);
 
   // Form state
   const [toName, setToName] = useState<string | null>(null);
@@ -68,35 +86,54 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
 
   async function submit() {
     if (!toName || !message.trim() || !category) return;
+    if (!myName.trim()) {
+      setError("Please sign in before posting kudos.");
+      return;
+    }
     setSaving(true);
+    setError(null);
     try {
-      await db.kudos.insert({
+      const inserted = await db.kudos.insert({
         from_name: myName,
         to_name: toName,
         message: message.trim(),
         category,
         is_pinned: false,
       });
+      const savedKudos = Array.isArray(inserted) ? inserted[0] : null;
       setModalOpen(false);
       setToName(null);
       setMessage("");
       setCategory("teamwork");
       await load();
+      if (savedKudos) {
+        window.dispatchEvent(new CustomEvent("kudos:posted", { detail: savedKudos }));
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to post kudos");
+      setError(getErrorMessage(e));
     } finally {
       setSaving(false);
     }
   }
 
   async function togglePin(k: Kudos) {
-    await db.kudos.updateById(k.id, { is_pinned: !k.is_pinned });
-    await load();
+    setError(null);
+    try {
+      await db.kudos.updateById(k.id, { is_pinned: !k.is_pinned });
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
   }
 
   async function deleteKudos(k: Kudos) {
-    await db.kudos.deleteById(k.id);
-    await load();
+    setError(null);
+    try {
+      await db.kudos.deleteById(k.id);
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -104,9 +141,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
 
   const pinned = kudosList.filter(k => k.is_pinned);
   const unpinned = kudosList.filter(k => !k.is_pinned);
-  const filtered = (filterTo
-    ? [...pinned, ...unpinned].filter(k => k.to_name === filterTo)
-    : [...pinned, ...unpinned]);
+  const filtered = [...pinned, ...unpinned];
 
   return (
     <WidgetFrame title="Kudos Board" icon={IconStar} iconColor="yellow">
@@ -119,18 +154,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
 
         {/* Header row */}
         <Group justify="space-between" align="center">
-          <Group gap="sm">
-            <Select
-              placeholder="Filter by person…"
-              data={teamOptions}
-              value={filterTo}
-              onChange={setFilterTo}
-              clearable
-              size="xs"
-              w={180}
-            />
-            <Text size="xs" c="dimmed">{filtered.length} kudos</Text>
-          </Group>
+          <Text size="sm" c="dimmed">{filtered.length} kudos</Text>
           <Button
             leftSection={<IconPlus size={14} />}
             size="sm"

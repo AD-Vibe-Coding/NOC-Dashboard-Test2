@@ -34,6 +34,7 @@ import {
   postSlackMessage,
 } from "../../lib/slack";
 import { useIdentity } from "../../lib/identity";
+import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 import {
   formatDateTime,
   formatElapsedIso,
@@ -66,12 +67,23 @@ export function BreakTrackerWidget() {
   const { ready, active, history, tick, refresh } = useBreakData();
 
   const { identity } = useIdentity();
-  const isManager = identity?.role === "manager";
+  const normalizedEmail = identity?.email?.toLowerCase().trim() ?? "";
+  const viewerIsManager =
+    identity?.role === "manager" ||
+    (!!identity?.name && ROLE_BY_NAME[identity.name.trim()] === "manager") ||
+    (!!normalizedEmail && ROSTER_BY_EMAIL[normalizedEmail]?.role === "manager");
   const [selectedName, setSelectedName] = useState<string | null>(null);
 
   const effectiveName = (
-    isManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")
+    viewerIsManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")
   ).trim();
+  const effectiveNormalizedEmail = effectiveName
+    ? `${effectiveName.toLowerCase().replace(/\s+/g, ".")}@vcom.local`
+    : "";
+  const effectiveIsManager =
+    (!!effectiveName && ROLE_BY_NAME[effectiveName] === "manager") ||
+    (!!effectiveNormalizedEmail && ROSTER_BY_EMAIL[effectiveNormalizedEmail]?.role === "manager") ||
+    viewerIsManager;
 
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
@@ -89,6 +101,18 @@ export function BreakTrackerWidget() {
   async function startBreak() {
     const trimmed = effectiveName;
     if (!trimmed || !breakType) return;
+
+    if (!effectiveIsManager && breakType === "Lunch") {
+      const activeLunches = active.filter((entry) => entry.is_active && entry.break_type === "Lunch");
+      if (activeLunches.length >= 2) {
+        showToast({
+          color: "red",
+          title: "Lunch limit reached",
+          body: `${activeLunches.length} people are already on Lunch. Max 2 allowed at a time. Please wait for someone to return before going on Lunch.`,
+        });
+        return;
+      }
+    }
 
     setPosting(true);
 
@@ -150,7 +174,7 @@ export function BreakTrackerWidget() {
   async function endBreak(b: Break) {
     const viewerName = identity?.name?.trim();
     const breakOwner = b.employee_name.trim();
-    if (!isManager && (!viewerName || viewerName !== breakOwner)) {
+    if (!viewerIsManager && (!viewerName || viewerName !== breakOwner)) {
       showToast({
         color: "red",
         title: "You can only end your own break",
@@ -371,7 +395,7 @@ export function BreakTrackerWidget() {
               <Grid.Col span={{ base: 12, sm: 6 }}>
                 <Box>
                   <Text size="xs" fw={500} c="dimmed" mb={4}>Posting as</Text>
-                  {isManager ? (
+                  {viewerIsManager ? (
                     <Select
                       data={LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
                       value={selectedName ?? identity?.name ?? null}

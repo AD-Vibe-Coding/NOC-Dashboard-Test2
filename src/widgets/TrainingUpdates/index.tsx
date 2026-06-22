@@ -69,45 +69,26 @@ type TrainingComment = {
   created_at: string;
 };
 
+type TrainingCertification = {
+  id: number;
+  certification: string;
+  badge: string;
+  holder_name: string;
+  issuer?: string | null;
+  cert_id?: string | null;
+  issue_date?: string | null;
+  expires_on?: string | null;
+  proof_link?: string | null;
+  proof_file_url?: string | null;
+  status: "active" | "expired" | "renewed";
+};
+
 const STATUS_META: Record<TrainingCompletion["status"], { color: string; label: string }> = {
   not_started: { color: "gray", label: "Not started" },
   in_progress: { color: "blue", label: "In progress" },
   completed: { color: "green", label: "Completed" },
 };
 
-const CERTIFICATION_REGISTRY: Array<{
-  certification: string;
-  badge: string;
-  badgeImage?: string;
-  individuals: string[];
-  status: "Active" | "Expired";
-}> = [
-  {
-    certification: "CCNA",
-    badge: "Cisco Certified CCNA",
-    badgeImage: "/user-uploads/image.png",
-    individuals: ["Karthik Radhakrishnan", "Kartik Damagalla", "Akram Ahmed"],
-    status: "Active",
-  },
-  {
-    certification: "CCNP",
-    badge: "Cisco Certified CCNP",
-    individuals: ["Otukho Olembo"],
-    status: "Expired",
-  },
-  {
-    certification: "CCNP ENCOR",
-    badge: "Cisco Certified Specialist ENCOR",
-    individuals: ["Mohammed Zubairuddin"],
-    status: "Active",
-  },
-  {
-    certification: "Fortinet NSE 4",
-    badge: "Fortinet NSE 4",
-    individuals: ["Otukho Olembo"],
-    status: "Active",
-  },
-];
 
 function toIsoDate(value: Date | null) {
   if (!value) return "";
@@ -125,7 +106,11 @@ function parseAudience(audience: string) {
 function appliesToMember(training: UpcomingTraining, memberName: string) {
   const parsed = parseAudience(training.audience);
   if (parsed.kind === "user") return parsed.value === memberName;
-  return parsed.value === "all" || !!parsed.value;
+
+  if (parsed.value === "all") return true;
+
+  const memberRole = ROLE_BY_NAME[memberName];
+  return parsed.value === memberRole;
 }
 
 function formatAgo(iso?: string | null) {
@@ -140,12 +125,52 @@ function formatAgo(iso?: string | null) {
   return `${days}d ago`;
 }
 
+function normalizeIdentity(value?: string | null) {
+  return String(value ?? "")
+    .toLowerCase()
+    .trim()
+    .replace(/@appdirect\.com$/i, "")
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function buildIdentityCandidates(identity?: { name?: string; email?: string }) {
+  const candidates = new Set<string>();
+  const name = normalizeIdentity(identity?.name);
+  if (name) {
+    candidates.add(name);
+    const parts = name.split(" ").filter(Boolean);
+    if (parts.length === 2) {
+      candidates.add(`${parts[1]} ${parts[0]}`);
+    }
+  }
+
+  const emailLocal = normalizeIdentity(identity?.email);
+  if (emailLocal) {
+    candidates.add(emailLocal);
+    const emailParts = emailLocal.split(" ").filter(Boolean);
+    if (emailParts.length === 2) {
+      candidates.add(`${emailParts[1]} ${emailParts[0]}`);
+    }
+  }
+
+  return candidates;
+}
+
 function daysTo(dateText?: string | null) {
   if (!dateText) return null;
   const now = new Date();
   const target = new Date(`${dateText}T00:00:00`);
   const diff = target.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   return Math.floor(diff / (1000 * 60 * 60 * 24));
+}
+
+function certificationHealth(row: { status: "active" | "expired" | "renewed"; expires_on?: string | null }) {
+  if (row.status === "expired") return "Expired" as const;
+  if (row.status === "renewed") return "Renewed" as const;
+  const days = daysTo(row.expires_on ?? null);
+  if (days !== null && days <= 30) return "Expiring Soon" as const;
+  return "Active" as const;
 }
 
 export function TrainingUpdatesWidget() {
@@ -156,6 +181,7 @@ export function TrainingUpdatesWidget() {
   const [error, setError] = useState<string | null>(null);
   const [trainings, setTrainings] = useState<UpcomingTraining[]>([]);
   const [completions, setCompletions] = useState<TrainingCompletion[]>([]);
+  const [certifications] = useState<TrainingCertification[]>([]);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -192,6 +218,9 @@ export function TrainingUpdatesWidget() {
   const [threadLoading, setThreadLoading] = useState(false);
   const [threadPosting, setThreadPosting] = useState(false);
 
+  const [certSearch, setCertSearch] = useState("");
+  const [certStatusFilter, setCertStatusFilter] = useState<string>("all");
+
   async function refresh() {
     setLoading(true);
     setError(null);
@@ -199,10 +228,19 @@ export function TrainingUpdatesWidget() {
       const [tRes, cRes] = await Promise.all([fetch("/api/upcoming_trainings"), fetch("/api/training_completions")]);
       const tJson = await tRes.json();
       const cJson = await cRes.json();
+
       if (!tRes.ok) throw new Error(tJson.error ?? "Failed to load trainings");
-      if (!cRes.ok) throw new Error(cJson.error ?? "Failed to load completions");
       setTrainings((tJson.trainings ?? []) as UpcomingTraining[]);
-      setCompletions((cJson.completions ?? []) as TrainingCompletion[]);
+
+      // training_completions is auth-protected. If not authenticated yet,
+      // keep the widget usable for read-only sections instead of showing a blocking error.
+      if (cRes.status === 401) {
+        setCompletions([]);
+      } else if (!cRes.ok) {
+        throw new Error(cJson.error ?? "Failed to load completions");
+      } else {
+        setCompletions((cJson.completions ?? []) as TrainingCompletion[]);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -230,7 +268,13 @@ export function TrainingUpdatesWidget() {
   }, [trainings, identity, isManager]);
 
   function getCompletion(trainingId: number, agentName: string) {
-    return completions.find((c) => c.training_id === trainingId && c.agent_name === agentName) ?? null;
+    const direct = completions.find((c) => c.training_id === trainingId && c.agent_name === agentName);
+    if (direct) return direct;
+
+    const candidates = buildIdentityCandidates({ name: agentName, email: identity?.email });
+    return completions.find(
+      (c) => c.training_id === trainingId && candidates.has(normalizeIdentity(c.agent_name)),
+    ) ?? null;
   }
 
   const certStats = useMemo(
@@ -277,6 +321,44 @@ export function TrainingUpdatesWidget() {
       .filter((x) => x.days !== null && (x.completion?.status ?? "not_started") !== "completed" && (x.days as number) >= 0 && (x.days as number) <= 7)
       .map((x) => ({ ...x, days: x.days as number }));
   }, [isManager, myRows]);
+
+  const filteredCertifications = useMemo(() => {
+    const grouped = new Map<string, { certification: string; badge: string; individuals: string[]; expires_on?: string | null; status: "active" | "expired" | "renewed" }>();
+
+    for (const c of certifications) {
+      const key = `${c.certification}::${c.badge}`;
+      const existing = grouped.get(key);
+      if (!existing) {
+        grouped.set(key, {
+          certification: c.certification,
+          badge: c.badge,
+          individuals: [c.holder_name],
+          expires_on: c.expires_on ?? null,
+          status: c.status,
+        });
+      } else {
+        if (!existing.individuals.includes(c.holder_name)) existing.individuals.push(c.holder_name);
+        if ((c.expires_on ?? "") > (existing.expires_on ?? "")) existing.expires_on = c.expires_on ?? existing.expires_on;
+        if (c.status === "expired") existing.status = "expired";
+      }
+    }
+
+    return Array.from(grouped.values()).filter((row) => {
+      const q = certSearch.trim().toLowerCase();
+      const textMatch = !q
+        || row.certification.toLowerCase().includes(q)
+        || row.badge.toLowerCase().includes(q)
+        || row.individuals.some((n) => n.toLowerCase().includes(q));
+
+      const health = certificationHealth(row);
+      const statusMatch = certStatusFilter === "all"
+        || (certStatusFilter === "active" && health === "Active")
+        || (certStatusFilter === "expiring" && health === "Expiring Soon")
+        || (certStatusFilter === "expired" && health === "Expired");
+
+      return textMatch && statusMatch;
+    });
+  }, [certifications, certSearch, certStatusFilter]);
 
   async function createTraining() {
     if (!title.trim() || !description.trim() || !certDate) return;
@@ -330,40 +412,22 @@ export function TrainingUpdatesWidget() {
     }
   }
 
-  function openUpdate(training: UpcomingTraining) {
+  function openUpdate(training: UpcomingTraining, statusOverride?: TrainingCompletion["status"]) {
     if (!identity?.name) return;
     const current = getCompletion(training.id, identity.name);
+    const resolvedStatus = statusOverride ?? (current?.status as TrainingCompletion["status"]) ?? "not_started";
+
     setUpdating(training);
-    setNewStatus((current?.status as TrainingCompletion["status"]) ?? "not_started");
-    setProgressPercent(Number(current?.progress_percent ?? (current?.status === "completed" ? 100 : 0)));
-    setTargetDate(current?.target_date ? new Date(current.target_date) : null);
+    setNewStatus(resolvedStatus);
+    setProgressPercent(
+      resolvedStatus === "completed"
+        ? 100
+        : resolvedStatus === "in_progress"
+          ? Math.max(Number(current?.progress_percent ?? 0), 25)
+          : Number(current?.progress_percent ?? 0),
+    );
+    setTargetDate(current?.target_date ? new Date(current.target_date) : (training.training_date ? new Date(training.training_date) : null));
     setNote(current?.note ?? "");
-  }
-
-  async function quickStatusUpdate(training: UpcomingTraining, status: TrainingCompletion["status"]) {
-    if (!identity?.name) return;
-    const existing = getCompletion(training.id, identity.name);
-    const inferredProgress = status === "completed" ? 100 : status === "in_progress" ? Math.max(Number(existing?.progress_percent ?? 0), 25) : 0;
-
-    const body = {
-      status,
-      progress_percent: inferredProgress,
-      target_date: existing?.target_date ?? training.training_date,
-      note: existing?.note ?? null,
-    };
-
-    const res = await fetch(existing ? `/api/training_completions/${existing.id}` : "/api/training_completions", {
-      method: existing ? "PATCH" : "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(existing ? body : { ...body, training_id: training.id }),
-    });
-
-    const json = await res.json();
-    if (!res.ok) {
-      setError(json.error ?? "Failed quick update");
-      return;
-    }
-    await refresh();
   }
 
   function beginEdit(training: UpcomingTraining) {
@@ -437,6 +501,18 @@ export function TrainingUpdatesWidget() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Failed to save progress");
+
+      if (json.completion) {
+        setCompletions((prev) => {
+          const next = [...prev];
+          const row = json.completion as TrainingCompletion;
+          const index = next.findIndex((item) => item.id === row.id);
+          if (index >= 0) next[index] = row;
+          else next.unshift(row);
+          return next;
+        });
+      }
+
       setUpdating(null);
       await refresh();
     } catch (err) {
@@ -597,36 +673,66 @@ export function TrainingUpdatesWidget() {
 
             <Tabs.Panel value="completed" pt="md">
               <Card withBorder radius="lg" p="md">
-                <Table striped withTableBorder withColumnBorders>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Certification</Table.Th>
-                      <Table.Th>Logo/Badge</Table.Th>
-                      <Table.Th>Certified Individuals</Table.Th>
-                      <Table.Th>Status</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {CERTIFICATION_REGISTRY.map((row) => (
-                      <Table.Tr key={row.certification}>
-                        <Table.Td><Text fw={700}>{row.certification}</Text></Table.Td>
-                        <Table.Td><Badge variant="outline" color="blue">{row.badge}</Badge></Table.Td>
-                        <Table.Td>
-                          <Stack gap={4}>
-                            {row.individuals.map((name) => (
-                              <Text key={name} size="sm">{name}</Text>
-                            ))}
-                          </Stack>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge color={row.status === "Active" ? "green" : "yellow"} variant="light">
-                            {row.status === "Active" ? "✅ Active" : "⚠️ Expired"}
-                          </Badge>
-                        </Table.Td>
+                <Stack gap="sm">
+                  <Group grow>
+                    <TextInput
+                      label="Search certifications"
+                      placeholder="Certification, badge, or person"
+                      value={certSearch}
+                      onChange={(e) => setCertSearch(e.currentTarget.value)}
+                    />
+                    <Select
+                      label="Status"
+                      value={certStatusFilter}
+                      onChange={(v) => setCertStatusFilter(v ?? "all")}
+                      data={[
+                        { value: "all", label: "All" },
+                        { value: "active", label: "Active" },
+                        { value: "expiring", label: "Expiring soon (≤30d)" },
+                        { value: "expired", label: "Expired" },
+                      ]}
+                    />
+                  </Group>
+
+                  <Table striped withTableBorder withColumnBorders>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Certification</Table.Th>
+                        <Table.Th>Logo/Badge</Table.Th>
+                        <Table.Th>Certified Individuals</Table.Th>
+                        <Table.Th>Expires On</Table.Th>
+                        <Table.Th>Status</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {filteredCertifications.map((row) => {
+                        const health = certificationHealth(row);
+                        return (
+                          <Table.Tr key={row.certification}>
+                            <Table.Td><Text fw={700}>{row.certification}</Text></Table.Td>
+                            <Table.Td><Badge variant="outline" color="blue">{row.badge}</Badge></Table.Td>
+                            <Table.Td>
+                              <Stack gap={4}>
+                                {row.individuals.map((name) => (
+                                  <Text key={name} size="sm">{name}</Text>
+                                ))}
+                              </Stack>
+                            </Table.Td>
+                            <Table.Td>{row.expires_on ?? "—"}</Table.Td>
+                            <Table.Td>
+                              <Badge
+                                color={health === "Active" ? "green" : health === "Expiring Soon" ? "yellow" : "red"}
+                                variant="light"
+                              >
+                                {health === "Active" ? "✅ Active" : health === "Expiring Soon" ? "⏳ Expiring Soon" : "⚠️ Expired"}
+                              </Badge>
+                            </Table.Td>
+                          </Table.Tr>
+                        );
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                </Stack>
               </Card>
             </Tabs.Panel>
           </Tabs>
@@ -690,9 +796,9 @@ export function TrainingUpdatesWidget() {
                                 <Progress value={progress} color={meta.color} size="sm" />
 
                                 <Group gap={6}>
-                                  <Button size="xs" variant="subtle" onClick={() => void quickStatusUpdate(row.training, "not_started")}>Start</Button>
-                                  <Button size="xs" variant="subtle" onClick={() => void quickStatusUpdate(row.training, "in_progress")}>In Progress</Button>
-                                  <Button size="xs" color="green" variant="light" onClick={() => void quickStatusUpdate(row.training, "completed")}>Completed</Button>
+                                  <Button size="xs" variant="subtle" onClick={() => openUpdate(row.training, "not_started")}>Start</Button>
+                                  <Button size="xs" variant="subtle" onClick={() => openUpdate(row.training, "in_progress")}>In Progress</Button>
+                                  <Button size="xs" color="green" variant="light" onClick={() => openUpdate(row.training, "completed")}>Completed</Button>
                                   <Button size="xs" variant="subtle" color="gray" leftSection={<IconMessageCircle size={12} />} onClick={() => void loadThread(row.training)}>Thread</Button>
                                 </Group>
 
@@ -712,36 +818,66 @@ export function TrainingUpdatesWidget() {
 
             <Tabs.Panel value="completed" pt="md">
               <Card withBorder radius="lg" p="md">
-                <Table striped withTableBorder withColumnBorders>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Certification</Table.Th>
-                      <Table.Th>Logo/Badge</Table.Th>
-                      <Table.Th>Certified Individuals</Table.Th>
-                      <Table.Th>Status</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {CERTIFICATION_REGISTRY.map((row) => (
-                      <Table.Tr key={row.certification}>
-                        <Table.Td><Text fw={700}>{row.certification}</Text></Table.Td>
-                        <Table.Td><Badge variant="outline" color="blue">{row.badge}</Badge></Table.Td>
-                        <Table.Td>
-                          <Stack gap={4}>
-                            {row.individuals.map((name) => (
-                              <Text key={name} size="sm">{name}</Text>
-                            ))}
-                          </Stack>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge color={row.status === "Active" ? "green" : "yellow"} variant="light">
-                            {row.status === "Active" ? "✅ Active" : "⚠️ Expired"}
-                          </Badge>
-                        </Table.Td>
+                <Stack gap="sm">
+                  <Group grow>
+                    <TextInput
+                      label="Search certifications"
+                      placeholder="Certification, badge, or person"
+                      value={certSearch}
+                      onChange={(e) => setCertSearch(e.currentTarget.value)}
+                    />
+                    <Select
+                      label="Status"
+                      value={certStatusFilter}
+                      onChange={(v) => setCertStatusFilter(v ?? "all")}
+                      data={[
+                        { value: "all", label: "All" },
+                        { value: "active", label: "Active" },
+                        { value: "expiring", label: "Expiring soon (≤30d)" },
+                        { value: "expired", label: "Expired" },
+                      ]}
+                    />
+                  </Group>
+
+                  <Table striped withTableBorder withColumnBorders>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Certification</Table.Th>
+                        <Table.Th>Logo/Badge</Table.Th>
+                        <Table.Th>Certified Individuals</Table.Th>
+                        <Table.Th>Expires On</Table.Th>
+                        <Table.Th>Status</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {filteredCertifications.map((row) => {
+                        const health = certificationHealth(row);
+                        return (
+                          <Table.Tr key={row.certification}>
+                            <Table.Td><Text fw={700}>{row.certification}</Text></Table.Td>
+                            <Table.Td><Badge variant="outline" color="blue">{row.badge}</Badge></Table.Td>
+                            <Table.Td>
+                              <Stack gap={4}>
+                                {row.individuals.map((name) => (
+                                  <Text key={name} size="sm">{name}</Text>
+                                ))}
+                              </Stack>
+                            </Table.Td>
+                            <Table.Td>{row.expires_on ?? "—"}</Table.Td>
+                            <Table.Td>
+                              <Badge
+                                color={health === "Active" ? "green" : health === "Expiring Soon" ? "yellow" : "red"}
+                                variant="light"
+                              >
+                                {health === "Active" ? "✅ Active" : health === "Expiring Soon" ? "⏳ Expiring Soon" : "⚠️ Expired"}
+                              </Badge>
+                            </Table.Td>
+                          </Table.Tr>
+                        );
+                      })}
+                    </Table.Tbody>
+                  </Table>
+                </Stack>
               </Card>
             </Tabs.Panel>
           </Tabs>

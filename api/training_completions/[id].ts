@@ -4,6 +4,11 @@ import { getSession } from "../_lib/auth-middleware.js";
 
 const VALID_STATUS = new Set(["not_started", "in_progress", "completed"]);
 
+function isMissingColumnError(message: string) {
+  const m = message.toLowerCase();
+  return m.includes("column") && (m.includes("evidence_link") || m.includes("evidence_file_url") || m.includes("approval_status"));
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     const session = getSession(req);
@@ -34,6 +39,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const status = body.status !== undefined ? String(body.status ?? "").trim() : existing.status;
     const target_date = body.target_date !== undefined ? (String(body.target_date ?? "").trim() || null) : existing.target_date;
     const note = body.note !== undefined ? (String(body.note ?? "").trim() || null) : existing.note;
+    const evidence_link = body.evidence_link !== undefined ? (String(body.evidence_link ?? "").trim() || null) : existing.evidence_link;
+    const evidence_file_url = body.evidence_file_url !== undefined ? (String(body.evidence_file_url ?? "").trim() || null) : existing.evidence_file_url;
     const progress_percent_raw = body.progress_percent !== undefined
       ? Number(body.progress_percent)
       : Number(existing.progress_percent ?? (status === "completed" ? 100 : 0));
@@ -49,13 +56,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const now = new Date().toISOString();
     const progress_percent = status === "completed" ? 100 : Math.round(progress_percent_raw);
     const completed_at = status === "completed" ? (existing.completed_at ?? now) : null;
+    const approval_status = status === "completed"
+      ? (existing.approval_status === "approved" ? "approved" : "pending")
+      : "not_required";
 
-    const { data, error } = await supabaseAdmin
+    const modernPayload = {
+      status,
+      progress_percent,
+      target_date,
+      note,
+      evidence_link,
+      evidence_file_url,
+      completed_at,
+      approval_status,
+      updated_at: now,
+    };
+
+    let { data, error } = await supabaseAdmin
       .from("training_completions")
-      .update({ status, progress_percent, target_date, note, completed_at })
+      .update(modernPayload)
       .eq("id", id)
       .select()
       .single();
+
+    if (error && isMissingColumnError(error.message)) {
+      ({ data, error } = await supabaseAdmin
+        .from("training_completions")
+        .update({
+          status,
+          progress_percent,
+          target_date,
+          note,
+          completed_at,
+          updated_at: now,
+        })
+        .eq("id", id)
+        .select()
+        .single());
+    }
 
     if (error) return res.status(500).json({ error: error.message });
     return res.status(200).json({ completion: data });
