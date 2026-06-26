@@ -19,10 +19,18 @@ export interface RosterShiftData {
   inShiftNow:   string[];
   allNames:     string[];
   shiftWindows: ShiftWindow[];
+  dailyEntries?: Array<{
+    name: string;
+    cell: string;
+    status: "Available" | "WO" | "PTO" | "Sick Leave" | "Sick Leave - Tentative" | "Emergency Leave" | "Holiday" | "Blank" | "Other";
+    available: boolean;
+    shift?: { start: number; end: number };
+  }>;
   strategy:     string;
   sheetTitle:   string;
   fetchedAt:    string;
   rowCount:     number;
+  targetDate?:  string;
   error?:       string;
   diagnostics?: {
     currentTimePST: string;

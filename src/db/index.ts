@@ -117,6 +117,7 @@ type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
 type TeamMemberRow = typeof schema.team_members.$inferSelect;
 type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
+type EnhancementRow = typeof schema.enhancements.$inferSelect;
 type KudosRow = typeof schema.kudos.$inferSelect;
 type ShiftChecklistItemRow = typeof schema.shift_checklist_items.$inferSelect;
 type KbGapRow = typeof schema.kb_gaps.$inferSelect;
@@ -151,6 +152,7 @@ export const db = {
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
   team_members: tableClient<TeamMemberRow>("team_members"),
   manager_updates: tableClient<ManagerUpdateRow>("manager_updates"),
+  enhancements: tableClient<EnhancementRow>("enhancements"),
   kudos: tableClient<KudosRow>("kudos"),
   shift_checklist_items: tableClient<ShiftChecklistItemRow>("shift_checklist_items"),
   kb_gaps: tableClient<KbGapRow>("kb_gaps"),

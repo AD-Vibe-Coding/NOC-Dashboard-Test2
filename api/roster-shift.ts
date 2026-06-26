@@ -280,6 +280,21 @@ function parseShiftCell(cell: string): { start: number; end: number } | "OFF" | 
 }
 
 /** Current time of day in minutes, Pacific time */
+function classifyDailyCell(cell: string): DailyRosterEntry["status"] {
+  const value = cell.trim();
+  if (!value) return "Blank";
+  const upper = value.toUpperCase();
+  if (upper.includes("SICK LEAVE") && upper.includes("TENTATIVE")) return "Sick Leave - Tentative";
+  if (upper.includes("SICK LEAVE")) return "Sick Leave";
+  if (upper.includes("EMERGENCY LEAVE")) return "Emergency Leave";
+  if (upper.includes("HOLIDAY")) return "Holiday";
+  if (upper.includes("PTO") || upper.includes("VACATION")) return "PTO";
+  if (upper.includes("WO") || upper.includes("W/O") || upper.includes("WEEK OFF") || upper.includes("WEEKOFF")) return "WO";
+  const shift = parseShiftCell(value);
+  if (shift && shift !== "OFF") return "Available";
+  return "Other";
+}
+
 function isRealRosterName(name: string): boolean {
   const value = name.trim();
   if (!value) return false;
@@ -346,14 +361,38 @@ function todayPST() {
   return dayMetaPST(0);
 }
 
+function dayMetaFromIso(isoDate: string) {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  const local = new Date(year, (month ?? 1) - 1, day ?? 1);
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return {
+    dayName: days[local.getDay()],
+    dayShort: days[local.getDay()].slice(0, 3),
+    monthDay: `${local.getMonth() + 1}/${local.getDate()}`,
+    monthName: `${months[local.getMonth()]} ${local.getDate()}`,
+    isoDate: `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, "0")}-${String(local.getDate()).padStart(2, "0")}`,
+  };
+}
+
+export interface DailyRosterEntry {
+  name: string;
+  cell: string;
+  status: "Available" | "WO" | "PTO" | "Sick Leave" | "Sick Leave - Tentative" | "Emergency Leave" | "Holiday" | "Blank" | "Other";
+  available: boolean;
+  shift?: { start: number; end: number };
+}
+
 export interface ShiftResult {
   inShiftNow:    string[];
   allNames:      string[];
   shiftWindows?: { name: string; start: number; end: number; cell: string }[];
+  dailyEntries?: DailyRosterEntry[];
   strategy:      string;
   sheetTitle:    string;
   fetchedAt:     string;
   rowCount:      number;
+  targetDate?:   string;
   error?:        string;
   diagnostics?: {
     currentTimePST: string;     // e.g. "14:32 PST"
@@ -421,6 +460,48 @@ function looksLikeDateHeader(h: string): boolean {
   // "2026-06-02"
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
   return false;
+}
+
+function buildDailyEntries(rows: string[][], day: ReturnType<typeof dayMetaPST>): DailyRosterEntry[] {
+  if (rows.length === 0) return [];
+
+  const headers = rows[0].map((h) => (h ?? "").trim());
+  const secondRow = rows[1]?.map((h) => (h ?? "").trim()) ?? [];
+  const combinedHeaders = headers.map((header, idx) => {
+    const top = header.trim();
+    const bottom = (secondRow[idx] ?? "").trim();
+    return [top, bottom].filter(Boolean).join(" ").trim();
+  });
+  const dateLikeCount = headers.slice(1).filter(looksLikeDateHeader).length;
+  const hasPublishedCalendarHeader =
+    (/time zone/i.test(headers[0] ?? "") || dateLikeCount >= 2) && secondRow.length > 0;
+  const dataRows = hasPublishedCalendarHeader ? rows.slice(2) : rows.slice(1);
+  const nameColIdx = (() => {
+    const idx = headers.findIndex((h) => /^(name|agent|employee|tech|engineer)/i.test(h));
+    return idx >= 0 ? idx : 0;
+  })();
+
+  const rosterRows = dataRows.filter((r) => isRealRosterName((r[nameColIdx] ?? "").trim()));
+  const dateColIdx = hasPublishedCalendarHeader
+    ? Math.max(findDateColumnIndex(headers, day), findDateColumnIndex(combinedHeaders, day))
+    : findDateColumnIndex(headers, day);
+
+  if (dateColIdx <= 0) return [];
+
+  return rosterRows.map((row) => {
+    const name = (row[nameColIdx] ?? "").trim();
+    const cell = (row[dateColIdx] ?? "").trim();
+    const parsedShift = parseShiftCell(cell);
+    const shift = parsedShift && parsedShift !== "OFF" ? parsedShift : undefined;
+    const status = classifyDailyCell(cell);
+    return {
+      name,
+      cell,
+      status,
+      available: status === "Available",
+      shift,
+    };
+  });
 }
 
 function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "fetchedAt"> {
@@ -609,19 +690,22 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 
 // ── Response cache (5 min, month-aware) ──────────────────────────────────────
 
-let _cache: { data: ShiftResult; at: number; month: string } | null = null;
+let _cache: { data: ShiftResult; at: number; month: string; targetDate: string } | null = null;
 const CACHE_TTL = 5 * 60_000;
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-export default async function handler(_req: IncomingMessage, res: ServerResponse) {
+export default async function handler(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
 
+  const requestUrl = new URL(req.url ?? "/api/roster-shift", "http://localhost");
+  const requestedDate = requestUrl.searchParams.get("date")?.trim() ?? "";
+  const targetDay = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? dayMetaFromIso(requestedDate) : todayPST();
   const tabName = currentMonthTabName(); // e.g. "Jun'26"
 
   // Invalidate cache if the month changed or TTL expired
-  if (_cache && _cache.month === tabName && Date.now() - _cache.at < CACHE_TTL) {
+  if (_cache && _cache.month === tabName && _cache.targetDate === targetDay.isoDate && Date.now() - _cache.at < CACHE_TTL) {
     return res.end(JSON.stringify(_cache.data));
   }
 
@@ -636,8 +720,13 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
       const token    = await getAccessToken();
       const rows     = await fetchRows(token, tabName);
       const detected = detectShift(rows, tabName);
-      const data: ShiftResult = { ...detected, fetchedAt: new Date().toISOString() };
-      _cache = { data, at: Date.now(), month: tabName };
+      const data: ShiftResult = {
+        ...detected,
+        dailyEntries: buildDailyEntries(rows, targetDay),
+        targetDate: targetDay.isoDate,
+        fetchedAt: new Date().toISOString(),
+      };
+      _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
       return res.end(JSON.stringify(data));
     }
 
@@ -651,10 +740,12 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
       const detected = detectShift(rows, sheetTitle);
       const data: ShiftResult = {
         ...detected,
+        dailyEntries: buildDailyEntries(rows, targetDay),
+        targetDate: targetDay.isoDate,
         strategy: `${detected.strategy}-published-csv`,
         fetchedAt: new Date().toISOString(),
       };
-      _cache = { data, at: Date.now(), month: tabName };
+      _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
       return res.end(JSON.stringify(data));
     }
 
@@ -662,8 +753,10 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
     const fallback: ShiftResult = {
       inShiftNow: [],
       allNames:   [],
+      dailyEntries: [],
       strategy:   "unconfigured",
       sheetTitle: "(not configured)",
+      targetDate: targetDay.isoDate,
       fetchedAt:  new Date().toISOString(),
       rowCount:   0,
       error: "Set GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY to enable roster shift detection.",
@@ -674,8 +767,10 @@ export default async function handler(_req: IncomingMessage, res: ServerResponse
     const data: ShiftResult = {
       inShiftNow: [],
       allNames:   [],
+      dailyEntries: [],
       strategy:   "error",
       sheetTitle: tabName,
+      targetDate: targetDay.isoDate,
       fetchedAt:  new Date().toISOString(),
       rowCount:   0,
       error: String(err?.message ?? err),

@@ -7,12 +7,6 @@
 // The logo PNG lives in /public so it's served unhashed at a stable
 // URL (used by index.html for the favicon + apple-touch-icon).
 //
-// CROP NOTE: the source PNG has substantial empty light-blue padding
-// around the actual cube + "vCom" wordmark. In framed mode we render
-// it as a centered background-image with `background-size: <zoom>% auto`
-// so the empty padding is clipped by the frame and the brand fills the
-// box. The default `cropZoom = 165` lands the cube + wordmark cleanly
-// inside the rectangle.
 import { Box } from "@mantine/core";
 
 export const BRAND_LOGO_SRC = "/vcom-logo.png";
@@ -29,17 +23,12 @@ interface BrandLogoProps {
    */
   size?: number;
   /**
-   * Whether to wrap the mark in a subtle rounded background + border
-   * AND apply the zoom-crop. Looks great on dark surfaces. Defaults
-   * to true.
+   * Whether to wrap the mark in a subtle rounded background + border.
+   * Defaults to true.
    */
   framed?: boolean;
   /**
-   * How aggressively to zoom into the source image when cropping.
-   * 100 = no crop (full PNG with padding visible). 165 (default)
-   * crops the empty light-blue padding so the cube + "vCom"
-   * wordmark fill the frame nicely. Values above ~190 start to clip
-   * the wordmark.
+   * Legacy prop kept for compatibility. No longer used for cropping.
    */
   cropZoom?: number;
   /**
@@ -61,7 +50,7 @@ interface BrandLogoProps {
 export function BrandLogo({
   size = 32,
   framed = true,
-  cropZoom = 165,
+  cropZoom: _cropZoom = 165,
   aspectRatio = 2.6,
   glowColor,
   alt = `${BRAND_NAME} — ${BRAND_TAGLINE}`,
@@ -84,17 +73,15 @@ export function BrandLogo({
     );
   }
 
-  // Framed: a fixed-size div with the logo as a centered, zoomed
-  // background. `background-size: <cropZoom>% auto` (centered) means
-  // we visually scale the image up while the box clips the
-  // overflowing padding — yielding a clean, brand-filled tile.
+  // Framed: preserve the rounded tile treatment, but render the image
+  // directly so uploaded logos are never cropped.
   const width = Math.round(size * aspectRatio);
   return (
     <Box
-      role="img"
-      aria-label={alt}
       style={{
-        display: "inline-block",
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
         width,
         height: size,
         borderRadius: 8,
@@ -103,18 +90,23 @@ export function BrandLogo({
         boxShadow: glowColor
           ? `0 0 14px ${glowColor}`
           : "0 1px 2px rgba(15, 23, 42, 0.08)",
-        backgroundImage: `url(${BRAND_LOGO_SRC})`,
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: "center",
-        // `<cropZoom>% auto` => width = cropZoom% of container, height
-        // auto-derived. Combined with center positioning this crops
-        // the empty light-blue padding evenly on all sides.
-        backgroundSize: `${cropZoom}% auto`,
-        // The source PNG has a light-blue background (#a4c8db-ish).
-        // Match it on the frame so any rounding-gap pixels blend in
-        // instead of showing a hairline at the corners.
         backgroundColor: "#a4c8db",
+        padding: Math.max(4, Math.round(size * 0.08)),
       }}
-    />
+    >
+      <img
+        src={BRAND_LOGO_SRC}
+        alt={alt}
+        style={{
+          display: "block",
+          maxWidth: "100%",
+          maxHeight: "100%",
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          objectPosition: "center",
+        }}
+      />
+    </Box>
   );
 }

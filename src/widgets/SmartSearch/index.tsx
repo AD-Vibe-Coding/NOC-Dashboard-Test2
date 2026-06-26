@@ -28,14 +28,14 @@ import { WidgetFrame } from "../WidgetFrame";
 
 export { SmartSearchTile } from "./Tile";
 
-interface WidgetMeta {
+export interface SmartSearchWidgetMeta {
   id: string;
   title: string;
   desc: string;
-  keywords: string[];
+  keywords?: string[];
 }
 
-const WIDGET_LIST: WidgetMeta[] = [
+const DEFAULT_WIDGET_LIST: SmartSearchWidgetMeta[] = [
   {
     id: "my-day",
     title: "My Day",
@@ -56,15 +56,9 @@ const WIDGET_LIST: WidgetMeta[] = [
   },
   {
     id: "zoom-queue",
-    title: "Zoom Queue",
-    desc: "Who's on a call and for how long",
-    keywords: ["zoom", "call", "queue", "agent", "engagement", "on call"],
-  },
-  {
-    id: "break-tracker",
-    title: "Break Tracker",
-    desc: "Team breaks via Slack + local",
-    keywords: ["break", "lunch", "bio", "pause", "rest"],
+    title: "Team Availability",
+    desc: "Queue availability, breaks, and meeting status",
+    keywords: ["zoom", "call", "queue", "agent", "engagement", "availability", "meeting"],
   },
   {
     id: "qs-escalations",
@@ -85,22 +79,10 @@ const WIDGET_LIST: WidgetMeta[] = [
     keywords: ["wfh", "remote", "home", "request", "approval"],
   },
   {
-    id: "escalation-email",
-    title: "Escalation Email",
-    desc: "AI drafts the ESC-MGR Alert email from your notes",
-    keywords: ["email", "escalation", "esc-mgr", "draft", "manager alert"],
-  },
-  {
-    id: "shift-handover",
-    title: "Shift Handover",
-    desc: "AI structures your ticket notes into a handover message",
-    keywords: ["handover", "shift", "handoff", "transition"],
-  },
-  {
-    id: "email-polisher",
-    title: "Email Polisher",
-    desc: "Polish a draft for customer, internal, or carrier",
-    keywords: ["polish", "rewrite", "grammar", "email improvement"],
+    id: "email-assistant",
+    title: "NOC Email Assistant",
+    desc: "Draft, polish, compare, and QA emails",
+    keywords: ["email", "escalation", "draft", "polish", "qa", "customer update", "carrier email"],
   },
   {
     id: "noc-troubleshooter",
@@ -114,16 +96,23 @@ const WIDGET_LIST: WidgetMeta[] = [
     desc: "AI agent for wireless + device troubleshooting",
     keywords: ["mobility", "wireless", "mobile", "device", "sim", "phone"],
   },
+  {
+    id: "maintenance-note-generator",
+    title: "Maintenance Note Generator",
+    desc: "Parse carrier maintenance notices and generate a formatted maintenance note",
+    keywords: ["maintenance", "carrier notice", "maintenance window", "maintenance note"],
+  },
 ];
 
-const SYSTEM_CONTEXT = `You are the vCom NOC Operations Dashboard smart search assistant.
+function buildSystemContext(widgets: SmartSearchWidgetMeta[]) {
+  return `You are the vCom NOC Operations Dashboard smart search assistant.
 
 You must do two things for each user query:
 1) Give a concise AI-generated summary answer.
 2) Recommend practical next actions for the operator.
 
 Available dashboard widgets:
-${WIDGET_LIST.map((w) => `- ${w.title}: ${w.desc}`).join("\n")}
+${widgets.map((w) => `- ${w.title}: ${w.desc}`).join("\n")}
 
 Rules:
 - Be concise and operationally useful.
@@ -139,6 +128,7 @@ Response markdown format:
 ## Recommended next actions
 (3-6 bullets, each action-oriented)
 `;
+}
 
 interface RelevantWidget {
   id: string;
@@ -154,14 +144,14 @@ interface SearchResult {
   relevant: RelevantWidget[];
 }
 
-function rankRelevantWidgets(query: string): RelevantWidget[] {
+function rankRelevantWidgets(query: string, widgets: SmartSearchWidgetMeta[]): RelevantWidget[] {
   const q = query.toLowerCase();
-  const ranked = WIDGET_LIST.map((w) => {
+  const ranked = widgets.map((w) => {
     let score = 0;
     if (q.includes(w.title.toLowerCase())) score += 5;
     if (q.includes(w.id.replace(/-/g, " "))) score += 4;
-    for (const kw of w.keywords) {
-      if (q.includes(kw)) score += 2;
+    for (const kw of w.keywords ?? []) {
+      if (q.includes(kw.toLowerCase())) score += 2;
     }
     for (const token of q.split(/\s+/).filter(Boolean)) {
       if (w.title.toLowerCase().includes(token)) score += 1;
@@ -175,21 +165,23 @@ function rankRelevantWidgets(query: string): RelevantWidget[] {
 
   if (ranked.length > 0) return ranked;
 
-  // Generic fallback when no keyword match is detected.
-  return [
-    {
-      id: "smart-search",
-      title: "Smart Search",
-      desc: "Refine your query with service/provider/ticket details.",
-      score: 1,
-    },
-    {
-      id: "noc-troubleshooter",
-      title: "NOC Troubleshooter",
-      desc: "Get guided troubleshooting for network and circuit incidents.",
-      score: 1,
-    },
-  ];
+  const fallback = widgets.slice(0, 2).map((widget) => ({
+    id: widget.id,
+    title: widget.title,
+    desc: widget.desc,
+    score: 1,
+  }));
+
+  return fallback.length > 0
+    ? fallback
+    : [
+        {
+          id: "noc-troubleshooter",
+          title: "NOC Troubleshooter",
+          desc: "Get guided troubleshooting for network and circuit incidents.",
+          score: 1,
+        },
+      ];
 }
 
 function openWidget(widgetId: string) {
@@ -197,6 +189,27 @@ function openWidget(widgetId: string) {
 }
 
 export function SmartSearchWidget() {
+  return (
+    <WidgetFrame
+      title="Smart Search"
+      subtitle="AI-powered natural language search with relevant widget results"
+      icon={IconSearch}
+      iconColor="indigo"
+    >
+      <SmartSearchPanel />
+    </WidgetFrame>
+  );
+}
+
+export function SmartSearchPanel({
+  availableWidgets = DEFAULT_WIDGET_LIST,
+  onOpenWidget = openWidget,
+  autofocus = false,
+}: {
+  availableWidgets?: SmartSearchWidgetMeta[];
+  onOpenWidget?: (widgetId: string) => void;
+  autofocus?: boolean;
+}) {
   const ai = useCompletion({ model: "auto" });
   const { identity } = useIdentity();
   const [query, setQuery] = useState("");
@@ -209,12 +222,16 @@ export function SmartSearchWidget() {
     () => history.length > 0 || activeRelevant.length > 0,
     [history.length, activeRelevant.length],
   );
+  const systemContext = useMemo(
+    () => buildSystemContext(availableWidgets),
+    [availableWidgets],
+  );
 
   async function handleSearch() {
     const q = query.trim();
     if (!q || ai.isLoading) return;
 
-    const relevant = rankRelevantWidgets(q);
+    const relevant = rankRelevantWidgets(q, availableWidgets);
     setActiveRelevant(relevant);
 
     const userContext = identity
@@ -225,7 +242,7 @@ export function SmartSearchWidget() {
       .map((w) => `- ${w.title}: ${w.desc}`)
       .join("\n")}`;
 
-    const prompt = `${SYSTEM_CONTEXT}\n\n${userContext}\n\n${resultContext}\n\nUser query: ${q}`;
+    const prompt = `${systemContext}\n\n${userContext}\n\n${resultContext}\n\nUser query: ${q}`;
 
     setQuery("");
     const answer = await ai.complete(prompt);
@@ -248,13 +265,7 @@ export function SmartSearchWidget() {
   }
 
   return (
-    <WidgetFrame
-      title="Smart Search"
-      subtitle="AI-powered natural language search with relevant widget results"
-      icon={IconSearch}
-      iconColor="indigo"
-    >
-      <Stack gap="md" style={{ height: "calc(100vh - 200px)", maxHeight: 800 }}>
+      <Stack gap="md" style={{ minHeight: 520, maxHeight: 760 }}>
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -263,6 +274,7 @@ export function SmartSearchWidget() {
         >
           <TextInput
             ref={inputRef}
+            autoFocus={autofocus}
             placeholder="Ask anything… e.g. 'How do I escalate a Comcast ticket?'"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
@@ -321,7 +333,7 @@ export function SmartSearchWidget() {
                       size="xs"
                       variant="light"
                       rightSection={<IconArrowRight size={12} />}
-                      onClick={() => openWidget(w.id)}
+                      onClick={() => onOpenWidget(w.id)}
                     >
                       Open widget
                     </Button>
@@ -419,6 +431,5 @@ export function SmartSearchWidget() {
           </Stack>
         </ScrollArea>
       </Stack>
-    </WidgetFrame>
   );
 }

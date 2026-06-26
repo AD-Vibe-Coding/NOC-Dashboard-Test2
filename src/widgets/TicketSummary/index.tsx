@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ActionIcon,
   Alert,
@@ -13,13 +13,16 @@ import {
   ScrollArea,
   Stack,
   Text,
+  Textarea,
   Tooltip,
 } from "@mantine/core";
 import {
   IconAlertCircle,
+  IconArrowUp,
   IconCopy,
   IconFileText,
   IconHistory,
+  IconMessageCircle,
   IconPlayerStop,
   IconRefresh,
   IconSparkles,
@@ -29,6 +32,7 @@ import {
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import { db } from "../../db";
+import { useChat } from "../../lib/devs-ai/use-chat";
 import { parseMhtmlFile, type ParsedMhtml } from "../../lib/mhtml";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { formatDateTime } from "../../lib/format";
@@ -60,6 +64,65 @@ What needs to happen next, and who owns it.
 Be terse. Skip Confluence/JIRA-style navigation chrome, copyright footers, signature blocks, and any pasted email headers that don't add information. If the raw text is empty or doesn't look like a ticket, say so and stop.`;
 
 const MAX_PROMPT_CHARS = 60_000;
+const QUICK_ASSIST_ACTIONS = [
+  {
+    label: "Executive",
+    prompt:
+      "Rewrite the current ticket summary as a tight executive summary for a team lead. Keep it under 6 bullets.",
+  },
+  {
+    label: "Customer update",
+    prompt:
+      "Rewrite this as a customer-safe status update with no internal jargon, 1 short paragraph plus 3 next steps.",
+  },
+  {
+    label: "Timeline only",
+    prompt:
+      "Convert this into a timeline-only summary with timestamps/events only. Omit analysis and recommendations.",
+  },
+  {
+    label: "Next actions",
+    prompt:
+      "Based on this ticket, tell me exactly what I should do next on shift. Use a short numbered list.",
+  },
+] as const;
+
+function buildAssistantContext(args: {
+  fileName: string;
+  parsed: ParsedMhtml | null;
+  displayedSummary: string;
+  showingHistorical: boolean;
+  viewingFileName?: string;
+}) {
+  const summary = args.displayedSummary.trim();
+  const rawText = args.parsed?.text?.slice(0, 20_000)?.trim() ?? "";
+  const subject = args.parsed?.ticket_subject ?? args.parsed?.subject ?? "";
+  const ticketNumber = args.parsed?.ticket_number ?? "";
+
+  return [
+    "You are an AI assistant embedded inside a NOC ticket-summary widget.",
+    "Answer the user's question about this ticket, or rewrite the summary in the format they request.",
+    "Be precise, operational, and concise.",
+    "If the user asks to change the summary type, return the rewritten summary directly in Markdown.",
+    "If the user asks a specific question, answer it using only the ticket context below. If the answer is uncertain, say what is missing.",
+    "Do not invent facts not supported by the context.",
+    "",
+    `Current file: ${args.parsed ? args.fileName : (args.viewingFileName ?? args.fileName ?? "Saved ticket summary")}`,
+    subject ? `Detected subject: ${subject}` : "",
+    ticketNumber ? `Detected ticket #: ${ticketNumber}` : "",
+    args.showingHistorical
+      ? "Context source: saved summary only"
+      : rawText
+        ? "Context source: uploaded ticket text + current summary"
+        : "Context source: current summary",
+    "",
+    "CURRENT SUMMARY:",
+    summary || "(No summary generated yet)",
+    rawText ? `\nRAW TICKET TEXT (truncated if needed):\n${rawText}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 export function TicketSummaryWidget() {
   const { summaries, refresh } = useTicketSummaries();
@@ -69,9 +132,22 @@ export function TicketSummaryWidget() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [viewing, setViewing] = useState<TicketSummary | null>(null);
+  const [assistantInput, setAssistantInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const { complete, result, isLoading, error, abort, setResult } = useCompletion();
+  const TICKET_SUMMARY_AGENT_ID = "2d6e4c84-9581-4753-bf84-9da21eddf76c";
+
+  const { complete, result, isLoading, error, abort, setResult } = useCompletion({
+    model: TICKET_SUMMARY_AGENT_ID,
+  });
+  const {
+    messages: assistantMessages,
+    sendMessage: askAssistant,
+    isLoading: assistantLoading,
+    error: assistantError,
+    abort: abortAssistant,
+    clear: clearAssistant,
+  } = useChat(TICKET_SUMMARY_AGENT_ID);
 
   async function handleFile(file: File) {
     setParseError(null);
@@ -132,6 +208,8 @@ ${truncated}${truncationNote}`;
     setParseError(null);
     setResult("");
     setViewing(null);
+    setAssistantInput("");
+    clearAssistant();
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
@@ -147,6 +225,37 @@ ${truncated}${truncationNote}`;
 
   const displayedSummary = viewing?.summary_markdown ?? result;
   const showingHistorical = !!viewing;
+  const assistantContext = buildAssistantContext({
+    fileName,
+    parsed,
+    displayedSummary,
+    showingHistorical,
+    viewingFileName: viewing?.file_name,
+  });
+  const canUseAssistant = Boolean(displayedSummary || parsed);
+  const checklistPromptHint = showingHistorical
+    ? "Ask about the saved summary or request a new format"
+    : "Ask about the ticket or request a different summary style";
+
+  useEffect(() => {
+    clearAssistant();
+    setAssistantInput("");
+  }, [displayedSummary, parsed?.ticket_number, parsed?.subject, viewing?.id, clearAssistant]);
+
+  async function submitAssistantPrompt(prompt: string) {
+    const trimmed = prompt.trim();
+    if (!trimmed || !canUseAssistant) return;
+    setAssistantInput("");
+    await askAssistant(`${assistantContext}\n\nUSER REQUEST:\n${trimmed}`);
+  }
+
+  function useAssistantRewrite(prompt: string) {
+    void submitAssistantPrompt(prompt);
+  }
+
+  function handleAssistantSubmit() {
+    void submitAssistantPrompt(assistantInput);
+  }
 
   return (
     <WidgetFrame
@@ -342,6 +451,129 @@ ${truncated}${truncationNote}`;
                 </Text>
               )}
             </Box>
+          </Card>
+        )}
+
+        {/* Ask AI / Rewrite summary */}
+        {canUseAssistant && (
+          <Card radius="md" withBorder p="md">
+            <Stack gap="md">
+              <Group justify="space-between" align="flex-start" gap="sm">
+                <Box style={{ minWidth: 0 }}>
+                  <Group gap="xs">
+                    <IconMessageCircle size={16} color="var(--mantine-color-indigo-5)" />
+                    <Text size="sm" fw={600}>
+                      Ask AI about this ticket
+                    </Text>
+                    <Badge size="xs" variant="light" color="indigo">
+                      Context-aware
+                    </Badge>
+                  </Group>
+                  <Text size="xs" c="dimmed" mt={4}>
+                    Ask follow-up questions or request a different summary style based on the current ticket context.
+                  </Text>
+                </Box>
+                {assistantMessages.length > 0 && (
+                  <Button variant="subtle" size="xs" onClick={clearAssistant}>
+                    Clear chat
+                  </Button>
+                )}
+              </Group>
+
+              <Group gap="xs">
+                {QUICK_ASSIST_ACTIONS.map((action) => (
+                  <Button
+                    key={action.label}
+                    size="xs"
+                    variant="light"
+                    color="indigo"
+                    onClick={() => useAssistantRewrite(action.prompt)}
+                    disabled={assistantLoading}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
+              </Group>
+
+              <Textarea
+                minRows={3}
+                autosize
+                value={assistantInput}
+                onChange={(event) => setAssistantInput(event.currentTarget.value)}
+                placeholder={checklistPromptHint}
+                disabled={assistantLoading}
+              />
+
+              <Group justify="space-between" align="center">
+                <Text size="xs" c="dimmed">
+                  Examples: “What is the likely root cause?”, “Rewrite for customer update”, “Make this shorter for Slack”.
+                </Text>
+                <Group gap="xs">
+                  {assistantLoading && (
+                    <Button
+                      variant="light"
+                      color="red"
+                      size="sm"
+                      leftSection={<IconPlayerStop size={14} />}
+                      onClick={abortAssistant}
+                    >
+                      Stop
+                    </Button>
+                  )}
+                  <Button
+                    color="indigo"
+                    size="sm"
+                    leftSection={<IconArrowUp size={14} />}
+                    onClick={handleAssistantSubmit}
+                    disabled={!assistantInput.trim() || assistantLoading}
+                  >
+                    Ask AI
+                  </Button>
+                </Group>
+              </Group>
+
+              {assistantError && (
+                <Alert color="red" icon={<IconAlertCircle size={16} />} variant="light">
+                  AI request failed: {assistantError}
+                </Alert>
+              )}
+
+              {assistantMessages.length > 0 && (
+                <Card radius="md" withBorder p="sm" bg="dark.7">
+                  <ScrollArea.Autosize mah={320}>
+                    <Stack gap="sm">
+                      {assistantMessages.map((message, idx) => (
+                        <Box
+                          key={`${message.role}-${idx}`}
+                          p="sm"
+                          style={{
+                            borderRadius: 10,
+                            background:
+                              message.role === "user"
+                                ? "var(--mantine-color-dark-5)"
+                                : "var(--mantine-color-dark-6)",
+                            border: "1px solid var(--mantine-color-dark-4)",
+                          }}
+                        >
+                          <Text size="xs" fw={700} c={message.role === "user" ? "indigo.3" : "gray.4"} mb={6}>
+                            {message.role === "user" ? "You" : "AI assistant"}
+                          </Text>
+                          {message.role === "assistant" ? (
+                            <Box className="ai-markdown" style={{ lineHeight: 1.55, fontSize: 14 }}>
+                              <ReactMarkdown>{message.content || "Working…"}</ReactMarkdown>
+                            </Box>
+                          ) : (
+                            <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>
+                              {message.content.replace(/^.*USER REQUEST:\n/s, "")}
+                            </Text>
+                          )}
+                        </Box>
+                      ))}
+                    </Stack>
+                  </ScrollArea.Autosize>
+                </Card>
+              )}
+            </Stack>
           </Card>
         )}
 

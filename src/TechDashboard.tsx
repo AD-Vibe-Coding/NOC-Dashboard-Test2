@@ -45,7 +45,7 @@ import {
   IconSearch,
   IconStar,
   IconBook,
-
+  IconBulb,
   IconClipboardList,
   IconSun,
   IconWorldPin,
@@ -114,6 +114,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: "ticket-summary", label: "Ticket Summary", icon: IconFileText, color: "indigo", description: "Summarize .mhtml tickets" },
       { id: "noc-troubleshooter", label: "NOC Troubleshooter", icon: IconActivityHeartbeat, color: "cyan", description: "Network & circuit help" },
       { id: "mobility-troubleshooter", label: "Mobility Troubleshooter", icon: IconDeviceMobileMessage, color: "violet", description: "Wireless & device help" },
+      { id: "piab-troubleshooter", label: "PIAB Troubleshooter", icon: IconBook, color: "indigo", description: "PIAB Knowledge Base troubleshooting" },
       { id: "timezone-helper", label: "Timezone Helper", icon: IconWorldPin, color: "cyan", description: "Convert customer time → PST/PT" },
     ],
   },
@@ -140,9 +141,9 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Team",
     items: [
       { id: "kudos-board", label: "Kudos Board", icon: IconStar, color: "yellow", description: "Peer recognition & shoutouts" },
+      { id: "enhancement-tracker", label: "Enhancement Tracker", icon: IconBulb, color: "yellow", description: "Submit and review team improvement ideas" },
       { id: "shift-checklist", label: "Shift Checklist", icon: IconClipboardList, color: "teal", description: "End-of-shift handover checklist" },
       { id: "kb-gap-finder", label: "KB Gap Finder", icon: IconBook, color: "indigo", description: "Ask questions · Flag missing docs" },
-
     ],
   },
 ];

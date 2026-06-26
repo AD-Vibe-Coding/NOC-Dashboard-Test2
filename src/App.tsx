@@ -16,11 +16,13 @@ import {
   ActionIcon,
   AppShell,
   Box,
+  Button,
   Card,
   Center,
   Grid,
   Group,
   Loader,
+  Modal,
   Text,
   Breadcrumbs,
   Anchor,
@@ -37,12 +39,12 @@ import { useDisclosure } from "@mantine/hooks";
 import {
   IconLayoutDashboard,
   IconMoon,
+  IconSearch,
   IconSun,
 } from "@tabler/icons-react";
 import { WIDGETS } from "./widgets/registry";
 import { trackWidgetOpen } from "./lib/track";
 import type { WidgetDefinition } from "./widgets/types";
-import { SIZE_TO_SPAN } from "./widgets/types";
 import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
 import { BrandLogo } from "./widgets/BrandLogo";
@@ -61,6 +63,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppOverview } from "./components/AppOverview";
 import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { AutoChatAssistant } from "./components/AutoChatAssistant";
+import { SmartSearchPanel } from "./widgets/SmartSearch";
 import { type DashboardTemplate, useDashboardPreferences } from "./lib/dashboard-preferences";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
@@ -82,6 +85,7 @@ function AppInner() {
   const { template } = useDashboardPreferences();
   const { windows, openWindow } = useWindowManager();
   const [overviewOpen, { open: openOverview, close: closeOverview }] = useDisclosure(false);
+  const [searchOpen, { open: openSearch, close: closeSearch }] = useDisclosure(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
@@ -90,8 +94,8 @@ function AppInner() {
   const toggleColorScheme = () => setColorScheme(isDark ? "light" : "dark");
 
   const visibleWidgets = useMemo(() => {
-    if (!identity) return WIDGETS;
-    return WIDGETS.filter((w) => canAccess(identity.role, w.roles));
+    const accessible = !identity ? WIDGETS : WIDGETS.filter((w) => canAccess(identity.role, w.roles));
+    return accessible.filter((w) => w.id !== "smart-search");
   }, [identity]);
 
   const featuredWidgets = useMemo(
@@ -204,7 +208,7 @@ function AppInner() {
   return (
     <AppShell
       data-dashboard-template={template}
-      header={{ height: 68 }}
+      header={{ height: 52, offset: false }}
       padding={0}
     >
       <AppShell.Header
@@ -246,9 +250,9 @@ function AppInner() {
             pointerEvents: "none",
           }}
         />
-        <Box h="100%" px="xl">
+        <Box h="100%" px={8}>
           <Group h="100%" justify="space-between" wrap="nowrap">
-            <Group gap="md" style={{ minWidth: 0 }} wrap="nowrap">
+            <Group gap="xs" style={{ minWidth: 0 }} wrap="nowrap">
               <Box
                 style={{
                   position: "relative",
@@ -256,12 +260,12 @@ function AppInner() {
                 }}
               >
                 <BrandLogo
-                  size={32}
+                  size={28}
                   glowColor={`var(--mantine-color-${accentColor}-6)`}
                 />
               </Box>
               <Box style={{ minWidth: 0 }}>
-                <Group gap={8} align="center">
+                <Group gap={6} align="center">
                   <Breadcrumbs
                     separator="›"
                     styles={{
@@ -275,9 +279,9 @@ function AppInner() {
                       fw={600}
                       c="bright"
                       underline="never"
-                      style={{ fontSize: 16, letterSpacing: "-0.01em" }}
+                      style={{ fontSize: 15, letterSpacing: "-0.01em" }}
                     >
-                      {identity ? "NOC Manager Dashboard" : "vCom NOC Operations Dashboard"}
+                      {identity ? "NOC Operations Dashboard" : "vCom NOC Operations Dashboard"}
                     </Anchor>
                     {windows.length > 0 && (
                       <Badge size="sm" color="appdirect" variant="light">
@@ -300,8 +304,8 @@ function AppInner() {
                 <Text
                   size="xs"
                   c="dimmed"
-                  mt={1}
-                  style={{ letterSpacing: "0.01em" }}
+                  mt={0}
+                  style={{ letterSpacing: "0.01em", lineHeight: 1.25 }}
                 >
                   {identity
                     ? `${sidebarWidgets.length + featuredWidgets.length} tools · click any widget to open`
@@ -309,15 +313,26 @@ function AppInner() {
                 </Text>
               </Box>
             </Group>
-            <Group gap="sm" wrap="nowrap">
+            <Group gap="xs" wrap="nowrap">
               <DashboardTemplatePicker />
+              <Button
+                variant="light"
+                color="indigo"
+                leftSection={<IconSearch size={15} />}
+                radius="md"
+                size="sm"
+                px="sm"
+                onClick={openSearch}
+              >
+                Search dashboard
+              </Button>
               <Tooltip
                 label={isDark ? "Switch to light mode" : "Switch to dark mode"}
                 withArrow
               >
                 <ActionIcon
                   variant="default"
-                  size="lg"
+                  size="md"
                   radius="md"
                   onClick={toggleColorScheme}
                   aria-label="Toggle color scheme"
@@ -356,6 +371,7 @@ function AppInner() {
           minHeight: "100vh",
           position: "relative",
           overflow: "hidden",
+          paddingTop: 52,
         }}
       >
         {/* Vibrant aurora glows */}
@@ -402,18 +418,43 @@ function AppInner() {
           }}
         />
         <Box className="dot-grid-bg" />
-        <Box
-          px="xl"
-          py="lg"
-          style={{ position: "relative", zIndex: 1 }}
-        >
-          <ManagerHome
-            featuredWidgets={featuredWidgets}
-            onExpand={expand}
-            template={template}
-          />
+        <Box style={{ position: "relative", zIndex: 1 }}>
+          <Box px={8} pt={0} pb={0}>
+            <NewsTicker />
+          </Box>
+          <Box px={8} pt={0} pb={6}>
+            <ManagerHome
+              identity={identity}
+              featuredWidgets={featuredWidgets}
+              visibleWidgets={visibleWidgets}
+              onExpand={expand}
+              template={template}
+            />
+          </Box>
         </Box>
       </AppShell.Main>
+
+      <Modal
+        opened={searchOpen}
+        onClose={closeSearch}
+        title="Smart Search"
+        size="xl"
+        centered
+        radius="lg"
+      >
+        <SmartSearchPanel
+          autofocus
+          availableWidgets={visibleWidgets.map((w) => ({
+            id: w.id,
+            title: w.title,
+            desc: w.description ?? "Open this dashboard tool",
+          }))}
+          onOpenWidget={(id) => {
+            closeSearch();
+            expand(id);
+          }}
+        />
+      </Modal>
 
       {/* ── Floating Windows ── */}
       {windows.map((win) => (
@@ -435,16 +476,18 @@ function AppInner() {
 // ── Manager Home ─────────────────────────────────────────────────────────────
 
 function ManagerHome({
+  identity,
   featuredWidgets,
+  visibleWidgets,
   onExpand,
   template,
 }: {
   identity?: ReturnType<typeof useIdentity>["identity"];
   featuredWidgets: WidgetDefinition[];
+  visibleWidgets: WidgetDefinition[];
   onExpand: (id: string) => void;
   template: DashboardTemplate;
 }) {
-  // Separate "my-day" (WorkActivity) from the rest — managers get ManagerDay instead
   const monitoringWidgets = featuredWidgets.filter((w) => w.id !== "my-day");
   const highlightedWidgets =
     template === "learning"
@@ -453,23 +496,52 @@ function ManagerHome({
         ? monitoringWidgets.slice(0, 3)
         : monitoringWidgets;
 
+  const visibleIds = new Set(visibleWidgets.map((w) => w.id));
+  const filteredGroups = MANAGER_QUICK_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => {
+      if (!visibleIds.has(item.id)) return false;
+      if (
+        identity?.role !== "manager" &&
+        group.label === "Monitoring & Operations" &&
+        ["logic-monitor", "velocloud-api"].includes(item.id)
+      ) {
+        return false;
+      }
+      return true;
+    }),
+  })).filter((group) => group.items.length > 0);
+
+  const coreOperationsGroup = filteredGroups.find((group) => group.label === "Core Operations");
+  const troubleshootingGroup = filteredGroups.find((group) => group.label === "Troubleshooting Agents");
+  const teamManagementGroup = filteredGroups.find((group) => group.label === "Team Management");
+  const monitoringOpsGroup = filteredGroups.find((group) => group.label === "Monitoring & Operations");
+  const adminUtilitiesGroup = filteredGroups.find((group) => group.label === "Admin & Utilities");
+  const remainingGroups = filteredGroups.filter(
+    (group) => ![
+      "Core Operations",
+      "Troubleshooting Agents",
+      "Team Management",
+      "Monitoring & Operations",
+      "Admin & Utilities",
+    ].includes(group.label),
+  );
+
   return (
-    <Stack gap="lg">
-      {/* News ticker */}
-      <NewsTicker />
-
-      {/* Main 2-column layout: My Day (left) + Team monitoring tiles (right) */}
-      <Grid gutter="lg" align="flex-start">
-
-        {/* ── Left: Manager Day planner ── */}
-        <Grid.Col span={{ base: 12, md: 5 }}>
-          <Card withBorder radius="lg" p="lg" h="100%"
+    <Stack gap={6}>
+      <Grid gutter={6} align="flex-start">
+        <Grid.Col span={{ base: 12, xl: 3 }}>
+          <Card
+            withBorder
+            radius="xl"
+            p="xs"
             style={{
-              borderTop: "3px solid var(--mantine-color-appdirect-6)",
-              background: "color-mix(in srgb, var(--mantine-color-appdirect-9) 6%, var(--mantine-color-body))",
+              borderTop: "2px solid var(--mantine-color-appdirect-6)",
+              background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-appdirect-9) 7%, var(--mantine-color-body)) 0%, color-mix(in srgb, var(--mantine-color-appdirect-9) 3%, var(--mantine-color-body)) 100%)",
+              boxShadow: "0 14px 34px rgba(3, 10, 24, 0.18)",
             }}
           >
-            <Group gap="xs" mb="md">
+            <Group gap={6} mb="xs">
               <ThemeIcon size="sm" variant="light" color="appdirect" radius="md">
                 <IconLayoutDashboard size={14} />
               </ThemeIcon>
@@ -481,35 +553,121 @@ function ManagerHome({
           </Card>
         </Grid.Col>
 
-        {/* ── Right: Team monitoring + quick-launch grid ── */}
-        <Grid.Col span={{ base: 12, md: 7 }}>
-          <Stack gap="lg">
-            {/* Featured monitoring tiles */}
-            {highlightedWidgets.length > 0 && (
-              <Box>
-                <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="sm"
-                  style={{ letterSpacing: "0.08em", paddingLeft: 2 }}>
-                  Team Overview
-                </Text>
-                <Grid gutter="md">
-                  {monitoringWidgets.map((w) => {
-                    const Tile = w.Tile;
-                    const span = SIZE_TO_SPAN[w.tileSize];
-                    return (
-                      <Grid.Col key={w.id} span={span}>
-                        <ErrorBoundary label={w.title} compact>
-                          <Tile onExpand={() => onExpand(w.id)} />
-                        </ErrorBoundary>
-                      </Grid.Col>
-                    );
-                  })}
-                </Grid>
-              </Box>
-            )}
+        <Grid.Col span={{ base: 12, xl: 9 }}>
+          <Grid gutter={6} align="flex-start">
+            <Grid.Col span={{ base: 12, lg: 4 }}>
+              <Stack gap={6}>
+                {highlightedWidgets.length > 0 && (
+                  <Card
+                    withBorder
+                    radius="xl"
+                    p="xs"
+                    style={{
+                      background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-white) 4%, var(--mantine-color-body)) 0%, color-mix(in srgb, var(--mantine-color-white) 1%, var(--mantine-color-body)) 100%)",
+                      boxShadow: "0 14px 34px rgba(3, 10, 24, 0.14)",
+                    }}
+                  >
+                    <Group justify="space-between" align="center" mb="xs">
+                      <Text
+                        size="xs"
+                        fw={700}
+                        tt="uppercase"
+                        c="dimmed"
+                        style={{ letterSpacing: "0.08em" }}
+                      >
+                        Team Overview
+                      </Text>
+                      <Badge variant="light" color="gray" radius="sm">
+                        {monitoringWidgets.length} live
+                      </Badge>
+                    </Group>
+                    <Stack gap="xs">
+                      {monitoringWidgets.map((w) => {
+                        const Tile = w.Tile;
+                        return (
+                          <ErrorBoundary key={w.id} label={w.title} compact>
+                            <Tile onExpand={() => onExpand(w.id)} />
+                          </ErrorBoundary>
+                        );
+                      })}
+                    </Stack>
+                  </Card>
+                )}
 
-            {/* Quick-launch grid: non-featured widgets as compact cards */}
-            <ManagerQuickLaunch onExpand={onExpand} />
-          </Stack>
+                {teamManagementGroup && (
+                  <ManagerQuickLaunchSection
+                    label={teamManagementGroup.label}
+                    items={teamManagementGroup.items}
+                    onExpand={onExpand}
+                    cols={{ base: 1, sm: 2 }}
+                    compact
+                  />
+                )}
+
+                {adminUtilitiesGroup && (
+                  <ManagerQuickLaunchSection
+                    label={adminUtilitiesGroup.label}
+                    items={adminUtilitiesGroup.items}
+                    onExpand={onExpand}
+                    cols={{ base: 1, sm: 1 }}
+                    compact
+                  />
+                )}
+              </Stack>
+            </Grid.Col>
+
+            <Grid.Col span={{ base: 12, lg: 8 }}>
+              <Stack gap={6}>
+                <Grid gutter={6} align="flex-start">
+                  {coreOperationsGroup && (
+                    <Grid.Col span={{ base: 12, md: troubleshootingGroup ? 6 : 12 }}>
+                      <ManagerQuickLaunchSection
+                        label={coreOperationsGroup.label}
+                        items={coreOperationsGroup.items}
+                        onExpand={onExpand}
+                        cols={{ base: 1, sm: 1 }}
+                        featured
+                        compact
+                      />
+                    </Grid.Col>
+                  )}
+
+                  {troubleshootingGroup && (
+                    <Grid.Col span={{ base: 12, md: coreOperationsGroup ? 6 : 12 }}>
+                      <ManagerQuickLaunchSection
+                        label={troubleshootingGroup.label}
+                        items={troubleshootingGroup.items}
+                        onExpand={onExpand}
+                        cols={{ base: 1, sm: 1, xl: 1 }}
+                        compact
+                      />
+                    </Grid.Col>
+                  )}
+                </Grid>
+
+                {monitoringOpsGroup && (
+                  <ManagerQuickLaunchSection
+                    label={monitoringOpsGroup.label}
+                    items={monitoringOpsGroup.items}
+                    onExpand={onExpand}
+                    cols={{ base: 1, sm: 2 }}
+                    compact
+                  />
+                )}
+
+                {remainingGroups.map((group) => (
+                  <ManagerQuickLaunchSection
+                    key={group.label}
+                    label={group.label}
+                    items={group.items}
+                    onExpand={onExpand}
+                    cols={group.items.length <= 2 ? { base: 1, sm: 2 } : { base: 1, sm: 2, xl: 3 }}
+                    compact
+                  />
+                ))}
+              </Stack>
+            </Grid.Col>
+          </Grid>
         </Grid.Col>
       </Grid>
     </Stack>
@@ -522,16 +680,25 @@ const MANAGER_QUICK_GROUPS: Array<{
   items: Array<{ id: string; emoji: string; label: string; desc: string; color: string }>;
 }> = [
   {
-    label: "Search & AI Tools",
+    label: "Core Operations",
     items: [
-      { id: "smart-search",        emoji: "🔎", label: "Smart Search",      desc: "AI dashboard search",         color: "indigo" },
-      { id: "ticket-summary",      emoji: "📄", label: "Ticket Summary",    desc: "Summarize tickets",           color: "indigo" },
-      { id: "escalation-email",    emoji: "✉️", label: "ESC Email",         desc: "Draft escalation alerts",     color: "teal" },
-      { id: "email-polisher",      emoji: "📝", label: "Email Polisher",    desc: "Polish customer drafts",      color: "lime" },
-      { id: "noc-troubleshooter",  emoji: "🩺", label: "NOC Troubleshooter",desc: "AI network troubleshooting",   color: "cyan" },
-      { id: "velocloud-troubleshooter", emoji: "🌐", label: "VeloCloud Troubleshooter", desc: "Arista SD-WAN troubleshooting", color: "cyan" },
-      { id: "fortigate-troubleshooter", emoji: "🛡️", label: "Fortigate Troubleshooting Agent", desc: "FortiGate troubleshooting", color: "orange" },
-      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",      desc: "AI-powered QA audits",        color: "pink" },
+      { id: "email-assistant",              emoji: "✉️", label: "NOC Email Assistant",         desc: "Draft, polish, compare, and QA emails", color: "teal" },
+      { id: "ticket-summary",               emoji: "📄", label: "Ticket Summary",              desc: "Summarize tickets",                     color: "indigo" },
+      { id: "shift-checklist",              emoji: "🔄", label: "Shift Handover Checklist",    desc: "Structured handover",                   color: "teal" },
+      { id: "kb-gap-finder",                emoji: "📘", label: "Knowledge Base",              desc: "Runbooks & missing docs",               color: "indigo" },
+      { id: "qs-escalations",               emoji: "📋", label: "QS Carrier Escalation Contacts", desc: "Carrier contacts",                    color: "grape" },
+      { id: "timezone-helper",              emoji: "🌍", label: "NOC Timezone Helper",         desc: "DST-aware time conversion",             color: "cyan" },
+      { id: "maintenance-note-generator",   emoji: "🛠️", label: "Maintenance Note Generator",  desc: "Parse carrier maintenance notices",     color: "indigo" },
+    ],
+  },
+  {
+    label: "Troubleshooting Agents",
+    items: [
+      { id: "noc-troubleshooter",         emoji: "🩺", label: "NOC Troubleshooter",                desc: "AI network troubleshooting",          color: "cyan" },
+      { id: "velocloud-troubleshooter",   emoji: "🌐", label: "VeloCloud Troubleshooter",          desc: "Arista SD-WAN troubleshooting",       color: "cyan" },
+      { id: "fortigate-troubleshooter",   emoji: "🛡️", label: "Fortigate Troubleshooting Agent",  desc: "FortiGate troubleshooting",           color: "orange" },
+      { id: "mobility-troubleshooter",    emoji: "📱", label: "Mobility Troubleshooter",           desc: "Wireless/device troubleshooting",     color: "violet" },
+      { id: "piab-troubleshooter",        emoji: "📘", label: "PIAB Troubleshooter",               desc: "PIAB Knowledge Base troubleshooting", color: "indigo" },
     ],
   },
   {
@@ -541,8 +708,10 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "wfh",                 emoji: "🏠", label: "WFH Requests",      desc: "Review & approve WFH",        color: "appdirect" },
       { id: "training-updates",    emoji: "🎓", label: "Training Hub",      desc: "Requests, sessions, progress", color: "blue" },
       { id: "attendance-tracker",  emoji: "🕒", label: "Attendance & Reminders", desc: "Punches + reminder counts", color: "orange" },
+      { id: "ticket-rebalancer",   emoji: "🔀", label: "Ticket Rebalancer", desc: "Balance team ticket load",     color: "grape" },
       { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
+      { id: "enhancement-tracker", emoji: "💡", label: "Enhancement Tracker", desc: "Ideas, approvals, and status", color: "yellow" },
     ],
   },
   {
@@ -550,71 +719,120 @@ const MANAGER_QUICK_GROUPS: Array<{
     items: [
       { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",      desc: "Alerts & alert analyzer",     color: "red" },
       { id: "velocloud-api",       emoji: "🌐", label: "VeloCloud API",     desc: "SD-WAN alerts & link status", color: "cyan" },
-      { id: "zoom-queue",          emoji: "📞", label: "Team Availability", desc: "Live queue + meetings",       color: "appdirect" },
       { id: "zoom-call-metrics",   emoji: "📈", label: "Zoom Call Metrics", desc: "Queue call data",             color: "green" },
-      { id: "qs-escalations",      emoji: "📋", label: "Escalations",       desc: "Carrier contacts",            color: "grape" },
-      { id: "shift-checklist",     emoji: "🔄", label: "Shift Handover",    desc: "Structured handover",         color: "teal" },
       { id: "data-health",         emoji: "🗄️", label: "Data Health",       desc: "App data table counts",       color: "orange" },
+      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",      desc: "AI-powered QA audits",        color: "pink" },
     ],
   },
   {
-    label: "Admin & Knowledge",
+    label: "Admin & Utilities",
     items: [
       { id: "access-control",      emoji: "🛡️", label: "Access Control",    desc: "Manage roles & access",       color: "red" },
       { id: "app-usage",           emoji: "📉", label: "App Usage",         desc: "Tool adoption & DAU",         color: "teal" },
-      { id: "kb-gap-finder",       emoji: "📘", label: "Knowledge Base",    desc: "Runbooks & missing docs",     color: "indigo" },
-      { id: "timezone-helper",     emoji: "🌍", label: "Timezone Helper",   desc: "DST-aware time conversion",   color: "cyan" },
-      { id: "mobility-troubleshooter", emoji: "📱", label: "Mobility Troubleshooter", desc: "Wireless/device troubleshooting", color: "violet" },
     ],
   },
 ];
 
-function ManagerQuickLaunch({ onExpand }: { onExpand: (id: string) => void }) {
-  const visibleIds = useMemo(
-    () => new Set(WIDGETS.map((w) => w.id)),
-    [],
-  );
-
-  const groups = MANAGER_QUICK_GROUPS.map((g) => ({
-    ...g,
-    items: g.items.filter((i) => visibleIds.has(i.id)),
-  })).filter((g) => g.items.length > 0);
+function ManagerQuickLaunchSection({
+  label,
+  items,
+  onExpand,
+  cols = { base: 1, sm: 2 },
+  featured = false,
+  compact = false,
+}: {
+  label: string;
+  items: Array<{ id: string; emoji: string; label: string; desc: string; color: string }>;
+  onExpand: (id: string) => void;
+  cols?: { base: number; sm?: number; xl?: number };
+  featured?: boolean;
+  compact?: boolean;
+}) {
+  if (items.length === 0) return null;
 
   return (
-    <Stack gap="md">
-      {groups.map((group) => (
-        <Box key={group.label}>
-          <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb="xs"
-            style={{ letterSpacing: "0.08em", paddingLeft: 2 }}>
-            {group.label}
-          </Text>
-          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="sm">
-            {group.items.map((item) => (
-              <UnstyledButton key={item.id} onClick={() => onExpand(item.id)} style={{ width: "100%" }}>
-                <Card withBorder radius="md" p="sm" className="tech-nav-button"
-                  style={{ cursor: "pointer", transition: "all 150ms ease", position: "relative", overflow: "hidden" }}>
-                  <Box style={{
-                    position: "absolute", top: 0, left: 0, right: 0, height: 2,
-                    background: `var(--mantine-color-${item.color}-6)`, opacity: 0.7,
-                  }} />
-                  <Group gap="xs" wrap="nowrap">
-                    <Text size="xl" style={{ lineHeight: 1 }}>{item.emoji}</Text>
-                    <Box style={{ minWidth: 0 }}>
-                      <Text size="xs" fw={600} c="bright" style={{ lineHeight: 1.3 }}>
-                        {item.label}
-                      </Text>
-                      <Text size="xs" c="dimmed" lineClamp={1} mt={1}>
-                        {item.desc}
-                      </Text>
-                    </Box>
-                  </Group>
-                </Card>
-              </UnstyledButton>
-            ))}
-          </SimpleGrid>
-        </Box>
-      ))}
-    </Stack>
+    <Card
+      withBorder
+      radius="xl"
+      p="xs"
+      style={{
+        background: featured
+          ? "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-appdirect-9) 6%, var(--mantine-color-body)) 0%, color-mix(in srgb, var(--mantine-color-appdirect-9) 2%, var(--mantine-color-body)) 100%)"
+          : "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-white) 3%, var(--mantine-color-body)) 0%, color-mix(in srgb, var(--mantine-color-white) 1%, var(--mantine-color-body)) 100%)",
+        boxShadow: featured
+          ? "0 14px 34px rgba(3, 10, 24, 0.16)"
+          : "0 12px 28px rgba(3, 10, 24, 0.12)",
+      }}
+    >
+      <Group justify="space-between" align="center" mb={compact ? "xs" : "sm"}>
+        <Text
+          size="xs"
+          fw={700}
+          tt="uppercase"
+          c={featured ? "appdirect.5" : "dimmed"}
+          style={{ letterSpacing: "0.08em" }}
+        >
+          {label}
+        </Text>
+        <Badge variant="light" color={featured ? "appdirect" : "gray"} radius="sm" size="sm">
+          {items.length}
+        </Badge>
+      </Group>
+
+      <SimpleGrid cols={cols} spacing="xs" verticalSpacing="xs">
+        {items.map((item) => (
+          <UnstyledButton key={item.id} onClick={() => onExpand(item.id)} style={{ width: "100%" }}>
+            <Card
+              withBorder
+              radius="lg"
+              p="xs"
+              className="tech-nav-button"
+              style={{
+                cursor: "pointer",
+                transition: "transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease",
+                position: "relative",
+                overflow: "hidden",
+                minHeight: compact ? 60 : 74,
+                background: "color-mix(in srgb, var(--mantine-color-white) 2%, var(--mantine-color-body))",
+                boxShadow: "inset 0 1px 0 rgba(255,255,255,0.03)",
+              }}
+            >
+              <Box
+                style={{
+                  position: "absolute",
+                  top: 10,
+                  left: 10,
+                  width: 6,
+                  height: 6,
+                  borderRadius: 999,
+                  background: `var(--mantine-color-${item.color}-6)`,
+                  opacity: 0.95,
+                }}
+              />
+              <Group gap={compact ? 6 : "xs"} wrap="nowrap" align="flex-start">
+                <ThemeIcon
+                  size={compact ? 28 : 34}
+                  radius="md"
+                  variant="light"
+                  color={item.color}
+                  style={{ flexShrink: 0, marginTop: 2 }}
+                >
+                  <Text size={compact ? "sm" : "lg"} style={{ lineHeight: 1 }}>{item.emoji}</Text>
+                </ThemeIcon>
+                <Box style={{ minWidth: 0, paddingRight: 4 }}>
+                  <Text size="xs" fw={600} c="bright" lineClamp={compact ? 1 : 2} style={{ lineHeight: 1.2 }}>
+                    {item.label}
+                  </Text>
+                  <Text size="xs" c="dimmed" lineClamp={1} mt={1} style={{ lineHeight: 1.2 }}>
+                    {item.desc}
+                  </Text>
+                </Box>
+              </Group>
+            </Card>
+          </UnstyledButton>
+        ))}
+      </SimpleGrid>
+    </Card>
   );
 }
 

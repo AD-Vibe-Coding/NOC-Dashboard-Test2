@@ -67,6 +67,7 @@ const PRIORITY_CONFIG: Record<
 };
 
 const CELEBRATION_DURATION_MS = 25_000;
+const DAILY_KUDOS_CELEBRATION_STORAGE_KEY = "devsai:kudos-celebration-shown-by-day";
 const CONFETTI_PARTICLES = Array.from({ length: 24 }, (_, index) => ({
   id: index,
   left: `${4 + ((index * 97) % 92)}%`,
@@ -76,6 +77,46 @@ const CONFETTI_PARTICLES = Array.from({ length: 24 }, (_, index) => ({
   color: ["#ffd43b", "#ff8787", "#74c0fc", "#69db7c", "#b197fc", "#ffa94d"][index % 6],
   shape: index % 3 === 0 ? "18px" : index % 3 === 1 ? "12px" : "10px",
 }));
+
+function getTodayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isSameDayKudos(createdAt: string) {
+  return createdAt.slice(0, 10) === getTodayKey();
+}
+
+function shouldCelebrateToday(kudos: KudosAnnouncement) {
+  return kudos.is_pinned || isSameDayKudos(kudos.created_at);
+}
+
+function getShownCelebrationIdsForToday() {
+  if (typeof window === "undefined") return [] as number[];
+  try {
+    const raw = window.localStorage.getItem(DAILY_KUDOS_CELEBRATION_STORAGE_KEY);
+    if (!raw) return [] as number[];
+    const parsed = JSON.parse(raw) as Record<string, number[]>;
+    return Array.isArray(parsed?.[getTodayKey()]) ? parsed[getTodayKey()] : [];
+  } catch {
+    return [] as number[];
+  }
+}
+
+function markCelebrationShownForToday(id: number) {
+  if (typeof window === "undefined") return;
+  try {
+    const raw = window.localStorage.getItem(DAILY_KUDOS_CELEBRATION_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) as Record<string, number[]> : {};
+    const todayKey = getTodayKey();
+    const current = Array.isArray(parsed[todayKey]) ? parsed[todayKey] : [];
+    parsed[todayKey] = Array.from(new Set([...current, id]));
+    window.localStorage.setItem(DAILY_KUDOS_CELEBRATION_STORAGE_KEY, JSON.stringify({
+      [todayKey]: parsed[todayKey],
+    }));
+  } catch {
+    // ignore storage failures
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /*                           Scrolling Ticker                                 */
@@ -94,22 +135,51 @@ export function NewsTicker() {
   const [selectedUpdate, setSelectedUpdate] = useState<ManagerUpdate | null>(null);
   const tickerRef = useRef<HTMLDivElement>(null);
   const celebrationTimeoutRef = useRef<number | null>(null);
-  const lastCelebratedKudosIdRef = useRef<number | null>(null);
+  const celebrationQueueRef = useRef<KudosAnnouncement[]>([]);
+  const activeCelebrationIdRef = useRef<number | null>(null);
+  const lastSeenKudosIdsRef = useRef<number[]>([]);
   void tickerRef; // kept to avoid removing the import
 
   const isManager = isManagerRole(identity?.role);
 
-  const triggerCelebration = useCallback((kudos: KudosAnnouncement) => {
-    setFeaturedKudos(kudos);
-    setCelebrationKudos(kudos);
+  const playNextCelebration = useCallback(() => {
+    if (activeCelebrationIdRef.current != null) return;
+    const next = celebrationQueueRef.current.shift();
+    if (!next) return;
+
+    activeCelebrationIdRef.current = next.id;
+    setFeaturedKudos(next);
+    setCelebrationKudos(next);
+    markCelebrationShownForToday(next.id);
+
     if (celebrationTimeoutRef.current) {
       window.clearTimeout(celebrationTimeoutRef.current);
     }
     celebrationTimeoutRef.current = window.setTimeout(() => {
       setCelebrationKudos(null);
       celebrationTimeoutRef.current = null;
+      activeCelebrationIdRef.current = null;
+      window.setTimeout(() => {
+        playNextCelebration();
+      }, 450);
     }, CELEBRATION_DURATION_MS);
   }, []);
+
+  const enqueueCelebrations = useCallback((kudosItems: KudosAnnouncement[]) => {
+    const knownIds = new Set([
+      ...celebrationQueueRef.current.map((item) => item.id),
+      ...(activeCelebrationIdRef.current != null ? [activeCelebrationIdRef.current] : []),
+    ]);
+
+    kudosItems.forEach((item) => {
+      if (!knownIds.has(item.id)) {
+        celebrationQueueRef.current.push(item);
+        knownIds.add(item.id);
+      }
+    });
+
+    playNextCelebration();
+  }, [playNextCelebration]);
 
   const fetchFeed = useCallback(async () => {
     try {
@@ -135,21 +205,28 @@ export function NewsTicker() {
       );
       setRecentKudos(latestKudosRows);
 
-      const latestKudos = latestKudosRows[0] ?? null;
-      setFeaturedKudos(latestKudos);
+      const latestCelebrationCandidate = latestKudosRows.find((k) => shouldCelebrateToday(k)) ?? latestKudosRows[0] ?? null;
+      setFeaturedKudos(latestCelebrationCandidate);
 
-      if (latestKudos && lastCelebratedKudosIdRef.current == null) {
-        lastCelebratedKudosIdRef.current = latestKudos.id;
-      } else if (latestKudos && lastCelebratedKudosIdRef.current !== latestKudos.id) {
-        lastCelebratedKudosIdRef.current = latestKudos.id;
-        triggerCelebration(latestKudos);
+      const todayShownIds = new Set(getShownCelebrationIdsForToday());
+      const currentVisibleIds = new Set(lastSeenKudosIdsRef.current);
+      const todaysUnshownKudos = [...latestKudosRows]
+        .filter((k) => shouldCelebrateToday(k))
+        .filter((k) => !todayShownIds.has(k.id))
+        .filter((k) => !currentVisibleIds.has(k.id))
+        .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+      if (todaysUnshownKudos.length > 0) {
+        enqueueCelebrations(todaysUnshownKudos);
       }
+
+      lastSeenKudosIdsRef.current = latestKudosRows.map((item) => item.id);
     } catch {
       // table may not exist yet — silently ignore
     } finally {
       setLoading(false);
     }
-  }, [triggerCelebration]);
+  }, [enqueueCelebrations]);
 
   useEffect(() => {
     fetchFeed();
@@ -157,9 +234,10 @@ export function NewsTicker() {
     const handleKudosPosted = (event: Event) => {
       const customEvent = event as CustomEvent<KudosAnnouncement | undefined>;
       if (customEvent.detail) {
-        lastCelebratedKudosIdRef.current = customEvent.detail.id;
         setFeaturedKudos(customEvent.detail);
-        triggerCelebration(customEvent.detail);
+        if (shouldCelebrateToday(customEvent.detail)) {
+          enqueueCelebrations([customEvent.detail]);
+        }
       }
       void fetchFeed();
     };
@@ -171,7 +249,7 @@ export function NewsTicker() {
       }
       window.removeEventListener("kudos:posted", handleKudosPosted as EventListener);
     };
-  }, [fetchFeed, triggerCelebration]);
+  }, [enqueueCelebrations, fetchFeed]);
 
   // Show for everyone — managers see "Post Update", agents see updates,
   // unauthenticated users see a sign-in prompt.
@@ -341,7 +419,7 @@ export function NewsTicker() {
 
       {kudosTickerItems.length > 0 && (
         <Box
-          mb="sm"
+          mb={6}
           style={{
             borderRadius: 14,
             overflow: "hidden",
@@ -400,8 +478,8 @@ export function NewsTicker() {
           </Group>
 
           <Box
-            px="md"
-            py="sm"
+            px="sm"
+            py={3}
             style={{
               position: "relative",
               overflow: "hidden",
@@ -409,58 +487,45 @@ export function NewsTicker() {
             }}
             onClick={() => featuredKudos && setSelectedKudos(featuredKudos)}
           >
-            {featuredKudos && (
-              <Stack gap={2} mb="xs" style={{ position: "relative", zIndex: 1 }}>
-                <Text size="sm" fw={800} c="yellow.1">
-                  {featuredKudos.to_name}
-                </Text>
-                <Text size="xs" c="gray.2">
-                  Latest shoutout from {featuredKudos.from_name} · {formatRelative(featuredKudos.created_at)}
-                </Text>
-                <Text size="xs" c="yellow.0" fw={700}>
-                  Click anywhere on this kudos banner to read the full message.
-                </Text>
-              </Stack>
-            )}
             <Text
-              size="lg"
+              size="sm"
               style={{
                 position: "absolute",
-                left: 10,
-                top: 6,
+                left: 8,
+                top: 0,
                 animation: "kudos-emoji-float 2.4s ease-in-out infinite",
               }}
             >
               🥳
             </Text>
             <Text
-              size="lg"
+              size="sm"
               style={{
                 position: "absolute",
-                right: 18,
-                top: 8,
+                right: 14,
+                top: 1,
                 animation: "kudos-emoji-float 2.1s ease-in-out infinite 0.3s",
               }}
             >
               🎉
             </Text>
             <Text
-              size="lg"
+              size="sm"
               style={{
                 position: "absolute",
-                right: 80,
-                bottom: 4,
+                right: 58,
+                bottom: 0,
                 animation: "kudos-emoji-float 2.8s ease-in-out infinite 0.6s",
               }}
             >
               🌟
             </Text>
             <Text
-              size="lg"
+              size="sm"
               style={{
                 position: "absolute",
-                left: 72,
-                bottom: 2,
+                left: 52,
+                bottom: -1,
                 animation: "kudos-emoji-float 2.5s ease-in-out infinite 0.9s",
               }}
             >
@@ -478,11 +543,11 @@ export function NewsTicker() {
                 {[...kudosTickerItems, ...kudosTickerItems].map((item, index) => (
                   <Text
                     key={`${index}-${item}`}
-                    size="sm"
+                    size="xs"
                     fw={700}
                     c="yellow.0"
-                    mr={48}
-                    style={{ textShadow: "0 1px 10px rgba(255, 212, 59, 0.2)" }}
+                    mr={36}
+                    style={{ textShadow: "0 1px 10px rgba(255, 212, 59, 0.2)", lineHeight: 1.15 }}
                   >
                     {item}
                   </Text>

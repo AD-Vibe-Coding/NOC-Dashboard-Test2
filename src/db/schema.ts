@@ -250,6 +250,25 @@ export const manager_updates = pgTable("manager_updates", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const enhancements = pgTable("enhancements", {
+  id: serial("id").primaryKey(),
+  legacy_id: text("legacy_id"),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  platform: text("platform").notNull(), // ipath | noc_dashboard
+  category: text("category").notNull(),
+  priority: text("priority").notNull(),
+  status: text("status").notNull(), // pending | approved | in_progress | completed | rejected
+  submitted_by_name: text("submitted_by_name").notNull(),
+  submitted_by_email: text("submitted_by_email"),
+  approved_by_name: text("approved_by_name"),
+  approved_at: text("approved_at"),
+  manager_notes: text("manager_notes"),
+  target_quarter: text("target_quarter"),
+  updated_at: text("updated_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const escalation_drafts = pgTable("escalation_drafts", {
   id: serial("id").primaryKey(),
   // Structured inputs (all optional — the AI will infer from notes if missing)

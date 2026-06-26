@@ -250,7 +250,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
   return (
     <WidgetTile
       title="Team Availability"
-      description="Queue availability + break / meeting status"
+      description="Queue + break status"
       icon={IconHeadset}
       iconColor="blue"
       status={
@@ -284,20 +284,20 @@ export function ZoomQueueTile({ onExpand }: Props) {
       ) : undefined}
       onExpand={onExpand}
     >
-      <Stack gap="sm">
-        <SimpleGrid cols={{ base: 1, sm: canQuickControl && identity?.name ? 2 : 1 }} spacing="sm">
-          <Card withBorder radius="md" p="sm" style={{ background: "color-mix(in srgb, var(--mantine-color-green-9) 8%, var(--mantine-color-body))" }}>
-            <Stack gap={2}>
-              <Text size="10px" c="dimmed" tt="uppercase" fw={700} style={{ letterSpacing: "0.04em" }}>
+      <Stack gap={6}>
+        <SimpleGrid cols={{ base: 1, sm: canQuickControl && identity?.name ? 2 : 1 }} spacing={6}>
+          <Card withBorder radius="md" p={8} style={{ background: "color-mix(in srgb, var(--mantine-color-green-9) 8%, var(--mantine-color-body))" }}>
+            <Stack gap={1}>
+              <Text size="10px" c="dimmed" tt="uppercase" fw={700} style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>
                 In Queue
               </Text>
-              <Title order={1} c="green" style={{ lineHeight: 1 }}>
+              <Title order={3} c="green" style={{ lineHeight: 1 }}>
                 {inQueue}
-                <Text component="span" size="sm" c="dimmed" fw={500}>
+                <Text component="span" size="xs" c="dimmed" fw={500}>
                   {" "}/ {inShift}
                 </Text>
               </Title>
-              <Text size="xs" c="dimmed">
+              <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>
                 {outOfQueueInShift} out of queue (in shift)
               </Text>
             </Stack>
@@ -307,20 +307,20 @@ export function ZoomQueueTile({ onExpand }: Props) {
             <Card
               withBorder
               radius="md"
-              p="sm"
+              p={8}
               style={{
                 background: `color-mix(in srgb, var(--mantine-color-${breakUsed >= TOTAL_BREAK_MINUTES ? "red" : "blue"}-9) 10%, var(--mantine-color-body))`,
               }}
             >
-              <Text size="10px" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.04em" }}>Break Summary</Text>
-              <Group justify="space-between" align="flex-end" wrap="wrap" mt={4}>
+              <Text size="10px" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>Break Summary</Text>
+              <Group justify="space-between" align="flex-end" wrap="nowrap" mt={2} gap={8}>
                 <Stack gap={0}>
-                  <Text size="xs" c="dimmed">Taken</Text>
-                  <Text fw={800} size="xl" style={{ lineHeight: 1 }}>{myBreakTakenCount}</Text>
+                  <Text size="11px" c="dimmed">Taken</Text>
+                  <Text fw={800} size="lg" style={{ lineHeight: 1 }}>{myBreakTakenCount}</Text>
                 </Stack>
                 <Stack gap={0} align="flex-end" style={{ minWidth: 0 }}>
-                  <Text size="xs" c="dimmed">Used</Text>
-                  <Text fw={800} size="lg" style={{ lineHeight: 1, wordBreak: "break-word" }}>{breakUsed}/{TOTAL_BREAK_MINUTES} min</Text>
+                  <Text size="11px" c="dimmed">Used</Text>
+                  <Text fw={800} size="md" style={{ lineHeight: 1, wordBreak: "break-word" }}>{breakUsed}/{TOTAL_BREAK_MINUTES} min</Text>
                 </Stack>
               </Group>
             </Card>
@@ -328,24 +328,25 @@ export function ZoomQueueTile({ onExpand }: Props) {
         </SimpleGrid>
 
         {canQuickControl && (
-          <Card withBorder radius="md" p="sm" onClick={stopTileExpand}>
-            <Stack gap="xs">
-              <Group justify="space-between" wrap="wrap" gap="xs">
+          <Card withBorder radius="md" p={8} onClick={stopTileExpand}>
+            <Stack gap={6}>
+              <Group justify="space-between" wrap="wrap" gap={6}>
                 <Badge
                   variant="light"
                   color={youOnBreak ? (BREAK_TYPE_COLORS[youOnBreak.break_type] ?? "orange") : "gray"}
                   leftSection={<IconUser size={10} />}
-                  size="sm"
+                  size="xs"
                   style={{ textTransform: "none" }}
                 >
                   {identity?.name?.split(" ")[0] ?? "Agent"}
                   {youOnBreak ? ` · ${youOnBreak.break_type}` : " · available"}
                 </Badge>
                 <Button
-                  size="xs"
+                  size="compact-xs"
+                  px={6}
                   variant="subtle"
                   color="gray"
-                  leftSection={<IconSettings size={14} />}
+                  leftSection={<IconSettings size={12} />}
                   onClick={configurePunchMessages}
                 >
                   Set messages
@@ -353,20 +354,21 @@ export function ZoomQueueTile({ onExpand }: Props) {
               </Group>
 
               {!youOnBreak && (
-                <Group gap="xs" wrap="wrap" align="stretch">
+                <Group gap={6} wrap="nowrap" align="stretch">
                   <Select
                     size="xs"
-                    style={{ flex: 1, minWidth: 180 }}
+                    style={{ flex: 1, minWidth: 0 }}
                     data={QUICK_STATUS_TYPES}
                     value={statusType}
                     onChange={setStatusType}
                     allowDeselect={false}
                   />
                   <Button
-                    size="xs"
+                    size="compact-xs"
+                    px="sm"
                     variant="light"
                     color="orange"
-                    leftSection={<IconCoffee size={14} />}
+                    leftSection={<IconCoffee size={12} />}
                     loading={posting === "status"}
                     onClick={() => void startStatusQuick()}
                   >
@@ -375,10 +377,10 @@ export function ZoomQueueTile({ onExpand }: Props) {
                 </Group>
               )}
 
-              <Group gap={6} justify="flex-end" wrap="wrap">
+              <Group gap={6} justify="flex-end" wrap="nowrap">
                 <Button
                   size="compact-xs"
-                  px="sm"
+                  px={10}
                   variant="light"
                   color="green"
                   loading={posting === "punch_in"}
@@ -389,7 +391,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
                 </Button>
                 <Button
                   size="compact-xs"
-                  px="sm"
+                  px={10}
                   variant="light"
                   color="red"
                   loading={posting === "punch_out"}

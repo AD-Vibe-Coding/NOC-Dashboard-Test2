@@ -1288,13 +1288,23 @@ export function ZoomQueueWidget() {
           ))}
         </Box>
 
-        <Card withBorder radius="lg" p="md">
-          <Stack gap="md">
+        <Card
+          withBorder
+          radius="xl"
+          p="md"
+          style={{
+            background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-blue-9) 12%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)",
+            borderColor: "color-mix(in srgb, var(--mantine-color-blue-6) 22%, transparent)",
+            boxShadow: "0 14px 34px rgba(0,0,0,0.12)",
+          }}
+        >
+          <Stack gap="sm">
             <Group justify="space-between" align="flex-start" wrap="wrap">
               <Stack gap={2}>
-                <Text fw={600} size="sm">My status</Text>
+                <Text size="10px" fw={800} tt="uppercase" c="blue.4" style={{ letterSpacing: "0.12em" }}>Status controls</Text>
+                <Text fw={800} size="lg" style={{ letterSpacing: "-0.02em" }}>My status</Text>
                 <Text size="xs" c="dimmed">
-                  Quickly set a break or meeting status while keeping queue visibility below.
+                  Quickly set a break or meeting status while keeping live queue visibility below.
                 </Text>
               </Stack>
               <Group gap="xs" align="center" wrap="nowrap">
@@ -1305,6 +1315,7 @@ export function ZoomQueueWidget() {
                 )}
                 <Button
                   size="xs"
+                  radius="md"
                   color="green"
                   variant="light"
                   leftSection={<IconLogin2 size={12} />}
@@ -1316,6 +1327,7 @@ export function ZoomQueueWidget() {
                 </Button>
                 <Button
                   size="xs"
+                  radius="md"
                   color="gray"
                   variant="subtle"
                   leftSection={<IconLogout2 size={12} />}
@@ -1391,20 +1403,18 @@ export function ZoomQueueWidget() {
               <Badge variant="light" color="teal">Meeting - External</Badge>
               <Text size="xs" c="dimmed">External = customer / partner meeting.</Text>
             </Group>
-
-
           </Stack>
         </Card>
 
         {/* ── Availability summary ── */}
         {isManager ? (
           <SimpleGrid cols={{ base: 1, sm: allQueues.length > 0 ? 3 : 2 }} spacing="md">
-            <Card withBorder radius="md" p="md">
+            <Card withBorder radius="xl" p="md" style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-green-9) 10%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)", borderColor: "color-mix(in srgb, var(--mantine-color-green-6) 20%, transparent)" }}>
               <Group justify="space-between" align="center" wrap="nowrap">
                 <Stack gap={2}>
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase">Queue Availability</Text>
+                  <Text size="10px" c="dimmed" fw={800} tt="uppercase" style={{ letterSpacing: "0.12em" }}>Queue Availability</Text>
                   <Group gap={4} align="baseline">
-                    <Text size="2rem" fw={800} c="green" ff="monospace" style={{ lineHeight: 1 }}>
+                    <Text size="2rem" fw={800} c="green" ff="monospace" style={{ lineHeight: 1, letterSpacing: "-0.04em" }}>
                       {inShiftAndInQueue.length}
                     </Text>
                     <Text size="sm" c="dimmed">/ {currentShiftCount} in shift</Text>
@@ -1423,7 +1433,7 @@ export function ZoomQueueWidget() {
                   </Group>
                 </Stack>
                 <RingProgress
-                  size={80}
+                  size={78}
                   thickness={8}
                   roundCaps
                   sections={[{ value: pct, color: pct >= 60 ? "green" : pct >= 30 ? "yellow" : "red" }]}
@@ -1441,10 +1451,10 @@ export function ZoomQueueWidget() {
               const qPct  = currentShiftCount > 0 ? Math.round((count / currentShiftCount) * 100) : 0;
               const notOptedIn = Math.max(currentShiftCount - count, 0);
               return (
-                <Card key={q} withBorder radius="md" p="md">
+                <Card key={q} withBorder radius="xl" p="md" style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-teal-9) 10%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)", borderColor: "color-mix(in srgb, var(--mantine-color-teal-6) 20%, transparent)" }}>
                   <Group justify="space-between" align="center" wrap="nowrap">
                     <Stack gap={2}>
-                      <Text size="xs" c="dimmed" fw={600} tt="uppercase">{QUEUE_SHORT[q] ?? q}</Text>
+                      <Text size="10px" c="dimmed" fw={800} tt="uppercase" style={{ letterSpacing: "0.12em" }}>{QUEUE_SHORT[q] ?? q}</Text>
                       <Group gap={4} align="baseline">
                         <Text size="2rem" fw={800} c="teal" ff="monospace" style={{ lineHeight: 1 }}>
                           {count}
@@ -1471,11 +1481,11 @@ export function ZoomQueueWidget() {
           </SimpleGrid>
         ) : (
           <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-            <Card withBorder radius="md" p="md">
+            <Card withBorder radius="xl" p="md" style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-orange-9) 10%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)", borderColor: "color-mix(in srgb, var(--mantine-color-orange-6) 20%, transparent)" }}>
               <Stack gap="sm">
                 <Group justify="space-between" align="flex-start">
                   <Box>
-                    <Text size="xs" c="dimmed" fw={600} tt="uppercase">My break time</Text>
+                    <Text size="10px" c="dimmed" fw={800} tt="uppercase" style={{ letterSpacing: "0.12em" }}>My break time</Text>
                     <Group gap={4} align="baseline">
                       <Text size="2rem" fw={800} c={myBreakLeftMinutes > 0 ? "green" : "red"} ff="monospace" style={{ lineHeight: 1 }}>
                         {myBreakTakenMinutes}
@@ -1495,12 +1505,12 @@ export function ZoomQueueWidget() {
               </Stack>
             </Card>
 
-            <Card withBorder radius="md" p="md">
+            <Card withBorder radius="xl" p="md" style={{ background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-green-9) 10%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)", borderColor: "color-mix(in srgb, var(--mantine-color-green-6) 20%, transparent)" }}>
               <Group justify="space-between" align="center" wrap="nowrap">
                 <Stack gap={2}>
-                  <Text size="xs" c="dimmed" fw={600} tt="uppercase">Queue Availability</Text>
+                  <Text size="10px" c="dimmed" fw={800} tt="uppercase" style={{ letterSpacing: "0.12em" }}>Queue Availability</Text>
                   <Group gap={4} align="baseline">
-                    <Text size="2rem" fw={800} c="green" ff="monospace" style={{ lineHeight: 1 }}>
+                    <Text size="2rem" fw={800} c="green" ff="monospace" style={{ lineHeight: 1, letterSpacing: "-0.04em" }}>
                       {inShiftAndInQueue.length}
                     </Text>
                     <Text size="sm" c="dimmed">/ {currentShiftCount} in shift</Text>
@@ -1511,7 +1521,7 @@ export function ZoomQueueWidget() {
                   </Group>
                 </Stack>
                 <RingProgress
-                  size={80}
+                  size={78}
                   thickness={8}
                   roundCaps
                   sections={[{ value: pct, color: pct >= 60 ? "green" : pct >= 30 ? "yellow" : "red" }]}
@@ -1529,8 +1539,12 @@ export function ZoomQueueWidget() {
         {/* ── Agent lists ── */}
         <SimpleGrid cols={{ base: 1, xl: 2 }} spacing="md">
           {/* In Queue */}
-          <Card withBorder radius="md" p={0}
-            style={{ borderTop: "3px solid var(--mantine-color-green-6)" }}>
+          <Card withBorder radius="xl" p={0}
+            style={{
+              borderColor: "color-mix(in srgb, var(--mantine-color-green-6) 18%, transparent)",
+              background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-green-9) 6%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+            }}>
             <Group px="md" py="sm" gap="xs">
               <ThemeIcon size="sm" variant="light" color="green" radius="xl">
                 <IconUserCheck size={13} />
@@ -1563,8 +1577,12 @@ export function ZoomQueueWidget() {
           </Card>
 
           {/* Not in Queue */}
-          <Card withBorder radius="md" p={0}
-            style={{ borderTop: "3px solid var(--mantine-color-gray-6)" }}>
+          <Card withBorder radius="xl" p={0}
+            style={{
+              borderColor: "color-mix(in srgb, var(--mantine-color-gray-6) 18%, transparent)",
+              background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-gray-9) 4%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+            }}>
             <Group px="md" py="sm" gap="xs">
               <ThemeIcon size="sm" variant="light" color="gray" radius="xl">
                 <IconUserOff size={13} />
@@ -1618,7 +1636,11 @@ export function ZoomQueueWidget() {
           </Card>
         </SimpleGrid>
 
-        <Card withBorder radius="md" p={0} style={{ borderTop: "3px solid var(--mantine-color-orange-6)" }}>
+        <Card withBorder radius="xl" p={0} style={{
+          borderColor: "color-mix(in srgb, var(--mantine-color-orange-6) 18%, transparent)",
+          background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-orange-9) 6%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)",
+          boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+        }}>
           <Group px="md" py="sm" gap="xs">
             <ThemeIcon size="sm" variant="light" color="orange" radius="xl">
               <IconCoffee size={13} />
@@ -1710,7 +1732,11 @@ export function ZoomQueueWidget() {
           const diag = rd?.diagnostics;
 
           return (
-            <Card withBorder radius="md" p={0} style={{ borderTop: "3px solid var(--mantine-color-teal-6)" }}>
+            <Card withBorder radius="xl" p={0} style={{
+              borderColor: "color-mix(in srgb, var(--mantine-color-teal-6) 18%, transparent)",
+              background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-teal-9) 6%, var(--mantine-color-body)) 0%, var(--mantine-color-body) 100%)",
+              boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+            }}>
               <Group px="md" py="sm" gap="xs">
                 <ThemeIcon size="sm" variant="light" color="teal" radius="xl">
                   <IconCalendarClock size={13} />

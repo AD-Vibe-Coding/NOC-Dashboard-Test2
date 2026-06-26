@@ -45,13 +45,6 @@ type HandoverRow = Awaited<ReturnType<typeof db.shift_handovers.list>>[number];
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
-const SHIFT_OPTIONS = [
-  { value: "Early Shift",       label: "🌙 Early Shift (2 AM – 6 AM)" },
-  { value: "Morning Shift",     label: "☀️ Morning Shift (8 AM)" },
-  { value: "Mid-Morning Shift", label: "🌤 Mid-Morning Shift (10–11 AM)" },
-  { value: "Night Shift",       label: "🌑 Night Shift (after 6 PM)" },
-];
-
 function autoDetectShift(): string {
   const h = new Date().getHours();
   if (h >= 2 && h < 7)  return "Early Shift";
@@ -355,8 +348,9 @@ const STATUS_COLORS: Record<string, string> = {
 
 function parseChecklist(markdown: string) {
   const reviewed = /All tickets reviewed.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
-  const pending  = /Included all pending.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
-  return { reviewed, pending };
+  const pending = /Included all pending.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
+  const workAllotmentCompleted = /Completed all the tasks assigned in Work Allotment.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
+  return { reviewed, pending, workAllotmentCompleted };
 }
 
 function HandoverDetailCard({ row }: { row: HandoverRow }) {
@@ -469,14 +463,17 @@ function HandoverDetailCard({ row }: { row: HandoverRow }) {
       {/* Pre-submit Checklist */}
       <Card withBorder radius="md" p="sm" style={{ borderColor: "var(--mantine-color-violet-7)", borderStyle: "dashed" }}>
         <Text size="xs" fw={700} c="violet.4" mb={6}>✅ Pre-submit Checklist</Text>
-        <Group gap="lg">
+        <Stack gap={4}>
           <Text size="xs" c={checklist.reviewed ? "green.4" : "red.4"}>
             {checklist.reviewed ? "✓" : "✗"} All tickets reviewed and updated
           </Text>
           <Text size="xs" c={checklist.pending ? "green.4" : "red.4"}>
             {checklist.pending ? "✓" : "✗"} All pending items included
           </Text>
-        </Group>
+          <Text size="xs" c={checklist.workAllotmentCompleted ? "green.4" : "red.4"}>
+            {checklist.workAllotmentCompleted ? "✓" : "✗"} Completed all the tasks assigned in Work Allotment
+          </Text>
+        </Stack>
       </Card>
     </Stack>
   );
@@ -618,8 +615,8 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
   const agents    = LOCKED_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
 
   // Form state
-  const [shiftName,           setShiftName]           = useState(autoDetectShift());
-  const [shiftDate,           setShiftDate]           = useState(TODAY);
+  const [shiftName]           = useState(autoDetectShift());
+  const [shiftDate]           = useState(TODAY);
   const [agentName,           setAgentName]           = useState("");
 
   const [tickets,             setTickets]             = useState<TicketEntry[]>([newTicket()]);
@@ -633,8 +630,9 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
   const [idleTimeNote,        setIdleTimeNote]        = useState("");
 
   // Manager-only checklist (saved to DB, never posted to Slack)
-  const [ticketsReviewed,       setTicketsReviewed]       = useState(false);
-  const [pendingItemsIncluded,  setPendingItemsIncluded]  = useState(false);
+  const [ticketsReviewed, setTicketsReviewed] = useState(false);
+  const [pendingItemsIncluded, setPendingItemsIncluded] = useState(false);
+  const [workAllotmentCompleted, setWorkAllotmentCompleted] = useState(false);
 
   // UI state
   const [activeTab,     setActiveTab]     = useState<string | null>("form");
@@ -695,43 +693,68 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
     };
   }
 
+  const checklistComplete = ticketsReviewed && pendingItemsIncluded && workAllotmentCompleted;
+
   async function submitHandover() {
-    const incompleteTicket = tickets.find(
-      (ticket) => !ticket.owner_in_threads || !ticket.summary_in_ticket,
-    );
-    if (incompleteTicket) {
-      setError(
-        `Complete both required pre-checklist fields for every P1/P2 ticket before submitting${incompleteTicket.ticket_id ? ` (ticket #${incompleteTicket.ticket_id})` : ""}.`,
-      );
+    if (!checklistComplete) {
+      setError("Complete all items in the Pre-submit Checklist before submitting the handoff.");
       return;
+    }
+
+    if (!nothingToHandoff) {
+      const incompleteTicket = tickets.find(
+        (ticket) => !ticket.owner_in_threads || !ticket.summary_in_ticket,
+      );
+      if (incompleteTicket) {
+        setError(
+          `Complete both required pre-checklist fields for every P1/P2 ticket before submitting${incompleteTicket.ticket_id ? ` (ticket #${incompleteTicket.ticket_id})` : ""}.`,
+        );
+        return;
+      }
     }
 
     setSubmitting(true); setError(null);
     try {
+      const effectiveParams = nothingToHandoff
+        ? {
+            ...bodyParams(),
+            tickets: [],
+            bridges: [],
+            activeServiceNote: "",
+            rollingHandoffNote: "",
+            isWeekendHoliday: false,
+            newTicketsCount: "",
+            p1p2Count: "",
+            shiftOccupancy: "",
+            idleTimeNote: "",
+          }
+        : bodyParams();
+
       // Build full payload (includes weekend data + manager checklist for DB/history)
       const checklistLines = [
         `\n─── Pre-submit Checklist (manager view) ───`,
         `All tickets reviewed and updated: ${ticketsReviewed ? "✓ Yes" : "✗ No"}`,
         `Included all pending items in handoff: ${pendingItemsIncluded ? "✓ Yes" : "✗ No"}`,
+        `Completed all the tasks assigned in Work Allotment: ${workAllotmentCompleted ? "✓ Yes" : "✗ No"}`,
       ].join("\n");
-      const fullBody = generateBody(bodyParams()) + checklistLines;
+      const fullBody = `${nothingToHandoff ? "Nothing to handoff" : generateBody(effectiveParams)}${checklistLines}`;
       const payload = {
         shift_name: shiftName, shift_date: shiftDate, sender_name: agentName,
         next_owner: "", handoff_style: "",
-        tickets_json: JSON.stringify(tickets),
-        bridges_json: JSON.stringify(bridges),
-        active_service_note: activeServiceNote,
-        rolling_handoff_note: rollingHandoffNote,
-        is_weekend_holiday: isWeekendHoliday,
-        new_tickets_count: parseInt(newTicketsCount) || 0,
-        p1_p2_count: parseInt(p1p2Count) || 0,
-        shift_occupancy: shiftOccupancy,
-        idle_time_note: idleTimeNote,
+        tickets_json: JSON.stringify(effectiveParams.tickets),
+        bridges_json: JSON.stringify(effectiveParams.bridges),
+        active_service_note: effectiveParams.activeServiceNote,
+        rolling_handoff_note: effectiveParams.rollingHandoffNote,
+        is_weekend_holiday: effectiveParams.isWeekendHoliday,
+        new_tickets_count: parseInt(effectiveParams.newTicketsCount) || 0,
+        p1_p2_count: parseInt(effectiveParams.p1p2Count) || 0,
+        shift_occupancy: effectiveParams.shiftOccupancy,
+        idle_time_note: effectiveParams.idleTimeNote,
         submitted: true,
         subject: generateSubject(shiftName, shiftDate),
         body_markdown: fullBody,
         raw_notes: "",
-        ticket_count: tickets.length,
+        ticket_count: effectiveParams.tickets.length,
       };
 
       // Always insert a new record (no draft re-use — each submit = new history entry)
@@ -741,13 +764,14 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
       const username = agentName ? `Shift Handover - ${agentName}` : "Shift Handover";
       const slackText = nothingToHandoff
         ? "Nothing to handoff"
-        : generateSlackBody({ ...bodyParams(), isWeekendHoliday: false });
+        : generateSlackBody({ ...effectiveParams, isWeekendHoliday: false });
       await postSlackMessage(slackText, { username, icon_emoji: ":clipboard:" });
 
       setSubmitted(true);
       // Reset checklist for next submission
       setTicketsReviewed(false);
       setPendingItemsIncluded(false);
+      setWorkAllotmentCompleted(false);
       setSuccess("✓ Handover submitted and posted to Slack!");
       await loadHistory();
       setTimeout(() => setSuccess(null), 5000);
@@ -794,92 +818,84 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
                 />
               </Card>
 
-              {/* ── Shift Info ── */}
-              <Card withBorder radius="lg" p="md">
-                <Stack gap="sm">
-                  <Text fw={700} size="sm" c="teal.4">Shift Information</Text>
-                  <Group grow gap="sm" wrap="wrap">
-                    <Select label="Shift Name" data={SHIFT_OPTIONS} value={shiftName}
-                      onChange={v => v && setShiftName(v)} size="sm" />
-                    <TextInput label="Shift Date" type="date" value={shiftDate}
-                      onChange={e => setShiftDate(e.currentTarget.value)} size="sm" />
-                  </Group>
-                  <Select label="Prepared By" data={agents} value={agentName}
-                    onChange={v => v && setAgentName(v)} searchable size="sm" />
-                </Stack>
-              </Card>
+              {/* Shift Information hidden in UI — values remain auto-populated in state and included in the saved handoff */}
 
-              {/* ── P1/P2 Tickets ── */}
-              <Stack gap="sm">
-                <Group justify="space-between" align="center">
-                  <Group gap="xs">
-                    <Text fw={700} size="sm">1. High-Priority Incidents</Text>
-                    <Badge color="red" variant="light" size="sm">{tickets.length} ticket{tickets.length !== 1 ? "s" : ""}</Badge>
-                  </Group>
-                  <Button size="xs" variant="light" color="red" leftSection={<IconPlus size={12} />}
-                    onClick={() => setTickets(t => [...t, newTicket()])}>
-                    Add Ticket
-                  </Button>
-                </Group>
-                {tickets.length === 0 ? (
-                  <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
-                    <Text size="xs" c="dimmed" ta="center">No P1/P2 tickets — click "Add Ticket" to add one</Text>
+              {!nothingToHandoff && (
+                <>
+                  {/* ── P1/P2 Tickets ── */}
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="center">
+                      <Group gap="xs">
+                        <Text fw={700} size="sm">1. High-Priority Incidents</Text>
+                        <Badge color="red" variant="light" size="sm">{tickets.length} ticket{tickets.length !== 1 ? "s" : ""}</Badge>
+                      </Group>
+                      <Button size="xs" variant="light" color="red" leftSection={<IconPlus size={12} />}
+                        onClick={() => setTickets(t => [...t, newTicket()])}>
+                        Add Ticket
+                      </Button>
+                    </Group>
+                    {tickets.length === 0 ? (
+                      <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
+                        <Text size="xs" c="dimmed" ta="center">No P1/P2 tickets — click "Add Ticket" to add one</Text>
+                      </Card>
+                    ) : tickets.map((t, i) => (
+                      <TicketCard key={t._key} ticket={t} index={i} agents={agents}
+                        onChange={u => setTickets(prev => prev.map(x => x._key === u._key ? u : x))}
+                        onRemove={() => setTickets(prev => prev.filter(x => x._key !== t._key))} />
+                    ))}
+                  </Stack>
+
+                  {/* ── Bridge Calls ── */}
+                  <Stack gap="sm">
+                    <Group justify="space-between" align="center">
+                      <Group gap="xs">
+                        <Text fw={700} size="sm">2. Upcoming Bridge Calls</Text>
+                        <Badge color="blue" variant="light" size="sm">{bridges.length} bridge{bridges.length !== 1 ? "s" : ""}</Badge>
+                      </Group>
+                      <Button size="xs" variant="light" color="blue" leftSection={<IconPlus size={12} />}
+                        onClick={() => setBridges(b => [...b, newBridge()])}>
+                        Add Bridge
+                      </Button>
+                    </Group>
+                    {bridges.length === 0 ? (
+                      <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
+                        <Text size="xs" c="dimmed" ta="center">No bridge calls — click "Add Bridge" to add one</Text>
+                      </Card>
+                    ) : bridges.map((b, i) => (
+                      <BridgeCard key={b._key} bridge={b} index={i} agents={agents}
+                        onChange={u => setBridges(prev => prev.map(x => x._key === u._key ? u : x))}
+                        onRemove={() => setBridges(prev => prev.filter(x => x._key !== b._key))} />
+                    ))}
+                  </Stack>
+
+                  {/* ── Active Service ── */}
+                  <Card withBorder radius="lg" p="md">
+                    <Stack gap="xs">
+                      <Text fw={700} size="sm">3. Active Service</Text>
+                      <Text size="xs" c="dimmed">Pending maintenance notification emails that the next shift needs to address.</Text>
+                      <Textarea
+                        placeholder="e.g. Active Service: There are 3 pending maintenance notification emails. [Reason not completed in this shift]"
+                        value={activeServiceNote}
+                        onChange={e => setActiveServiceNote(e.currentTarget.value)}
+                        minRows={3} autosize />
+                    </Stack>
                   </Card>
-                ) : tickets.map((t, i) => (
-                  <TicketCard key={t._key} ticket={t} index={i} agents={agents}
-                    onChange={u => setTickets(prev => prev.map(x => x._key === u._key ? u : x))}
-                    onRemove={() => setTickets(prev => prev.filter(x => x._key !== t._key))} />
-                ))}
-              </Stack>
 
-              {/* ── Bridge Calls ── */}
-              <Stack gap="sm">
-                <Group justify="space-between" align="center">
-                  <Group gap="xs">
-                    <Text fw={700} size="sm">2. Upcoming Bridge Calls</Text>
-                    <Badge color="blue" variant="light" size="sm">{bridges.length} bridge{bridges.length !== 1 ? "s" : ""}</Badge>
-                  </Group>
-                  <Button size="xs" variant="light" color="blue" leftSection={<IconPlus size={12} />}
-                    onClick={() => setBridges(b => [...b, newBridge()])}>
-                    Add Bridge
-                  </Button>
-                </Group>
-                {bridges.length === 0 ? (
-                  <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
-                    <Text size="xs" c="dimmed" ta="center">No bridge calls — click "Add Bridge" to add one</Text>
+                  {/* ── Rolling Handoff ── */}
+                  <Card withBorder radius="lg" p="md">
+                    <Stack gap="xs">
+                      <Text fw={700} size="sm">4. Rolling Handoff</Text>
+                      <Text size="xs" c="dimmed">Pending tickets the next shift needs to address immediately.</Text>
+                      <Textarea
+                        placeholder="e.g. Rolling Handoff: 3 tickets require immediate follow-up."
+                        value={rollingHandoffNote}
+                        onChange={e => setRollingHandoffNote(e.currentTarget.value)}
+                        minRows={3} autosize />
+                    </Stack>
                   </Card>
-                ) : bridges.map((b, i) => (
-                  <BridgeCard key={b._key} bridge={b} index={i} agents={agents}
-                    onChange={u => setBridges(prev => prev.map(x => x._key === u._key ? u : x))}
-                    onRemove={() => setBridges(prev => prev.filter(x => x._key !== b._key))} />
-                ))}
-              </Stack>
 
-              {/* ── Active Service ── */}
-              <Card withBorder radius="lg" p="md">
-                <Stack gap="xs">
-                  <Text fw={700} size="sm">3. Active Service</Text>
-                  <Text size="xs" c="dimmed">Pending maintenance notification emails that the next shift needs to address.</Text>
-                  <Textarea
-                    placeholder="e.g. Active Service: There are 3 pending maintenance notification emails. [Reason not completed in this shift]"
-                    value={activeServiceNote}
-                    onChange={e => setActiveServiceNote(e.currentTarget.value)}
-                    minRows={3} autosize />
-                </Stack>
-              </Card>
-
-              {/* ── Rolling Handoff ── */}
-              <Card withBorder radius="lg" p="md">
-                <Stack gap="xs">
-                  <Text fw={700} size="sm">4. Rolling Handoff</Text>
-                  <Text size="xs" c="dimmed">Pending tickets the next shift needs to address immediately.</Text>
-                  <Textarea
-                    placeholder="e.g. Rolling Handoff: 3 tickets require immediate follow-up."
-                    value={rollingHandoffNote}
-                    onChange={e => setRollingHandoffNote(e.currentTarget.value)}
-                    minRows={3} autosize />
-                </Stack>
-              </Card>
+                </>
+              )}
 
               {/* ── Weekend / Holiday ── */}
               <Card withBorder radius="lg" p="md"
@@ -921,7 +937,7 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
                   </Group>
                   <Checkbox
                     size="sm"
-                    label="All tickets are reviewed and updated"
+                    label="All My tickets are reviewed and updated"
                     checked={ticketsReviewed}
                     onChange={e => setTicketsReviewed(e.currentTarget.checked)}
                   />
@@ -931,6 +947,17 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
                     checked={pendingItemsIncluded}
                     onChange={e => setPendingItemsIncluded(e.currentTarget.checked)}
                   />
+                  <Checkbox
+                    size="sm"
+                    label="Completed all the tasks assigned in Work Allotment"
+                    checked={workAllotmentCompleted}
+                    onChange={e => setWorkAllotmentCompleted(e.currentTarget.checked)}
+                  />
+                  {!checklistComplete && (
+                    <Alert color="yellow" variant="light" icon={<IconAlertCircle size={14} />}>
+                      Complete all Pre-submit Checklist items before submitting.
+                    </Alert>
+                  )}
                 </Stack>
               </Card>
 
@@ -946,7 +973,7 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
               leftSection={submitted ? <IconCheck size={16} /> : <IconSend size={16} />}
               onClick={() => void submitHandover()}
               loading={submitting}
-              disabled={submitted}
+              disabled={submitted || !checklistComplete}
             >
               {submitted ? "✓ Submitted" : "Submit Handover"}
             </Button>

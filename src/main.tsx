@@ -7,12 +7,6 @@ import "./index.css";
 import App from "./App";
 import { IdentityProvider } from "./lib/identity";
 import { DashboardPreferencesProvider } from "./lib/dashboard-preferences";
-import { initBootCounter } from "./lib/boot-counter";
-
-// Always-visible reload diagnostics. Records each document boot + the gap
-// since the previous boot so the team can capture the reload cadence. Runs
-// before React renders and survives crashes / unmounts.
-initBootCounter();
 
 // Custom theme — built around AppDirect's official brand palette.
 // AppDirect's Base design-system documents `#006080` (deep petrol teal,

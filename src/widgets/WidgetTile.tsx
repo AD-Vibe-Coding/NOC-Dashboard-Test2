@@ -60,8 +60,7 @@ export function WidgetTile({
     <Card
       radius="lg"
       withBorder
-      p="md"
-      h="100%"
+      p="sm"
       onClick={onExpand}
       role="button"
       tabIndex={0}
@@ -74,8 +73,6 @@ export function WidgetTile({
       className={featured ? "widget-tile widget-tile--featured" : "widget-tile"}
       style={{
         cursor: "pointer",
-        display: "flex",
-        flexDirection: "column",
         // Use Mantine's default surface (lifts off the page slightly in
         // both modes — slightly lighter than body in dark, slightly
         // tinted off-white in light).
@@ -116,7 +113,7 @@ export function WidgetTile({
         }}
       />
 
-      <Stack gap="md" style={{ flex: 1, position: "relative", zIndex: 1 }}>
+      <Stack gap="xs" style={{ position: "relative", zIndex: 1 }}>
         <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
           <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
             <Box
@@ -174,7 +171,7 @@ export function WidgetTile({
             </ThemeIcon>
           </Group>
         </Group>
-        <Box style={{ flex: 1, minHeight: 0 }}>{children}</Box>
+        <Box>{children}</Box>
       </Stack>
     </Card>
   );

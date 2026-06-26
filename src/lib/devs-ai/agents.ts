@@ -4,12 +4,12 @@ export type AiAgentDefinition = {
   description?: string;
 };
 
-const DEFAULT_AGENT_ID = String(import.meta.env.VITE_AI_AGENT_ID ?? "").trim();
-
 export const AI_AGENTS: AiAgentDefinition[] = [
-  ...(DEFAULT_AGENT_ID
-    ? [{ id: DEFAULT_AGENT_ID, label: "Default Assistant", description: "General-purpose assistant" }]
-    : []),
+  {
+    id: "auto",
+    label: "Auto Router",
+    description: "General-purpose assistant without a widget-specific knowledge-base agent",
+  },
   {
     id: "d5b2744f-ccc0-44cd-8db8-15ed75fd652a",
     label: "Ticket Auditor",
@@ -18,7 +18,7 @@ export const AI_AGENTS: AiAgentDefinition[] = [
 ];
 
 export function getDefaultAgentId() {
-  return AI_AGENTS[0]?.id ?? "";
+  return "auto";
 }
 
 export function getAgentOptions() {

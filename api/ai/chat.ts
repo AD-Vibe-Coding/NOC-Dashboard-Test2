@@ -52,7 +52,8 @@ export default async function handler(
       ? JSON.parse(req.body || "{}")
       : (req.body ?? {});
 
-  const agentId = body.model || process.env.AI_AGENT_ID || "auto";
+  const requestedModel = typeof body.model === "string" ? body.model.trim() : "";
+  const agentId = requestedModel && requestedModel !== "auto" ? requestedModel : "auto";
 
   if (!Array.isArray(body.messages)) {
     return res.status(400).json({ error: "messages must be an array" });

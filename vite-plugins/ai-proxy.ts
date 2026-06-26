@@ -48,7 +48,8 @@ export function aiProxyPlugin(): Plugin {
 
           const apiKey = env.AI_API_KEY;
           const platformUrl = env.AI_PLATFORM_URL || "https://devs.ai";
-          const agentId = body.model || env.AI_AGENT_ID || "auto";
+          const requestedModel = typeof body.model === "string" ? body.model.trim() : "";
+          const agentId = requestedModel && requestedModel !== "auto" ? requestedModel : "auto";
 
           if (!apiKey) {
             res.statusCode = 500;

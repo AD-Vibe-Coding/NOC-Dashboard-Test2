@@ -13,27 +13,25 @@ import {
   IconShieldLock,
   IconHome,
   IconMail,
-  IconMailForward,
   IconNotes,
   IconPhone,
   IconSchool,
   IconReportAnalytics,
-  IconSearch,
   IconShield,
   IconWorldPin,
   IconStar,
   IconClipboardList,
   IconBook,
+  IconArrowsShuffle,
+  IconBulb,
 } from "@tabler/icons-react";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
 import { TicketSummaryWidget, TicketSummaryTile } from "./TicketSummary";
 import { WfhWidget, WfhTile } from "./Wfh";
-import { EscalationEmailWidget, EscalationEmailTile } from "./EscalationEmail";
+import { EmailAssistantWidget, EmailAssistantTile } from "./EmailAssistant";
 import { WorkActivityWidget, WorkActivityTile } from "./WorkActivity";
 import { DataHealthWidget, DataHealthTile } from "./DataHealth";
-
-import { EmailPolisherWidget, EmailPolisherTile } from "./EmailPolisher";
 import { LogicMonitorWidget, LogicMonitorTile } from "./LogicMonitor";
 import {
   NocTroubleshooterWidget,
@@ -45,15 +43,12 @@ import {
 } from "./MobilityTroubleshooter";
 import { VelocloudTroubleshooterWidget, VelocloudTroubleshooterTile } from "./VelocloudTroubleshooter";
 import { FortigateTroubleshooterWidget, FortigateTroubleshooterTile } from "./FortigateTroubleshooter";
+import { PiabTroubleshooterWidget, PiabTroubleshooterTile } from "./PiabTroubleshooter";
 import { VelocloudApiWidget, VelocloudApiTile } from "./VelocloudApi";
 import {
   PerformanceTrackerWidget,
   PerformanceTrackerTile,
 } from "./PerformanceTracker";
-import {
-  SmartSearchWidget,
-  SmartSearchTile,
-} from "./SmartSearch";
 import {
   AccessControlWidget,
   AccessControlTile,
@@ -83,9 +78,15 @@ import {
   TimezoneHelperTile,
 } from "./TimezoneHelper";
 import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
+import { EnhancementsWidget, EnhancementsTile } from "./Enhancements";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
 import { AttendanceTrackerWidget, AttendanceTrackerTile } from "./AttendanceTracker";
+import { TicketRebalancerWidget, TicketRebalancerTile } from "./TicketRebalancer";
+import {
+  MaintenanceNoteGeneratorWidget,
+  MaintenanceNoteGeneratorTile,
+} from "./MaintenanceNoteGenerator";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -102,16 +103,6 @@ import type { WidgetDefinition } from "./types";
  * expands it into the full view.
  */
 export const WIDGETS: WidgetDefinition[] = [
-  {
-    id: "smart-search",
-    title: "Smart Search",
-    description: "AI-powered natural language search across the dashboard",
-    icon: IconSearch,
-    iconColor: "indigo",
-    tileSize: "sm",
-    Tile: SmartSearchTile,
-    Full: SmartSearchWidget,
-  },
   {
     id: "my-day",
     title: "My Day",
@@ -215,24 +206,14 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: MeetingNotesWidget,
   },
   {
-    id: "escalation-email",
-    title: "Escalation Email",
-    description: "AI drafts the ESC-MGR Alert email from your notes",
+    id: "email-assistant",
+    title: "NOC Email Assistant",
+    description: "Generate escalation variants, polish drafts, and validate email quality",
     icon: IconMail,
     iconColor: "teal",
     tileSize: "sm",
-    Tile: EscalationEmailTile,
-    Full: EscalationEmailWidget,
-  },
-  {
-    id: "email-polisher",
-    title: "Email Polisher",
-    description: "Polish a draft for customer, internal, or carrier",
-    icon: IconMailForward,
-    iconColor: "lime",
-    tileSize: "sm",
-    Tile: EmailPolisherTile,
-    Full: EmailPolisherWidget,
+    Tile: EmailAssistantTile,
+    Full: EmailAssistantWidget,
   },
   {
     id: "noc-troubleshooter",
@@ -300,6 +281,27 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: AttendanceTrackerWidget,
   },
   {
+    id: "ticket-rebalancer",
+    title: "Ticket Rebalancer",
+    description: "Google Sheet roster + file upload fallback for ticket balancing analysis",
+    icon: IconArrowsShuffle,
+    iconColor: "grape",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: TicketRebalancerTile,
+    Full: TicketRebalancerWidget,
+  },
+  {
+    id: "maintenance-note-generator",
+    title: "Maintenance Note Generator",
+    description: "Parse carrier maintenance notices and generate a formatted maintenance note",
+    icon: IconNotes,
+    iconColor: "indigo",
+    tileSize: "sm",
+    Tile: MaintenanceNoteGeneratorTile,
+    Full: MaintenanceNoteGeneratorWidget,
+  },
+  {
     id: "mobility-troubleshooter",
     title: "Mobility Troubleshooter",
     description: "AI agent for wireless + device troubleshooting",
@@ -328,6 +330,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: FortigateTroubleshooterTile,
     Full: FortigateTroubleshooterWidget,
+  },
+  {
+    id: "piab-troubleshooter",
+    title: "PIAB Troubleshooter",
+    description: "Dedicated PIAB Knowledge Base troubleshooting assistant",
+    icon: IconBook,
+    iconColor: "indigo",
+    tileSize: "sm",
+    Tile: PiabTroubleshooterTile,
+    Full: PiabTroubleshooterWidget,
   },
   {
     id: "ticket-audit",
@@ -359,6 +371,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: KudosBoardTile,
     Full: KudosBoardWidget,
+  },
+  {
+    id: "enhancement-tracker",
+    title: "Enhancement Tracker",
+    description: "Team-submitted enhancements with manager approval workflow",
+    icon: IconBulb,
+    iconColor: "yellow",
+    tileSize: "sm",
+    Tile: EnhancementsTile,
+    Full: EnhancementsWidget,
   },
   {
     id: "shift-checklist",

@@ -1,5 +1,151 @@
 (function() {
-  var INSPECT_SCRIPT_VERSION = '2026-05-19.no-thumbnail';
+  // HMR resilience — keep Vite's HMR socket from forcing a full page reload
+  // on transient cross-site drops. Runs first (before @vite/client connects).
+  // See HMR_WS_RESILIENCE_SNIPPET above for the full rationale.
+  (function() {
+    try {
+      var Native = window.WebSocket;
+      if (!Native || Native.__devsaiHmrWrapped) return;
+
+      function isViteHmrProtocol(protocols) {
+        // Vite ALWAYS opens its HMR socket with the 'vite-hmr' subprotocol
+        // (new WebSocket(url, 'vite-hmr')). This is the definitive signal:
+        // version-independent and impossible for an app socket to collide
+        // with by accident. It's checked first for exactly that reason.
+        if (protocols === 'vite-hmr') return true;
+        if (Array.isArray(protocols) && protocols.indexOf('vite-hmr') !== -1) return true;
+        return false;
+      }
+
+      function isViteHmrUrl(url) {
+        try {
+          var u = new URL(String(url), window.location.href);
+          var isWs = u.protocol === 'ws:' || u.protocol === 'wss:';
+          // Fallback signal for environments that drop the subprotocol:
+          // Vite's HMR socket connects to the SAME host as the page and
+          // carries a ?token= query (Vite >= 5.1). Any other socket (the
+          // previewed app's own WebSockets) is passed straight through to
+          // the native constructor, untouched.
+          return isWs && u.host === window.location.host && u.searchParams.has('token');
+        } catch (e) {
+          return false;
+        }
+      }
+
+      function postHmrState(state) {
+        // Tell the parent App Builder panel whether Vite's HMR socket is live.
+        // Best-effort and same-shape as the other devs:* preview messages.
+        // Skips when not framed (window.parent === window) so a standalone
+        // preview never posts to itself.
+        try {
+          if (window.parent && window.parent !== window &&
+              typeof window.parent.postMessage === 'function') {
+            window.parent.postMessage({ type: 'devs:hmr', state: state }, '*');
+          }
+        } catch (e) {}
+      }
+
+      function ReconnectingWebSocket(url, protocols) {
+        // Non-HMR sockets: return a real native WebSocket. A constructor
+        // that returns an object overrides 'this', so callers get the
+        // genuine instance with no behavioral change.
+        if (!isViteHmrProtocol(protocols) && !isViteHmrUrl(url)) {
+          return protocols === undefined ? new Native(url) : new Native(url, protocols);
+        }
+
+        var self = this;
+        var listeners = { open: [], message: [], close: [], error: [] };
+        var closedByCaller = false;
+        var backoff = 500;
+        var inner = null;
+
+        self.url = String(url);
+        self.binaryType = 'blob';
+        self.readyState = Native.CONNECTING;
+        self.onopen = null;
+        self.onmessage = null;
+        self.onclose = null;
+        self.onerror = null;
+
+        self.addEventListener = function(type, cb) {
+          if (!listeners[type]) listeners[type] = [];
+          if (typeof cb === 'function') listeners[type].push(cb);
+        };
+        self.removeEventListener = function(type, cb) {
+          var arr = listeners[type];
+          if (!arr) return;
+          var i = arr.indexOf(cb);
+          if (i !== -1) arr.splice(i, 1);
+        };
+        function emit(type, ev) {
+          var on = self['on' + type];
+          if (typeof on === 'function') { try { on.call(self, ev); } catch (e) {} }
+          var arr = listeners[type] || [];
+          for (var i = 0; i < arr.length; i++) { try { arr[i].call(self, ev); } catch (e) {} }
+        }
+
+        function scheduleReconnect() {
+          var delay = Math.min(backoff, 5000);
+          backoff = Math.min(backoff * 2, 5000);
+          window.setTimeout(function() { if (!closedByCaller) connect(); }, delay);
+        }
+
+        function connect() {
+          try {
+            inner = protocols === undefined ? new Native(self.url) : new Native(self.url, protocols);
+          } catch (e) {
+            self.readyState = Native.CONNECTING;
+            scheduleReconnect();
+            return;
+          }
+          self.__inner = inner;
+          try { inner.binaryType = self.binaryType; } catch (e) {}
+          inner.addEventListener('open', function(ev) {
+            backoff = 500;
+            self.readyState = Native.OPEN;
+            postHmrState('open');
+            emit('open', ev);
+          });
+          inner.addEventListener('message', function(ev) { emit('message', ev); });
+          inner.addEventListener('error', function() { /* swallow: handled on close */ });
+          inner.addEventListener('close', function(ev) {
+            if (closedByCaller) {
+              self.readyState = Native.CLOSED;
+              emit('close', ev);
+              return;
+            }
+            // Transient drop: reconnect quietly and do NOT emit 'close'.
+            // Emitting 'close' is exactly what makes Vite reload the page.
+            self.readyState = Native.CONNECTING;
+            postHmrState('dropped');
+            scheduleReconnect();
+          });
+        }
+
+        self.send = function(data) {
+          try { if (inner && inner.readyState === Native.OPEN) inner.send(data); } catch (e) {}
+        };
+        self.close = function(code, reason) {
+          closedByCaller = true;
+          try { if (inner) inner.close(code, reason); } catch (e) {}
+        };
+
+        connect();
+      }
+
+      ReconnectingWebSocket.CONNECTING = Native.CONNECTING;
+      ReconnectingWebSocket.OPEN = Native.OPEN;
+      ReconnectingWebSocket.CLOSING = Native.CLOSING;
+      ReconnectingWebSocket.CLOSED = Native.CLOSED;
+      ReconnectingWebSocket.__devsaiHmrWrapped = true;
+
+      window.WebSocket = ReconnectingWebSocket;
+    } catch (e) {
+      // Never let the resilience shim break the previewed app.
+    }
+  })();
+
+  var INSPECT_SCRIPT_VERSION = '2026-06-20.hmr-status-signal';
   var inspectEnabled = false;
   var highlightEl = null;
 
@@ -12,42 +158,222 @@
     return '';
   }
 
-  function getSelector(el) {
-    if (el.id) return '#' + el.id;
-    var path = [];
-    while (el && el.nodeType === 1) {
-      if (el.id) {
-        path.unshift('#' + el.id);
+  // CSS identifiers carry colons, brackets, slashes, hash and other
+  // characters that are syntactically meaningful in selectors. Tailwind
+  // is the most common offender -- variant prefixes ("md:px-4",
+  // "hover:bg-blue-500", "data-[state=open]:opacity-100"), arbitrary
+  // values ("bg-[#abc]"), and fractional sizes ("w-1/2") all emit
+  // class names that, naively concatenated as ".name", produce an
+  // invalid selector. document.querySelector then either throws or
+  // returns null, and the inline-comment locate RPC reports the
+  // element as missing -- the "cannot locate element" the user hits
+  // on every button. CSS.escape exists in every browser the sandbox
+  // targets; fall back to a manual regex only as a safety net.
+  function cssEscape(value) {
+    if (typeof window.CSS !== 'undefined' && typeof window.CSS.escape === 'function') {
+      return window.CSS.escape(value);
+    }
+    return String(value).replace(/[!"#$%&'()*+,./:;<=>?@[\]^`{|}~]/g, '\\$&');
+  }
+
+  function getElementClasses(el) {
+    var raw = getElementClassName(el);
+    if (!raw) return [];
+    return raw.trim().split(/\s+/).filter(function(c) {
+      // Drop classes that change with interaction state (hover/focus
+      // pseudo-classes baked into Tailwind variants). The class is
+      // present at click time but may be absent the next time we
+      // re-query (or vice versa), so it makes selectors non-portable
+      // across paint frames.
+      return c && !c.startsWith('hover') && !c.startsWith('focus');
+    });
+  }
+
+  function buildNodeSelector(el) {
+    // Per-element selector piece: tag + (optional) class set + (optional)
+    // :nth-of-type, chosen to be UNIQUE among the element's siblings.
+    // The previous implementation took the first class-bearing ancestor
+    // as the terminal selector and never disambiguated -- the moment
+    // the user clicked any element that shared a class set with one or
+    // more siblings (the dominant case in any Tailwind/utility-CSS
+    // app), document.querySelector() would return the first match and
+    // their comment would silently anchor to the wrong element. We
+    // always check sibling uniqueness here so the leaf piece pins
+    // exactly the element the user clicked.
+    var tag = el.tagName.toLowerCase();
+    var classes = getElementClasses(el);
+    var classSel = classes.length > 0 ? '.' + classes.map(cssEscape).join('.') : '';
+    var parent = el.parentElement;
+    if (!parent) return tag + classSel;
+
+    // Among siblings of the SAME tag (the universe :nth-of-type
+    // filters across), find how many share this element's class set.
+    var sameTag = [];
+    for (var i = 0; i < parent.children.length; i += 1) {
+      if (parent.children[i].tagName === el.tagName) {
+        sameTag.push(parent.children[i]);
+      }
+    }
+    if (sameTag.length === 1) {
+      // Only child of its tag; tag (with or without classes) is enough.
+      return tag + classSel;
+    }
+    if (classSel) {
+      // If the class set already singles us out among same-tag
+      // siblings, skip the noise of :nth-of-type.
+      var withSameClasses = sameTag.filter(function(c) {
+        var cClasses = getElementClasses(c);
+        for (var j = 0; j < classes.length; j += 1) {
+          if (cClasses.indexOf(classes[j]) === -1) return false;
+        }
+        return true;
+      });
+      if (withSameClasses.length === 1 && withSameClasses[0] === el) {
+        return tag + classSel;
+      }
+    }
+    // Fall through: nth-of-type indexed against same-tag siblings.
+    var idx = sameTag.indexOf(el) + 1;
+    return tag + classSel + ':nth-of-type(' + idx + ')';
+  }
+
+  function isUniqueMatch(selector, el) {
+    if (!selector) return false;
+    try {
+      var matches = document.querySelectorAll(selector);
+      return matches.length === 1 && matches[0] === el;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function quoteAttrValue(v) {
+    // JSON.stringify produces a double-quoted JS string literal with
+    // backslash + double-quote escaping baked in -- the same lexical
+    // form CSS attribute selectors accept inside [attr="..."], so we
+    // get safe quoting for special characters (colons, brackets,
+    // unicode, embedded quotes) for free.
+    return JSON.stringify(String(v));
+  }
+
+  // Prefer "intentionally stable" identifiers when building selectors:
+  // explicit ids, designer-curated test ids, and accessibility labels.
+  // These survive React re-renders, prop changes, and minor markup
+  // edits in a way class-based selectors don't (Tailwind variants
+  // regenerate on every breakpoint, and "btn-primary" looks the same
+  // on five different buttons in a row). Each candidate is gated by
+  // isUniqueMatch -- a non-unique data-testid or shared aria-label is
+  // no better than a class set for our purposes.
+  function getStableAnchor(el) {
+    if (el.id) {
+      var idSel = '#' + cssEscape(el.id);
+      if (isUniqueMatch(idSel, el)) return idSel;
+    }
+    var STABLE_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa', 'data-id'];
+    for (var i = 0; i < STABLE_ATTRS.length; i += 1) {
+      var attr = STABLE_ATTRS[i];
+      var val = el.getAttribute(attr);
+      if (!val) continue;
+      var sel = '[' + attr + '=' + quoteAttrValue(val) + ']';
+      if (isUniqueMatch(sel, el)) return sel;
+    }
+    // aria-label gets a tag prefix -- the bare label "Edit" or
+    // "Delete" lights up on every icon button in a typical list, so
+    // it's rarely unique on its own. Combining with tag narrows it
+    // enough for the common case (e.g. <button aria-label="Save">)
+    // without being so strict it never matches.
+    var ariaLabel = el.getAttribute('aria-label');
+    if (ariaLabel) {
+      var tag = el.tagName.toLowerCase();
+      var labelSel = tag + '[aria-label=' + quoteAttrValue(ariaLabel) + ']';
+      if (isUniqueMatch(labelSel, el)) return labelSel;
+    }
+    // Form controls keyed by their submission name -- usually unique
+    // within a form, and the most stable identifier a developer can
+    // give a field without committing to a data-testid convention.
+    var nameAttr = el.getAttribute('name');
+    if (nameAttr) {
+      var t = el.tagName;
+      if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA' || t === 'BUTTON') {
+        var nameSel = t.toLowerCase() + '[name=' + quoteAttrValue(nameAttr) + ']';
+        if (isUniqueMatch(nameSel, el)) return nameSel;
+      }
+    }
+    return null;
+  }
+
+  function buildFullStructuralPath(el) {
+    // Last-resort selector: tag + :nth-of-type for every ancestor up
+    // to the document root, no classes at all. Guaranteed unique by
+    // construction (every level pins exactly one child within its
+    // parent), at the cost of being verbose and fragile to layout
+    // edits. We only fall back here when the class-aware path failed
+    // its uniqueness check -- typically because the user's app rewrote
+    // classes between click and persistence.
+    var parts = [];
+    var current = el;
+    while (current && current.nodeType === 1 && current !== document.documentElement) {
+      var tag = current.tagName.toLowerCase();
+      var parent = current.parentElement;
+      if (!parent) {
+        parts.unshift(tag);
         break;
       }
-      var tag = el.tagName.toLowerCase();
-      var className = getElementClassName(el);
-      if (className) {
-        var classes = className.trim().split(/\s+/).filter(function(c) {
-          return c && !c.startsWith('hover') && !c.startsWith('focus');
-        });
-        if (classes.length > 0) {
-          path.unshift(tag + '.' + classes.join('.'));
-          break;
+      var sameTag = [];
+      for (var i = 0; i < parent.children.length; i += 1) {
+        if (parent.children[i].tagName === current.tagName) {
+          sameTag.push(parent.children[i]);
         }
       }
-      var parent = el.parentElement;
-      if (parent) {
-        var siblings = Array.from(parent.children).filter(function(c) {
-          return c.tagName === el.tagName;
-        });
-        if (siblings.length > 1) {
-          var idx = siblings.indexOf(el) + 1;
-          path.unshift(tag + ':nth-of-type(' + idx + ')');
-        } else {
-          path.unshift(tag);
-        }
+      if (sameTag.length === 1) {
+        parts.unshift(tag);
       } else {
-        path.unshift(tag);
+        parts.unshift(tag + ':nth-of-type(' + (sameTag.indexOf(current) + 1) + ')');
       }
-      el = parent;
+      current = parent;
     }
-    return path.join(' > ');
+    return parts.join(' > ');
+  }
+
+  function getSelector(el) {
+    if (!el || el.nodeType !== 1) return '';
+    // Strategy 1: a stable anchor on the clicked element itself wins
+    // outright -- shortest selector AND robust to class churn.
+    var leafAnchor = getStableAnchor(el);
+    if (leafAnchor) return leafAnchor;
+    // Strategy 2: walk up. At each level, see whether the ancestor
+    // carries a stable anchor that uniquely resolves back to the
+    // clicked element when combined with the path we've collected so
+    // far. If so, we lock in there -- DOM edits above that anchor
+    // can't break the selector. Otherwise we extend the class-aware
+    // path one more level and keep climbing.
+    var path = [];
+    var current = el;
+    while (current && current.nodeType === 1 && current !== document.documentElement) {
+      if (current !== el) {
+        var ancestor = getStableAnchor(current);
+        if (ancestor) {
+          var candidate = path.length ? ancestor + ' > ' + path.join(' > ') : ancestor;
+          if (isUniqueMatch(candidate, el)) return candidate;
+          // Anchor was unique in isolation but the descendant chain
+          // we've built so far didn't disambiguate enough children
+          // beneath it (rare; usually means buildNodeSelector hit a
+          // shape its sibling logic couldn't model). Fall through and
+          // keep climbing so we can either find a stricter anchor or
+          // ultimately fall to the structural path.
+        }
+      }
+      path.unshift(buildNodeSelector(current));
+      current = current.parentElement;
+    }
+    var selector = path.join(' > ');
+    // Strategy 3: defensive verification + structural fallback. If
+    // anything about strategies 1-2 didn't pin the element exactly
+    // once (shadow DOM, ::slotted content, mutation between click and
+    // persistence, very repetitive markup), use the brute-force
+    // :nth-of-type-only path. It's verbose but unique by construction.
+    if (isUniqueMatch(selector, el)) return selector;
+    return buildFullStructuralPath(el);
   }
 
   function getAncestorPath(el, depth) {
@@ -59,6 +385,268 @@
       current = current.parentElement;
     }
     return parts.join(' > ');
+  }
+
+  // ---- Agent browse helpers (devs:browse-*) --------------------------------
+  // The accessible-ish name for an interactive element, used both to label it
+  // for the agent and to match it by description on a click/type.
+  function browseAccessibleName(el) {
+    if (!el || !el.getAttribute) return '';
+    var aria = el.getAttribute('aria-label');
+    if (aria && aria.trim()) return aria.trim();
+    var labelledby = el.getAttribute('aria-labelledby');
+    if (labelledby) {
+      var lblEl = document.getElementById(labelledby);
+      if (lblEl) return (lblEl.innerText || lblEl.textContent || '').trim();
+    }
+    if (el.id) {
+      var escId = (window.CSS && CSS.escape) ? CSS.escape(el.id) : el.id;
+      var forLabel = null;
+      try { forLabel = document.querySelector('label[for="' + escId + '"]'); } catch (_) { forLabel = null; }
+      if (forLabel) return (forLabel.innerText || forLabel.textContent || '').trim();
+    }
+    if (el.closest) {
+      var wrap = el.closest('label');
+      if (wrap) return (wrap.innerText || wrap.textContent || '').trim();
+    }
+    var ph = el.getAttribute('placeholder');
+    if (ph && ph.trim()) return ph.trim();
+    var title = el.getAttribute('title');
+    if (title && title.trim()) return title.trim();
+    var txt = (el.innerText || el.textContent || '').trim();
+    if (txt) return txt;
+    return (el.value || el.name || '').trim();
+  }
+
+  function browseIsVisible(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    if (el.type === 'hidden') return false;
+    var r = el.getBoundingClientRect();
+    return (r.width > 0 || r.height > 0);
+  }
+
+  var BROWSE_INTERACTIVE_SELECTOR =
+    'input,textarea,select,button,a[href],[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="combobox"],[contenteditable="true"],[onclick],summary';
+
+  // Monotonic counter for the stable refs we stamp onto elements (below).
+  var browseRefCounter = 0;
+
+  // Snapshot of the interactive elements on the page so the agent can target
+  // them precisely. Generated CSS selectors round-trip unreliably (hashed
+  // CSS-in-JS classes, structural paths that shift on re-render), so we stamp a
+  // STABLE data-devs-ref attribute on each element and return that as the
+  // selector -- [data-devs-ref="N"] always resolves back to the same node.
+  function browseInteractiveElements(limit) {
+    var nodes;
+    try { nodes = Array.prototype.slice.call(document.querySelectorAll(BROWSE_INTERACTIVE_SELECTOR)); }
+    catch (_) { nodes = []; }
+    var out = [];
+    for (var i = 0; i < nodes.length && out.length < limit; i++) {
+      var el = nodes[i];
+      if (!browseIsVisible(el)) continue;
+      var tag = el.tagName.toLowerCase();
+      var ref = el.getAttribute('data-devs-ref');
+      if (!ref) {
+        ref = 'r' + (browseRefCounter++);
+        try { el.setAttribute('data-devs-ref', ref); } catch (_) {}
+      }
+      var entry = {
+        selector: '[data-devs-ref="' + ref + '"]',
+        tag: tag,
+        type: (el.getAttribute && el.getAttribute('type')) || (el.getAttribute && el.getAttribute('role')) || '',
+        label: browseAccessibleName(el).slice(0, 80),
+      };
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        entry.value = String(el.value == null ? '' : el.value).slice(0, 80);
+      }
+      out.push(entry);
+    }
+    return out;
+  }
+
+  // Find an element by accessible name (exact match preferred), restricted to a
+  // selector set. Used to re-resolve targets FRESH on every click/type so the
+  // agent isn't broken by CSS selectors / injected refs going stale when the
+  // app re-renders between turns. The label/placeholder is the stable handle.
+  function browseFindByName(needle, selectorSet) {
+    var lower = String(needle || '').trim().toLowerCase();
+    if (!lower) return null;
+    var nodes;
+    try { nodes = Array.prototype.slice.call(document.querySelectorAll(selectorSet)); }
+    catch (_) { return null; }
+    var exact = null, contains = null;
+    for (var i = 0; i < nodes.length; i++) {
+      if (!browseIsVisible(nodes[i])) continue;
+      var name = browseAccessibleName(nodes[i]).toLowerCase();
+      if (!name) continue;
+      if (name === lower) { exact = nodes[i]; break; }
+      // Bidirectional contains: tolerate the agent passing a slightly longer or
+      // shorter description than the exact accessible name.
+      if (!contains && (name.indexOf(lower) !== -1 || lower.indexOf(name) !== -1)) contains = nodes[i];
+    }
+    return exact || contains || null;
+  }
+
+  function browseFindClickable(needle) {
+    return browseFindByName(needle, BROWSE_INTERACTIVE_SELECTOR);
+  }
+
+  var BROWSE_FIELD_SELECTOR = 'input,textarea,select,[contenteditable="true"],[role="textbox"],[role="combobox"]';
+  function browseFindField(needle) {
+    // 1. By accessible name (aria-label / associated <label> / placeholder).
+    var el = browseFindByName(needle, BROWSE_FIELD_SELECTOR);
+    if (el) return el;
+    // 2. By PROXIMITY to visible label text. Many apps render a label as a
+    //    plain sibling (no for=/wrapping), so the input has no accessible name.
+    //    Find the element whose own text matches, then the nearest field around
+    //    it -- this mirrors how a person reads a label and types in the adjacent
+    //    box.
+    return browseFindFieldByProximity(needle);
+  }
+
+  function browseFindFieldByProximity(needle) {
+    var lower = String(needle || '').trim().toLowerCase();
+    if (!lower) return null;
+    var textNodes;
+    try { textNodes = Array.prototype.slice.call(document.querySelectorAll('label,span,div,p,h1,h2,h3,h4,h5,td,th,legend,dt')); }
+    catch (_) { return null; }
+    var labelEl = null;
+    for (var i = 0; i < textNodes.length; i++) {
+      var node = textNodes[i];
+      if (!browseIsVisible(node)) continue;
+      // own text: ignore nested form-control text so we match the label itself
+      var own = (node.textContent || '').replace(/s+/g, ' ').trim().toLowerCase();
+      if (!own || own.length > 60) continue;
+      if (own === lower || own.indexOf(lower) !== -1 || lower.indexOf(own) !== -1) { labelEl = node; break; }
+    }
+    if (!labelEl) return null;
+    // Search the label, then climb ancestors looking for the closest field.
+    var scope = labelEl;
+    for (var d = 0; d < 4 && scope; d++) {
+      var field = null;
+      try { field = scope.querySelector(BROWSE_FIELD_SELECTOR); } catch (_) { field = null; }
+      if (field && browseIsVisible(field)) return field;
+      // also check the immediate next sibling subtree
+      var sib = scope.nextElementSibling;
+      if (sib) {
+        if (sib.matches && sib.matches(BROWSE_FIELD_SELECTOR) && browseIsVisible(sib)) return sib;
+        try { field = sib.querySelector(BROWSE_FIELD_SELECTOR); } catch (_) { field = null; }
+        if (field && browseIsVisible(field)) return field;
+      }
+      scope = scope.parentElement;
+    }
+    return null;
+  }
+
+  // Resolve a target element from an action payload. Prefers the stable
+  // accessible-name (description) because selectors die across turns; falls
+  // back to the CSS selector (live querySelector), then treats the selector
+  // string itself as an accessible name.
+  function browseResolveTarget(data, byNameFn) {
+    var el = null;
+    if (typeof data.description === 'string' && data.description) {
+      el = byNameFn(data.description);
+      if (el) return el;
+    }
+    if (typeof data.selector === 'string' && data.selector) {
+      try { el = document.querySelector(data.selector); } catch (_) { el = null; }
+      if (el) return el;
+      el = byNameFn(data.selector);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  // --- Agent virtual cursor ("My preview": let the user watch the AI act) ---
+  // A fixed, non-interactive pointer + label overlay drawn on top of the live
+  // preview. The agent's click/type handlers glide it to the target and pulse on
+  // click so the interaction is visible. Idle-fades after a few seconds.
+  var DEVS_CURSOR_ID = 'devs-agent-cursor';
+  var devsCursorIdleTimer = null;
+  function browseEnsureCursor() {
+    var existing = document.getElementById(DEVS_CURSOR_ID);
+    if (existing) return existing;
+    var wrap = document.createElement('div');
+    wrap.id = DEVS_CURSOR_ID;
+    wrap.setAttribute('aria-hidden', 'true');
+    wrap.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483646;pointer-events:none;opacity:0;transform:translate(-120px,-120px);transition:transform 0.45s cubic-bezier(0.22,1,0.36,1),opacity 0.5s ease;will-change:transform,opacity;';
+    var arrow = document.createElement('div');
+    arrow.style.cssText = 'position:absolute;left:0;top:0;';
+    arrow.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.45));"><path d="M5 3l14 7-6 1.6-2.4 6.4L5 3z" fill="#6d4aff" stroke="#ffffff" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+    var label = document.createElement('div');
+    label.setAttribute('data-devs-cursor-label', '1');
+    label.style.cssText = 'position:absolute;left:20px;top:18px;white-space:nowrap;background:#6d4aff;color:#ffffff;font:600 11px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;padding:2px 8px;border-radius:10px;box-shadow:0 1px 5px rgba(0,0,0,0.3);';
+    label.textContent = 'AI testing';
+    wrap.appendChild(arrow);
+    wrap.appendChild(label);
+    (document.body || document.documentElement).appendChild(wrap);
+    return wrap;
+  }
+  function browseCursorPoint(el) {
+    var r = el.getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  }
+  function browseShowCursor(el, labelText) {
+    if (!el || !el.getBoundingClientRect) return;
+    var c = browseEnsureCursor();
+    var lbl = c.querySelector('[data-devs-cursor-label]');
+    if (lbl && labelText) { lbl.textContent = labelText; }
+    var p = browseCursorPoint(el);
+    c.style.opacity = '1';
+    c.style.transform = 'translate(' + p.x + 'px,' + p.y + 'px)';
+    if (devsCursorIdleTimer) { clearTimeout(devsCursorIdleTimer); }
+    devsCursorIdleTimer = setTimeout(function() {
+      var cc = document.getElementById(DEVS_CURSOR_ID);
+      if (cc) { cc.style.opacity = '0'; }
+    }, 4000);
+  }
+  function browseCursorPulse(el) {
+    if (!el || !el.getBoundingClientRect) return;
+    var p = browseCursorPoint(el);
+    var ring = document.createElement('div');
+    ring.setAttribute('aria-hidden', 'true');
+    ring.style.cssText = 'position:fixed;left:' + p.x + 'px;top:' + p.y + 'px;z-index:2147483645;pointer-events:none;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:rgba(109,74,255,0.4);transition:transform 0.4s ease-out,opacity 0.4s ease-out;';
+    (document.body || document.documentElement).appendChild(ring);
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(function() { ring.style.transform = 'scale(3.4)'; ring.style.opacity = '0'; });
+    } else {
+      ring.style.transform = 'scale(3.4)'; ring.style.opacity = '0';
+    }
+    setTimeout(function() { if (ring.parentNode) { ring.parentNode.removeChild(ring); } }, 460);
+  }
+
+  // --- Parent-origin handshake (browse security) -------------------------
+  // Resolve the embedding AppBuilder origin WITHOUT trusting message content,
+  // so browse commands forged by the previewed app itself (whose messages
+  // carry the preview's own origin) can be rejected, and replies (which can
+  // include DOM text/field values) are only sent to the real parent.
+  var _devsParentOrigin;
+  var _devsParentOriginResolved = false;
+  function devsParentOrigin() {
+    if (_devsParentOriginResolved) return _devsParentOrigin;
+    _devsParentOriginResolved = true;
+    _devsParentOrigin = null;
+    try {
+      if (window.location.ancestorOrigins && window.location.ancestorOrigins.length > 0) {
+        _devsParentOrigin = window.location.ancestorOrigins[0];
+        return _devsParentOrigin;
+      }
+    } catch (_) {}
+    try {
+      if (document.referrer) { _devsParentOrigin = new URL(document.referrer).origin; }
+    } catch (_) {}
+    return _devsParentOrigin;
+  }
+  // True when an inbound message did NOT come from the parent AppBuilder origin
+  // (used to drop forged browse commands). When the parent origin can't be
+  // resolved we fail open rather than break browsing.
+  function devsIsForeignOrigin(e) {
+    var po = devsParentOrigin();
+    return !!po && e.origin !== po;
+  }
+  // Post a browse reply to the parent, pinned to its origin when known.
+  function browseReply(payload) {
+    window.parent.postMessage(payload, devsParentOrigin() || '*');
   }
 
   function getRect(el) {
@@ -79,10 +667,20 @@
     return html.length > 500 ? html.slice(0, 500) + '...' : html;
   }
 
+  // Returns true when the event target is one of the in-iframe
+  // inline-comment marker bubbles (or any descendant). Used to bail
+  // out of inspect/hover handlers so a reviewer's mouse over their
+  // own pin doesn't grab the bubble as the inspect target.
+  function isInsideInlineMarker(el) {
+    if (!el || typeof el.closest !== 'function') return false;
+    return !!el.closest('#__devs_inline_marker_root');
+  }
+
   function onHover(e) {
     if (!inspectEnabled) return;
     var el = e.target;
     if (!el || el === document.body || el === document.documentElement) return;
+    if (isInsideInlineMarker(el)) return;
     window.parent.postMessage({
       type: 'devs:hover',
       payload: {
@@ -107,6 +705,14 @@
   // The fork is a drop-in replacement: same global window.html2canvas
   // callable, same options surface.
   var H2C_URL = 'https://cdn.jsdelivr.net/npm/html2canvas-pro@2.0.2/dist/html2canvas-pro.min.js';
+  // SHA-256 of the pinned html2canvas-pro@2.0.2 bundle. Used by
+  // verifySha256 below as a defense-in-depth integrity check: if
+  // jsdelivr or the upstream npm tarball is ever tampered with, the
+  // fetched JS will hash to a different value and the script will
+  // refuse to eval(). Derive locally by running:
+  //   curl -sSL <H2C_URL> | shasum -a 256
+  // (or sha256sum on Linux). Bump alongside H2C_URL when pinning
+  // a new version.
   var H2C_SHA256 = '1c86f97c0617828870a1c24cca3cd614eae1034aec412aea0fe3a0764bc4597e';
   function verifySha256(text, expectedHex) {
     if (!window.crypto || !window.crypto.subtle || !window.TextEncoder) {
@@ -334,11 +940,16 @@
 
   function onClick(e) {
     if (!inspectEnabled) return;
+    var el = e.target;
+    if (!el || el === document.body || el === document.documentElement) return;
+    // Inline-comment marker bubbles handle their own clicks via their
+    // bound listener; we MUST NOT preventDefault here or that listener
+    // never fires (and we'd treat the bubble as the inspect target,
+    // grabbing its selector instead of the element underneath).
+    if (isInsideInlineMarker(el)) return;
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
-    var el = e.target;
-    if (!el || el === document.body || el === document.documentElement) return;
     var textContent = (el.textContent || '').trim();
     var selectionToken = nextSelectionToken();
     window.parent.postMessage({
@@ -358,8 +969,433 @@
     captureElement(el, selectionToken);
   }
 
+  // -------------------------------------------------------------
+  // Inline-comment marker pins (review-comments overlay).
+  //
+  // Markers are real DOM nodes inside the iframe (NOT a parent-side
+  // overlay). They follow scroll/reflow natively because they live in
+  // the same document as the element they annotate -- when the user
+  // scrolls inside the iframe, browser layout moves both target and
+  // marker together. The parent pushes the marker spec via
+  // devs:set-inline-markers (idempotent, replaces the whole set),
+  // and we report devs:inline-markers-state so the drawer / preview
+  // toolbar know which threads resolved vs. went stale. Clicks
+  // postMessage back as devs:inline-marker-click { threadId, rect }
+  // so the parent can open its Mantine popover anchored to the
+  // bubble; any scroll inside the iframe also posts
+  // devs:inline-markers-scroll so the parent can dismiss the
+  // popover (the active design is "freeze + close on scroll", so we
+  // do NOT push live rect updates while the popover is open).
+  // -------------------------------------------------------------
+  var INLINE_MARKER_ROOT_ID = '__devs_inline_marker_root';
+  var INLINE_MARKER_CLASS = '__devs_inline_marker';
+  var _inlineMarkerRoot = null;
+  var _inlineMarkers = Object.create(null); // threadId -> { bubble, selector, kind, ro }
+  var _inlineLastState = ''; // last "mounted|stale" signature for change detection
+  var _inlineReposScheduled = false;
+  var _inlineMo = null;
+  var _inlineScrollDebounce = 0;
+
+  function ensureInlineMarkerRoot() {
+    if (_inlineMarkerRoot && _inlineMarkerRoot.isConnected) return _inlineMarkerRoot;
+    if (!document.body) return null;
+    // position: fixed root keeps marker placement entirely independent
+    // of the previewed app's layout. An absolute-in-body approach would
+    // have to promote body to position: relative to act as a containing
+    // block, which mutates the app's own absolutely-positioned children
+    // (modals, headers, anything anchored off body) and ships a visible
+    // regression to apps without a CSS reset. Fixed avoids that entirely
+    // -- the root is anchored to the viewport at (0, 0) with zero size,
+    // and child bubbles (position: absolute inside this fixed root)
+    // resolve their containing block to the root's padding edge, which
+    // sits at viewport (0, 0). Markers are positioned in viewport coords
+    // directly; the existing scroll listener fires repositionInlineMarkers
+    // on every scroll so the bubbles track their target as the user scrolls.
+    var root = document.createElement('div');
+    root.id = INLINE_MARKER_ROOT_ID;
+    // pointer-events: none so the root itself never blocks clicks
+    // on the underlying app; the bubbles individually re-enable
+    // pointer events. z-index: 2147483646 keeps markers above all
+    // realistic app content without claiming the absolute max (we
+    // reserve max for the popover dim, parent-side).
+    root.style.cssText =
+      'position: fixed; top: 0; left: 0; width: 0; height: 0; ' +
+      'pointer-events: none; z-index: 2147483646;';
+    root.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(root);
+    _inlineMarkerRoot = root;
+    return root;
+  }
+
+  function inlineMarkerBorderColor(kind) {
+    return kind === 'resolved' ? '#0ca678' /* teal 6 */ : '#ae3ec9' /* grape 6 */;
+  }
+
+  function buildInlineMarkerBubble(spec) {
+    var bubble = document.createElement('div');
+    bubble.className = INLINE_MARKER_CLASS;
+    bubble.setAttribute('data-thread-id', spec.threadId);
+    bubble.setAttribute('role', 'button');
+    bubble.setAttribute('aria-label', spec.title || 'Inline comment');
+    bubble.setAttribute('tabindex', '0');
+    if (spec.title) bubble.title = spec.title;
+    // Inline styles, not classes -- the user's app CSS could otherwise
+    // bleed into our chrome (Tailwind reset, BEM globals, the works).
+    // "all: initial" would be cleaner but also wipes font defaults we
+    // depend on for the initials fallback, so we set every property
+    // we care about explicitly.
+    var resolved = spec.kind === 'resolved';
+    bubble.style.cssText =
+      'position: absolute; ' +
+      'width: 24px; height: 24px; ' +
+      'border-radius: 50%; ' +
+      'border: 2px solid ' + inlineMarkerBorderColor(spec.kind) + '; ' +
+      'background: #ffffff; ' +
+      'color: #1a1b1e; ' +
+      'opacity: ' + (resolved ? '0.6' : '1') + '; ' +
+      'box-shadow: 0 1px 3px rgba(0,0,0,0.3); ' +
+      'overflow: hidden; ' +
+      'box-sizing: border-box; ' +
+      'cursor: pointer; ' +
+      'pointer-events: auto; ' +
+      'display: none; ' + // hidden until first positionMarker() call
+      'align-items: center; ' +
+      'justify-content: center; ' +
+      'font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; ' +
+      'font-size: 10px; ' +
+      'font-weight: 700; ' +
+      'line-height: 1; ' +
+      'letter-spacing: 0; ' +
+      'padding: 0; margin: 0; ' +
+      'user-select: none;';
+
+    if (spec.imageUrl) {
+      var img = document.createElement('img');
+      img.src = spec.imageUrl;
+      img.alt = '';
+      img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none;';
+      // Image-load error fallback -- swap to initials so a broken
+      // avatar URL doesn't leave a broken-image glyph inside the
+      // circle (mirrors the parent's MarkerBubble fallback).
+      img.onerror = function() {
+        if (img.parentNode === bubble) bubble.removeChild(img);
+        bubble.appendChild(buildInlineMarkerInitials(spec.initials));
+      };
+      bubble.appendChild(img);
+    } else {
+      bubble.appendChild(buildInlineMarkerInitials(spec.initials));
+    }
+
+    // Stop propagation BEFORE the inspect-mode onClick listener can
+    // see it (capture phase). We also need to keep the app underneath
+    // from receiving the click -- otherwise tapping a pin on a
+    // <button> would also trigger the button.
+    //
+    // The rect we ship up is the TARGET element's rect (not the
+    // bubble's). The parent popover uses it to draw the Figma-style
+    // spotlight cutout around the highlighted element -- if we sent
+    // the bubble rect, the spotlight would hug the pin instead of the
+    // thing the user is commenting on. Bubble rect is a sensible
+    // fallback only when the target has been ripped out from under
+    // the bubble between paint and click (rare but possible across a
+    // React re-render that nukes the element seconds after the
+    // pointer goes down).
+    bubble.addEventListener('click', function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var entry = _inlineMarkers[spec.threadId];
+      var targetEl = entry ? entry.targetEl : null;
+      var r;
+      if (targetEl) {
+        r = targetEl.getBoundingClientRect();
+      } else {
+        r = bubble.getBoundingClientRect();
+      }
+      window.parent.postMessage({
+        type: 'devs:inline-marker-click',
+        threadId: spec.threadId,
+        rect: { top: r.top, left: r.left, width: r.width, height: r.height }
+      }, '*');
+    }, true);
+
+    return bubble;
+  }
+
+  function buildInlineMarkerInitials(initials) {
+    var span = document.createElement('span');
+    // Sub-pixel nudge matching the parent's hand-rolled MarkerBubble
+    // -- system sans-serif uppercase glyphs render ~0.5px above the
+    // geometric centre of a 24px circle. Without this they read as
+    // "slightly high".
+    span.style.cssText =
+      'transform: translateY(0.5px); ' +
+      'font-size: 10px; font-weight: 700; line-height: 1; ' +
+      'letter-spacing: 0; user-select: none; pointer-events: none;';
+    span.textContent = (initials || '?').slice(0, 2);
+    return span;
+  }
+
+  function positionInlineMarker(entry) {
+    var target = null;
+    try {
+      target = document.querySelector(entry.selector);
+    } catch (_) {
+      target = null;
+    }
+    if (!target) {
+      entry.bubble.style.display = 'none';
+      entry.located = false;
+      entry.targetEl = null;
+      return;
+    }
+    if (entry.targetEl !== target) {
+      // Selector now resolves to a different element (re-render
+      // mounted a fresh node with the same class set). Re-observe so
+      // size changes on the new element trigger repositions.
+      if (entry.ro) {
+        try { entry.ro.disconnect(); } catch (_) { /* noop */ }
+      }
+      entry.targetEl = target;
+      try {
+        entry.ro = new ResizeObserver(scheduleInlineReposition);
+        entry.ro.observe(target);
+      } catch (_) { /* noop */ }
+    }
+    var r = target.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) {
+      // Element is in the DOM but has no layout (display:none, etc.).
+      // Treat as unlocatable for state-reporting purposes; do not
+      // anchor a stale pin to (0,0).
+      entry.bubble.style.display = 'none';
+      entry.located = false;
+      return;
+    }
+    // Marker root is position: fixed at viewport (0, 0). Bubbles use
+    // position: absolute inside it, so their containing block is the
+    // root's padding edge -- also at viewport (0, 0). That means the
+    // marker's CSS top/left are just viewport coords; no body margin,
+    // border, or scroll term is involved. The bubbles do NOT scroll
+    // with the page automatically (fixed sticks to the viewport), so
+    // the document-level scroll listener calls scheduleInlineReposition
+    // and re-runs this math on every scroll frame to keep each bubble
+    // glued to its target.
+    var top = r.top - 12;
+    var left = r.left + r.width - 12;
+    entry.bubble.style.top = top + 'px';
+    entry.bubble.style.left = left + 'px';
+    entry.bubble.style.display = 'inline-flex';
+    entry.located = true;
+  }
+
+  function repositionInlineMarkers() {
+    _inlineReposScheduled = false;
+    var mounted = [];
+    var stale = [];
+    for (var threadId in _inlineMarkers) {
+      var entry = _inlineMarkers[threadId];
+      positionInlineMarker(entry);
+      if (entry.located) mounted.push(threadId);
+      else stale.push(threadId);
+    }
+    // Emit state only on change -- the rAF + MutationObserver pair
+    // can fire many times per second on a busy app, and the drawer's
+    // stale-id pill would re-render every frame otherwise.
+    var sig = mounted.slice().sort().join(',') + '|' + stale.slice().sort().join(',');
+    if (sig !== _inlineLastState) {
+      _inlineLastState = sig;
+      window.parent.postMessage({
+        type: 'devs:inline-markers-state',
+        mounted: mounted,
+        stale: stale
+      }, '*');
+    }
+  }
+
+  function scheduleInlineReposition() {
+    if (_inlineReposScheduled) return;
+    _inlineReposScheduled = true;
+    window.requestAnimationFrame(repositionInlineMarkers);
+  }
+
+  function clearInlineMarkers() {
+    for (var threadId in _inlineMarkers) {
+      var entry = _inlineMarkers[threadId];
+      if (entry.ro) {
+        try { entry.ro.disconnect(); } catch (_) { /* noop */ }
+      }
+      if (entry.bubble && entry.bubble.parentNode) {
+        entry.bubble.parentNode.removeChild(entry.bubble);
+      }
+    }
+    _inlineMarkers = Object.create(null);
+    _inlineLastState = '';
+    // Tear down the global MutationObserver too -- with no markers
+    // there is nothing to reposition, but the observer would still
+    // wake on every DOM mutation in the previewed app and schedule a
+    // do-nothing rAF. ensureInlineGlobalObservers re-creates it the
+    // next time setInlineMarkers is called with a non-empty spec.
+    if (_inlineMo) {
+      try { _inlineMo.disconnect(); } catch (_) { /* noop */ }
+      _inlineMo = null;
+    }
+  }
+
+  function setInlineMarkers(specs) {
+    if (!Array.isArray(specs)) specs = [];
+    var root = ensureInlineMarkerRoot();
+    if (!root) return;
+    var nextIds = Object.create(null);
+    for (var i = 0; i < specs.length; i += 1) {
+      var spec = specs[i];
+      if (!spec || typeof spec.threadId !== 'string' || typeof spec.selector !== 'string') continue;
+      nextIds[spec.threadId] = true;
+      var existing = _inlineMarkers[spec.threadId];
+      if (existing) {
+        // Same thread -- refresh visual props in place (kind change
+        // on resolve/reopen, selector edit, avatar update). Rebuild
+        // the bubble only when the structural inputs changed; for a
+        // pure selector swap we just update the cached selector.
+        var visualChanged = existing.kind !== spec.kind ||
+          existing.initials !== spec.initials ||
+          existing.imageUrl !== spec.imageUrl ||
+          existing.title !== spec.title;
+        if (visualChanged) {
+          var rebuilt = buildInlineMarkerBubble(spec);
+          if (existing.bubble.parentNode) {
+            existing.bubble.parentNode.replaceChild(rebuilt, existing.bubble);
+          } else {
+            root.appendChild(rebuilt);
+          }
+          existing.bubble = rebuilt;
+          existing.kind = spec.kind;
+          existing.initials = spec.initials;
+          existing.imageUrl = spec.imageUrl;
+          existing.title = spec.title;
+        }
+        if (existing.selector !== spec.selector) {
+          existing.selector = spec.selector;
+          existing.targetEl = null; // force re-observe on next position
+        }
+      } else {
+        var bubble = buildInlineMarkerBubble(spec);
+        root.appendChild(bubble);
+        _inlineMarkers[spec.threadId] = {
+          bubble: bubble,
+          selector: spec.selector,
+          kind: spec.kind,
+          initials: spec.initials,
+          imageUrl: spec.imageUrl,
+          title: spec.title,
+          targetEl: null,
+          ro: null,
+          located: false
+        };
+      }
+    }
+    // Drop any markers that the new spec set no longer references.
+    for (var oldId in _inlineMarkers) {
+      if (nextIds[oldId]) continue;
+      var dead = _inlineMarkers[oldId];
+      if (dead.ro) {
+        try { dead.ro.disconnect(); } catch (_) { /* noop */ }
+      }
+      if (dead.bubble && dead.bubble.parentNode) {
+        dead.bubble.parentNode.removeChild(dead.bubble);
+      }
+      delete _inlineMarkers[oldId];
+    }
+    // Force a state recompute so transitions (e.g. empty -> non-empty)
+    // emit even when the signature was already empty-string.
+    _inlineLastState = '';
+    // Mirror clearInlineMarkers when the diff just emptied the marker
+    // set (resolved-only filter flipped on, URL navigated off the
+    // anchored page, the last comment was deleted, etc.). Without this
+    // the global MutationObserver keeps watching the entire app body
+    // and re-firing the filter callback on every DOM mutation, even
+    // though every reposition cycle would walk an empty marker set.
+    // ensureInlineGlobalObservers re-arms the observer the next time
+    // setInlineMarkers is called with a non-empty spec, so the live
+    // tracking path is unchanged.
+    var hasMarkers = false;
+    for (var anyId in _inlineMarkers) { hasMarkers = true; break; }
+    if (hasMarkers) {
+      ensureInlineGlobalObservers();
+    } else if (_inlineMo) {
+      try { _inlineMo.disconnect(); } catch (_) { /* noop */ }
+      _inlineMo = null;
+    }
+    scheduleInlineReposition();
+  }
+
+  function ensureInlineGlobalObservers() {
+    // Single MutationObserver across the whole subtree drives
+    // reposition for layout-affecting DOM changes (an accordion
+    // opens, the user types into an input that grows the page, a
+    // React re-render swaps the tracked element). Cheap because the
+    // observer just schedules an rAF; the actual reposition only
+    // walks the active marker set.
+    //
+    // Filter out records whose target lives inside our own marker
+    // root. Each positionInlineMarker call writes style.top / left /
+    // display on a bubble, and the bubble sits inside body's subtree.
+    // Without this filter, every reposition pass triggers the
+    // observer, which schedules another reposition, creating a
+    // continuous ~60fps loop while any markers exist. The
+    // _inlineReposScheduled flag does not help because it is reset
+    // at the start of repositionInlineMarkers (so the MO microtask
+    // always finds it false during the style writes).
+    if (!_inlineMo && document.body) {
+      _inlineMo = new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i += 1) {
+          if (!isInsideInlineMarker(records[i].target)) {
+            scheduleInlineReposition();
+            return;
+          }
+        }
+      });
+      _inlineMo.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden']
+      });
+    }
+  }
+
+  function notifyInlineScroll() {
+    // Single coalesced ping per "scroll session". The parent uses
+    // this to dismiss any active inline-comment popover ("freeze and
+    // close on scroll" UX); it does NOT need a stream.
+    if (_inlineScrollDebounce) return;
+    _inlineScrollDebounce = window.setTimeout(function() {
+      _inlineScrollDebounce = 0;
+    }, 250);
+    window.parent.postMessage({ type: 'devs:inline-markers-scroll' }, '*');
+  }
+
+  // Capture-phase scroll listener catches scroll on the document AND
+  // every inner overflow:scroll container -- scroll events don't
+  // bubble by default but DO reach capture-phase listeners on the
+  // root. We don't reposition markers from this hook: absolute
+  // positioning inside body handles document-scroll natively, and
+  // inner-container scroll moves the element AND its computed
+  // getBoundingClientRect together, which the per-element
+  // ResizeObserver + MutationObserver pair already catch.
+  document.addEventListener('scroll', function() {
+    if (Object.keys(_inlineMarkers).length === 0) return;
+    scheduleInlineReposition();
+    notifyInlineScroll();
+  }, { capture: true, passive: true });
+  window.addEventListener('resize', scheduleInlineReposition);
+
   window.addEventListener('message', function(e) {
     if (!e.data || !e.data.type) return;
+    // Browse commands act on / read the live DOM, so accept them only from the
+    // embedding AppBuilder parent. This blocks the previewed app's own code from
+    // dispatching devs:browse-* to its window to exfiltrate page content.
+    if (typeof e.data.type === 'string' && e.data.type.indexOf('devs:browse-') === 0 && devsIsForeignOrigin(e)) {
+      return;
+    }
     if (e.data.type === 'devs:enable-inspect') {
       inspectEnabled = true;
       document.body.style.cursor = 'crosshair';
@@ -373,6 +1409,7 @@
         var t = te.touches[0]; if (!t) return;
         var el = document.elementFromPoint(t.clientX, t.clientY);
         if (!el || el === document.body || el === document.documentElement) return;
+        if (isInsideInlineMarker(el)) return;
         te.preventDefault();
         window.parent.postMessage({ type: 'devs:hover', payload: { rect: getRect(el), tagName: el.tagName.toLowerCase(), selector: getSelector(el) } }, '*');
       }, { capture: true, passive: false });
@@ -381,6 +1418,7 @@
         var t = te.changedTouches[0]; if (!t) return;
         var el = document.elementFromPoint(t.clientX, t.clientY);
         if (!el || el === document.body || el === document.documentElement) return;
+        if (isInsideInlineMarker(el)) return;
         te.preventDefault();
         var tc = (el.textContent || '').trim();
         var selectionToken = nextSelectionToken();
@@ -389,6 +1427,60 @@
       }, { capture: true, passive: false });
     } else if (e.data.type === 'devs:ping') {
       window.parent.postMessage({ type: 'devs:pong', version: INSPECT_SCRIPT_VERSION }, '*');
+    } else if (e.data.type === 'devs:set-inline-markers') {
+      // Parent → iframe: replace the in-document marker set. Specs
+      // are { threadId, selector, kind: 'open'|'resolved', initials,
+      // imageUrl, title }. Iframe responds asynchronously via
+      // devs:inline-markers-state once the rAF reposition cycle
+      // resolves each selector.
+      setInlineMarkers(Array.isArray(e.data.markers) ? e.data.markers : []);
+    } else if (e.data.type === 'devs:clear-inline-markers') {
+      // Parent → iframe: tear down all marker DOM. Sent when the
+      // overlay unmounts (e.g. user closes review mode) so we don't
+      // leave dangling pin nodes attached to the user's app.
+      clearInlineMarkers();
+      // Final empty-state ack so the parent's stale/visible counters
+      // reset deterministically rather than relying on the next
+      // implicit reposition cycle.
+      window.parent.postMessage({
+        type: 'devs:inline-markers-state',
+        mounted: [],
+        stale: []
+      }, '*');
+    } else if (e.data.type === 'devs:locate-selectors') {
+      // RPC used by the review-comment pin-marker overlay. Takes an
+      // array of CSS selectors, returns a parallel array of viewport
+      // rects (relative to the iframe viewport, NOT the page) so the
+      // parent can absolute-position avatar bubbles over the iframe.
+      // Selectors that no longer match anything resolve to rect=null,
+      // which the parent uses to surface a "can't locate element"
+      // badge in the drawer.
+      var requestId = e.data.requestId;
+      var selectors = Array.isArray(e.data.selectors) ? e.data.selectors : [];
+      var results = selectors.map(function(selector) {
+        if (typeof selector !== 'string' || !selector) {
+          return { selector: selector, rect: null };
+        }
+        var el = null;
+        try { el = document.querySelector(selector); } catch (_) { el = null; }
+        if (!el) return { selector: selector, rect: null };
+        var rect = el.getBoundingClientRect();
+        return {
+          selector: selector,
+          rect: {
+            top: rect.top,
+            left: rect.left,
+            width: rect.width,
+            height: rect.height,
+          },
+        };
+      });
+      window.parent.postMessage({
+        type: 'devs:located-selectors',
+        requestId: requestId,
+        results: results,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+      }, '*');
     } else if (e.data.type === 'devs:db-query') {
       var queryId = e.data.queryId;
       var sql = e.data.sql;
@@ -418,6 +1510,182 @@
           window.parent.postMessage({ type: 'devs:db-result', queryId: queryId, error: String(err.message || err) }, '*');
         });
       })();
+    } else if (e.data.type === 'devs:browse-navigate') {
+      // Agent-driven navigation of the LIVE preview. Prefer the History API so
+      // SPA routers react without a full reload (which would tear down this
+      // script and orphan the pending promise). Reply after a short settle.
+      var navId = e.data.commandId;
+      var path = typeof e.data.path === 'string' ? e.data.path : '/';
+      try {
+        var navUrl = new URL(path, window.location.href);
+        if (navUrl.origin === window.location.origin) {
+          history.pushState({}, '', navUrl.pathname + navUrl.search + navUrl.hash);
+          window.dispatchEvent(new PopStateEvent('popstate'));
+        } else {
+          window.location.assign(navUrl.href);
+        }
+        setTimeout(function() {
+          browseReply({ type: 'devs:browse-result', commandId: navId, result: { ok: true, url: window.location.href, title: document.title } });
+        }, 350);
+      } catch (err) {
+        browseReply({ type: 'devs:browse-result', commandId: navId, error: String((err && err.message) || err) });
+      }
+    } else if (e.data.type === 'devs:browse-click') {
+      var clickId = e.data.commandId;
+      try {
+        var clickEl = browseResolveTarget(e.data, browseFindClickable);
+        if (!clickEl) {
+          // Help the agent retarget: return the visible clickable labels.
+          var candidates = browseInteractiveElements(25)
+            .filter(function(x) { return x.tag === 'button' || x.tag === 'a' || x.type === 'submit' || x.type === 'button' || x.type === 'link'; })
+            .map(function(x) { return { selector: x.selector, label: x.label }; })
+            .slice(0, 12);
+          browseReply({ type: 'devs:browse-result', commandId: clickId, result: { ok: false, matched: false, error: 'Element not found', candidates: candidates } });
+        } else {
+          if (typeof clickEl.scrollIntoView === 'function') { try { clickEl.scrollIntoView({ block: 'center' }); } catch (_) {} }
+          // Glide the agent cursor to the target, then click on arrival so the
+          // user can watch the interaction in the live preview.
+          browseShowCursor(clickEl, 'AI clicking');
+          setTimeout(function() {
+            try {
+              browseCursorPulse(clickEl);
+              // Native .click() triggers default behavior AND React's delegated
+              // onClick; fall back to a full synthetic sequence for exotic targets.
+              if (typeof clickEl.click === 'function') {
+                clickEl.click();
+              } else {
+                ['pointerdown', 'mousedown', 'mouseup', 'click'].forEach(function(t) {
+                  try { clickEl.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+                });
+              }
+              browseReply({ type: 'devs:browse-result', commandId: clickId, result: { ok: true, matched: true, selector: getSelector(clickEl) } });
+            } catch (innerErr) {
+              browseReply({ type: 'devs:browse-result', commandId: clickId, error: String((innerErr && innerErr.message) || innerErr) });
+            }
+          }, 420);
+        }
+      } catch (err) {
+        browseReply({ type: 'devs:browse-result', commandId: clickId, error: String((err && err.message) || err) });
+      }
+    } else if (e.data.type === 'devs:browse-type') {
+      var typeId = e.data.commandId;
+      try {
+        var field = browseResolveTarget(e.data, browseFindField);
+        if (!field) {
+          var fieldCandidates = browseInteractiveElements(25)
+            .filter(function(x) { return x.tag === 'input' || x.tag === 'textarea' || x.tag === 'select' || x.type === 'textbox'; })
+            .map(function(x) { return { selector: x.selector, label: x.label, type: x.type }; })
+            .slice(0, 12);
+          browseReply({ type: 'devs:browse-result', commandId: typeId, result: { ok: false, error: 'Field not found', candidates: fieldCandidates } });
+        } else {
+          if (typeof field.scrollIntoView === 'function') { try { field.scrollIntoView({ block: 'center' }); } catch (_) {} }
+          // Glide the agent cursor to the field, then fill on arrival.
+          browseShowCursor(field, 'AI typing');
+          setTimeout(function() {
+            try {
+              browseCursorPulse(field);
+              var text = typeof e.data.text === 'string' ? e.data.text : '';
+              if (typeof field.focus === 'function') { try { field.focus(); } catch (_) {} }
+              var isContentEditable = field.getAttribute && field.getAttribute('contenteditable') === 'true';
+              if (isContentEditable) {
+                field.textContent = text;
+                field.dispatchEvent(new Event('input', { bubbles: true }));
+              } else {
+                var proto = (typeof HTMLTextAreaElement !== 'undefined' && field instanceof HTMLTextAreaElement)
+                  ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+                var desc = Object.getOwnPropertyDescriptor(proto, 'value');
+                if (desc && desc.set) { desc.set.call(field, text); } else { field.value = text; }
+                // input + change drive React/Vue controlled components; keyup nudges
+                // listeners that only watch keystrokes.
+                field.dispatchEvent(new Event('input', { bubbles: true }));
+                field.dispatchEvent(new Event('change', { bubbles: true }));
+                try { field.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true })); } catch (_) {}
+              }
+              if (e.data.submit) {
+                var form = field.form || (field.closest ? field.closest('form') : null);
+                if (form && typeof form.requestSubmit === 'function') { form.requestSubmit(); }
+                else if (form && typeof form.submit === 'function') { form.submit(); }
+                else {
+                  field.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', keyCode: 13, which: 13 }));
+                  field.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', keyCode: 13, which: 13 }));
+                }
+              }
+              browseReply({ type: 'devs:browse-result', commandId: typeId, result: { ok: true, selector: getSelector(field) } });
+            } catch (innerErr) {
+              browseReply({ type: 'devs:browse-result', commandId: typeId, error: String((innerErr && innerErr.message) || innerErr) });
+            }
+          }, 420);
+        }
+      } catch (err) {
+        browseReply({ type: 'devs:browse-result', commandId: typeId, error: String((err && err.message) || err) });
+      }
+    } else if (e.data.type === 'devs:browse-read') {
+      var readId = e.data.commandId;
+      try {
+        var readEl = document.body;
+        if (typeof e.data.selector === 'string' && e.data.selector) {
+          try { readEl = document.querySelector(e.data.selector) || document.body; } catch (_) { readEl = document.body; }
+        }
+        var maxChars = typeof e.data.maxChars === 'number' && e.data.maxChars > 0 ? e.data.maxChars : 2000;
+        var readText = (readEl.innerText || readEl.textContent || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
+        // Include the interactive elements (with selectors) so the agent can
+        // target inputs/buttons precisely instead of guessing selectors.
+        var elements = browseInteractiveElements(40);
+        browseReply({ type: 'devs:browse-result', commandId: readId, result: { ok: true, url: window.location.href, title: document.title, text: readText, elements: elements } });
+      } catch (err) {
+        browseReply({ type: 'devs:browse-result', commandId: readId, error: String((err && err.message) || err) });
+      }
+    } else if (e.data.type === 'devs:browse-screenshot') {
+      var shotId = e.data.commandId;
+      loadHtml2Canvas().then(function(h2c) {
+        if (!h2c) { browseReply({ type: 'devs:browse-result', commandId: shotId, result: { ok: false, error: 'Screenshot unavailable' } }); return; }
+        var vw = window.innerWidth;
+        var vh = window.innerHeight;
+        var maxDim = 1024;
+        var scale = Math.min(1, maxDim / Math.max(vw || 1, vh || 1));
+        h2c(document.documentElement, {
+          scale: scale,
+          useCORS: true,
+          logging: false,
+          backgroundColor: '#ffffff',
+          removeContainer: true,
+          x: window.scrollX,
+          y: window.scrollY,
+          width: vw,
+          height: vh
+        }).then(function(canvas) {
+          var dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          browseReply({ type: 'devs:browse-result', commandId: shotId, result: { ok: true, dataUrl: dataUrl } });
+        }).catch(function(err) {
+          browseReply({ type: 'devs:browse-result', commandId: shotId, error: String((err && err.message) || err) });
+        });
+      }).catch(function(err) {
+        browseReply({ type: 'devs:browse-result', commandId: shotId, error: String((err && err.message) || err) });
+      });
+    } else if (e.data.type === 'devs:browse-wait') {
+      var waitId = e.data.commandId;
+      var waitCap = 10000;
+      var selector = typeof e.data.selector === 'string' && e.data.selector ? e.data.selector : null;
+      if (selector) {
+        var deadline = Date.now() + waitCap;
+        var poll = function() {
+          var found = null;
+          try { found = document.querySelector(selector); } catch (_) { found = null; }
+          if (found) {
+            browseReply({ type: 'devs:browse-result', commandId: waitId, result: { ok: true, found: true } });
+          } else if (Date.now() >= deadline) {
+            browseReply({ type: 'devs:browse-result', commandId: waitId, result: { ok: true, found: false } });
+          } else {
+            setTimeout(poll, 200);
+          }
+        };
+        poll();
+      } else {
+        var ms = typeof e.data.ms === 'number' && e.data.ms > 0 ? Math.min(e.data.ms, waitCap) : 500;
+        setTimeout(function() {
+          browseReply({ type: 'devs:browse-result', commandId: waitId, result: { ok: true } });
+        }, ms);
+      }
     }
   });
 
@@ -433,6 +1701,7 @@
     if (!touch) return;
     var el = document.elementFromPoint(touch.clientX, touch.clientY);
     if (!el || el === document.body || el === document.documentElement) return;
+    if (isInsideInlineMarker(el)) return;
     e.preventDefault();
     window.parent.postMessage({
       type: 'devs:hover',
@@ -450,6 +1719,7 @@
     if (!touch) return;
     var el = document.elementFromPoint(touch.clientX, touch.clientY);
     if (!el || el === document.body || el === document.documentElement) return;
+    if (isInsideInlineMarker(el)) return;
     e.preventDefault();
     var textContent = (el.textContent || '').trim();
     var selectionToken = nextSelectionToken();
