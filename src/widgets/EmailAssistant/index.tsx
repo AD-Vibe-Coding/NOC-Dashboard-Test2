@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   ActionIcon,
   Alert,
@@ -6,17 +6,14 @@ import {
   Box,
   Button,
   Card,
+  Code,
   Divider,
   Grid,
   Group,
   Loader,
   Modal,
-  ScrollArea,
-  SegmentedControl,
   Select,
-  SimpleGrid,
   Stack,
-  Tabs,
   Text,
   TextInput,
   Textarea,
@@ -25,52 +22,42 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle,
-  IconArrowBackUp,
   IconBuildingBroadcastTower,
-  IconCheck,
   IconClipboard,
   IconCopy,
-  IconHistory,
+  IconFileText,
   IconMail,
   IconPlayerStop,
   IconRefresh,
-  IconReplace,
   IconSparkles,
-  IconTrash,
+  IconUpload,
   IconUser,
   IconUsers,
 } from "@tabler/icons-react";
 import ReactMarkdown from "react-markdown";
 import { db } from "../../db";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
-import { formatDateTime } from "../../lib/format";
 import { useIdentity } from "../../lib/identity";
+import { parseMhtmlFile, type ParsedMhtml } from "../../lib/mhtml";
 import {
   availableLevels,
-  buildMailtoUrl,
   matchCarrierFromNotes,
-  splitContactsForEmail,
   type CarrierMatch,
 } from "../../lib/carrier-match";
-import type { CarrierEscalation, EscalationContact } from "../../lib/confluence";
-import { extractCarrierImages } from "../../lib/confluence";
+import { extractCarrierImages, type EscalationContact } from "../../lib/confluence";
 import { useEscalations } from "../Escalations/data";
 import { WidgetFrame } from "../WidgetFrame";
 import { EmailAssistantTile } from "./Tile";
 import {
-  buildQualityChecks,
-  createDiffLines,
   extractStructuredContext,
-  findMissingFields,
-  generateSubjectSuggestions,
   makeOutlookFriendlyEmail,
   markdownToPlainText,
   normalizeSourceText,
   splitSubjectBody,
-  type AssistantMode,
   type Audience,
   type EscalationVariantKey,
   type OutputVariantKey,
+  type PolishVariantKey,
 } from "./helpers";
 import { type EscalationDraft, type PolishedEmail, useEscalationDrafts, usePolishedEmails } from "./data";
 
@@ -106,9 +93,7 @@ type RefinementOption = {
   label: string;
 };
 
-type PendingGenerateAction = "escalation-all" | "escalation-selected" | "polish-all" | "polish-selected" | null;
-
-type SubjectPreset = { label: string; build: (context: ReturnType<typeof extractStructuredContext>) => string };
+type DraftModeChoice = "polish" | "escalation";
 
 const ESCALATION_VARIANTS: Array<{ key: EscalationVariantKey; title: string; color: string; icon: ComponentType<{ size?: number; color?: string }>; badge: string }> = [
   { key: "carrier", title: "Carrier draft", color: "teal", icon: IconBuildingBroadcastTower, badge: "External" },
@@ -117,10 +102,11 @@ const ESCALATION_VARIANTS: Array<{ key: EscalationVariantKey; title: string; col
   { key: "executive", title: "Executive summary", color: "orange", icon: IconSparkles, badge: "Leadership" },
 ];
 
-const POLISH_VARIANTS: Array<{ key: Audience; title: string; color: string; icon: ComponentType<{ size?: number; color?: string }>; badge: string }> = [
-  { key: "customer", title: "Customer email", color: "cyan", icon: IconUser, badge: "Customer" },
-  { key: "internal", title: "Internal email", color: "violet", icon: IconUsers, badge: "Internal" },
-  { key: "carrier", title: "Carrier email", color: "orange", icon: IconBuildingBroadcastTower, badge: "Carrier" },
+const POLISH_VARIANTS: Array<{ key: PolishVariantKey; audience: Audience; title: string; color: string; icon: ComponentType<{ size?: number; color?: string }>; badge: string }> = [
+  { key: "polish-customer", audience: "customer", title: "Polished customer email", color: "cyan", icon: IconUser, badge: "Polish" },
+  { key: "polish-internal", audience: "internal", title: "Polished internal email", color: "violet", icon: IconUsers, badge: "Polish" },
+  { key: "polish-carrier", audience: "carrier", title: "Polished carrier email", color: "orange", icon: IconBuildingBroadcastTower, badge: "Polish" },
+  { key: "polish-executive", audience: "executive", title: "Polished executive email", color: "grape", icon: IconSparkles, badge: "Polish" },
 ];
 
 const TONE_OPTIONS = [
@@ -134,14 +120,6 @@ const LENGTH_OPTIONS = [
   { value: "concise", label: "Concise" },
   { value: "standard", label: "Standard" },
   { value: "detailed", label: "Detailed" },
-];
-
-const RECIPIENT_PROFILES = [
-  { value: "technical-customer", label: "Technical customer" },
-  { value: "executive-customer", label: "Executive customer" },
-  { value: "field-tech", label: "Field technician" },
-  { value: "carrier-noc", label: "Carrier NOC" },
-  { value: "internal-manager", label: "Internal manager" },
 ];
 
 const ESCALATION_INTENTS = [
@@ -160,14 +138,6 @@ const POLISH_INTENTS = [
   { value: "follow-up", label: "Follow-up" },
 ];
 
-const SUBJECT_PRESETS: SubjectPreset[] = [
-  { label: "Customer Impact", build: (ctx) => `${ctx.customerName || "Customer"} | ${ctx.impact || "Service impact"}` },
-  { label: "ETA Request", build: (ctx) => `${ctx.customerName || "Customer"} | ETA request | ${ctx.ticketNumber || "[Ticket #]"}` },
-  { label: "Dispatch Update", build: (ctx) => `${ctx.customerName || "Customer"} | Dispatch update | ${ctx.site || "Site"}` },
-  { label: "Monitoring Update", build: (ctx) => `${ctx.customerName || "Customer"} | Monitoring update | ${ctx.ticketNumber || "[Ticket #]"}` },
-  { label: "Escalation Request", build: (ctx) => `${ctx.customerName || "Customer"} | Escalation request | ${ctx.ticketNumber || "[Ticket #]"}` },
-];
-
 const REFINEMENT_OPTIONS: RefinementOption[] = [
   { value: "shorter", label: "Shorter" },
   { value: "firmer", label: "Firmer" },
@@ -177,37 +147,34 @@ const REFINEMENT_OPTIONS: RefinementOption[] = [
   { value: "executive", label: "Executive summary" },
 ];
 
-const SNIPPETS = [
-  "We are actively engaging the carrier and will share the next update as soon as it is available.",
-  "At this time, service remains impacted while investigation continues.",
-  "Please confirm receipt and advise the current ETA or dispatch status.",
-  "No additional customer action is required at this time.",
-  "We will provide the next update by [time].",
-  "Monitoring remains in place and we are tracking for stability.",
-];
-
-const ESC_INTERNAL_PROMPT = `You are an experienced NOC technician at AppDirect drafting an internal escalation email to the carrier-escalation team.
+const ESC_INTERNAL_PROMPT = `You are an experienced NOC technician at vCom drafting an internal escalation email to the carrier-escalation team.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
+Use first-person plural voice for vCom, such as \"we want to escalate\", \"we would like to escalate\", or \"we need support with\".
+Do not refer to vCom in the third person. Never write phrases like \"vCom is requesting\" or \"vCom is escalating\".
 Use these sections in order when relevant: Current Investigation Status, Latest Update, Escalation Level, Customer Feedback.
 Keep the tone factual, concise, and operationally useful.`;
 
-const ESC_OUTBOUND_PROMPT = `You are an experienced NOC technician at AppDirect drafting an outbound escalation email to a telecommunications carrier.
+const ESC_OUTBOUND_PROMPT = `You are an experienced NOC technician at vCom drafting an outbound escalation email to a telecommunications carrier.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
+Use first-person plural voice for vCom, such as \"we want to escalate\", \"we would like to escalate\", or \"we need your help with\".
+Do not refer to vCom in the third person. Never write phrases like \"vCom is requesting\" or \"vCom is escalating\".
+Because this email is being sent directly to the carrier, do not say \"we will follow up with the carrier\" or describe the carrier as a third party. Address the recipient directly as \"you\" and ask them for the needed action, updated outage status, ETTR, dispatch status, or restoration estimate.
+In the Reference section, include only these lines when the values are actually available: Customer, Address, Circuit. Skip any of those lines that are missing. Do not add other reference labels or placeholders.
 Be polite but firm. Include a Reference section, current status, and a concrete \"What we need from you\" section.`;
-
-const CUSTOMER_PROMPT = `You are a senior NOC technician at AppDirect writing a polished email to a customer.
+const CUSTOMER_PROMPT = `You are a senior NOC technician at vCom writing a polished email to a customer.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
 Use plain English, acknowledge impact, avoid heavy jargon, and include the next update time or cadence.`;
 
-const POLISH_INTERNAL_PROMPT = `You are a senior NOC technician at AppDirect writing a polished email to an internal team.
+const POLISH_INTERNAL_PROMPT = `You are a senior NOC technician at vCom writing a polished email to an internal team.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
 Be concise, action-oriented, and feel free to use short bullet points.`;
 
-const CARRIER_PROMPT = `You are a senior NOC technician at AppDirect writing a polished email to a wholesale carrier.
+const CARRIER_PROMPT = `You are a senior NOC technician at vCom writing a polished email to a wholesale carrier.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
+In the Reference section, include only these lines when the values are actually available: Customer, Address, Circuit. Skip any of those lines that are missing. Do not add other reference labels or placeholders.
 Be specific, firm, and ask for concrete carrier actions, ETA, or dispatch confirmation.`;
 
-const EXEC_PROMPT = `You are a senior NOC technician at AppDirect drafting a brief executive summary email.
+const EXEC_PROMPT = `You are a senior NOC technician at vCom drafting a brief executive summary email.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
 Use 3-5 short paragraphs or bullets summarizing impact, status, risk, and next update timing in non-technical language.`;
 
@@ -215,6 +182,7 @@ const PROMPTS: Record<Audience, string> = {
   customer: CUSTOMER_PROMPT,
   internal: POLISH_INTERNAL_PROMPT,
   carrier: CARRIER_PROMPT,
+  executive: EXEC_PROMPT,
 };
 
 function carrierStyleGuidance(carrierName: string) {
@@ -302,42 +270,6 @@ function CopyActions({
   );
 }
 
-function ContactPreview({ carrier, contactSplit }: { carrier: CarrierEscalation; contactSplit: ReturnType<typeof splitContactsForEmail> | null }) {
-  if (!contactSplit) return null;
-  const totalWithEmail = contactSplit.to.length + contactSplit.cc.length;
-  if (totalWithEmail === 0) {
-    return (
-      <Alert icon={<IconAlertCircle size={14} />} color="yellow" variant="light" radius="sm">
-        <Text size="xs">{carrier.contacts.length > 0 ? "Contacts exist, but none are eligible for the current level cutoff." : "No carrier contacts with email are available yet."}</Text>
-      </Alert>
-    );
-  }
-  return (
-    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-      <Box>
-        <Text c="dimmed" tt="uppercase" fw={700} style={{ fontSize: 10 }} mb={4}>To · {contactSplit.to.length}</Text>
-        <Stack gap={4}>{contactSplit.to.map((contact, i) => <ContactLine key={`to-${i}`} contact={contact} primary />)}</Stack>
-      </Box>
-      <Box>
-        <Text c="dimmed" tt="uppercase" fw={700} style={{ fontSize: 10 }} mb={4}>Cc · {contactSplit.cc.length}</Text>
-        <Stack gap={4}>{contactSplit.cc.map((contact, i) => <ContactLine key={`cc-${i}`} contact={contact} />)}</Stack>
-      </Box>
-    </SimpleGrid>
-  );
-}
-
-function ContactLine({ contact, primary = false }: { contact: EscalationContact; primary?: boolean }) {
-  return (
-    <Group gap={6} wrap="nowrap" align="baseline">
-      <Badge size="xs" variant="light" color={primary ? "teal" : "gray"}>{contact.level}</Badge>
-      <Box style={{ minWidth: 0, flex: 1 }}>
-        {contact.name ? <Text size="xs" fw={500} truncate>{contact.name}</Text> : null}
-        {contact.email ? <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>{contact.email}</Text> : null}
-      </Box>
-    </Group>
-  );
-}
-
 function OutputCard({
   output,
   loading,
@@ -393,100 +325,20 @@ function OutputCard({
   );
 }
 
-function DiffPanel({ previousText, currentText }: { previousText: string; currentText: string }) {
-  const lines = useMemo(() => createDiffLines(previousText, currentText), [previousText, currentText]);
-  if (!previousText || !currentText) {
-    return <Text size="xs" c="dimmed">Generate or restore another version to compare changes.</Text>;
-  }
-  return (
-    <ScrollArea h={220}>
-      <Stack gap={4}>
-        {lines.length === 0 ? <Text size="xs" c="dimmed">No meaningful differences yet.</Text> : null}
-        {lines.map((line, index) => (
-          <Box
-            key={`${line.type}-${index}`}
-            px="xs"
-            py={4}
-            style={{
-              borderRadius: 6,
-              background:
-                line.type === "added" ? "rgba(46, 160, 67, 0.18)"
-                : line.type === "removed" ? "rgba(248, 81, 73, 0.15)"
-                : line.type === "changed" ? "rgba(210, 153, 34, 0.14)"
-                : "transparent",
-              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-              fontSize: 12,
-            }}
-          >
-            {line.text}
-          </Box>
-        ))}
-      </Stack>
-    </ScrollArea>
-  );
-}
-
-function HistoryPanel<T>({
-  title,
-  rows,
-  count,
-  renderMeta,
-  renderTitle,
-  onLoad,
-  onDuplicate,
-  onCompare,
-  onDelete,
-}: {
-  title: string;
-  rows: T[];
-  count: number;
-  renderMeta: (row: T) => ReactNode;
-  renderTitle: (row: T) => string;
-  onLoad: (row: T) => void;
-  onDuplicate: (row: T) => void;
-  onCompare: (row: T) => void;
-  onDelete: (row: T) => void;
-}) {
-  return (
-    <SectionCard title={title} action={<Badge size="xs" variant="default">{count}</Badge>}>
-      {rows.length === 0 ? (
-        <Text size="xs" c="dimmed" fs="italic">Nothing saved yet.</Text>
-      ) : (
-        <ScrollArea h={250} type="auto">
-          <Stack gap={6}>
-            {rows.map((row, index) => (
-              <Card key={index} withBorder radius="md" p="xs">
-                <Stack gap={6}>
-                  <Group gap={6} wrap="wrap">{renderMeta(row)}</Group>
-                  <Text size="xs" fw={600} truncate>{renderTitle(row)}</Text>
-                  <Group gap={6} wrap="wrap">
-                    <Button size="compact-xs" variant="light" onClick={() => onLoad(row)}>Restore</Button>
-                    <Button size="compact-xs" variant="light" leftSection={<IconArrowBackUp size={12} />} onClick={() => onDuplicate(row)}>Duplicate</Button>
-                    <Button size="compact-xs" variant="light" leftSection={<IconHistory size={12} />} onClick={() => onCompare(row)}>Compare</Button>
-                    <ActionIcon size="sm" variant="subtle" color="red" onClick={() => onDelete(row)}><IconTrash size={13} /></ActionIcon>
-                  </Group>
-                </Stack>
-              </Card>
-            ))}
-          </Stack>
-        </ScrollArea>
-      )}
-    </SectionCard>
-  );
-}
-
 export function EmailAssistantWidget() {
   const { identity } = useIdentity();
   const senderName = identity?.name ?? "";
-  const { drafts, refresh: refreshDrafts } = useEscalationDrafts();
-  const { emails, refresh: refreshEmails } = usePolishedEmails();
+  const { refresh: refreshDrafts } = useEscalationDrafts();
+  const { refresh: refreshEmails } = usePolishedEmails();
   const escalations = useEscalations();
 
-  const [mode, setMode] = useState<AssistantMode>("escalation");
-  const [selectedEscalationKey, setSelectedEscalationKey] = useState<EscalationVariantKey>("carrier");
-  const [selectedPolishKey, setSelectedPolishKey] = useState<Audience>("customer");
+  const [selectedOutputKey, setSelectedOutputKey] = useState<OutputVariantKey>("carrier");
   const [notes, setNotes] = useState("");
-  const [draft, setDraft] = useState("");
+  const [uploadedMhtml, setUploadedMhtml] = useState<ParsedMhtml | null>(null);
+  const [uploadedFileName, setUploadedFileName] = useState("");
+  const [uploadedFileSize, setUploadedFileSize] = useState(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const [ticketNumber, setTicketNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [carrierTicket, setCarrierTicket] = useState("");
@@ -497,26 +349,28 @@ export function EmailAssistantWidget() {
   const [serviceType, setServiceType] = useState("");
   const [concreteAsk, setConcreteAsk] = useState("");
   const [recipientName, setRecipientName] = useState("");
-  const [recipientProfile, setRecipientProfile] = useState("technical-customer");
+  const [recipientProfile] = useState("technical-customer");
   const [carrierOverride, setCarrierOverride] = useState<string | null>(null);
   const [maxLevel, setMaxLevel] = useState<number | null>(2);
   const [tone, setTone] = useState("neutral");
   const [length, setLength] = useState("standard");
-  const [escalationIntent, setEscalationIntent] = useState("initial-escalation");
-  const [polishIntent, setPolishIntent] = useState("status-update");
+  const [escalationIntent] = useState("initial-escalation");
+  const [polishIntent] = useState("status-update");
   const [selectedRefinement, setSelectedRefinement] = useState<RefineTone>("shorter");
-  const [refinementModalOpened, setRefinementModalOpened] = useState(false);
-  const [pendingGenerateAction, setPendingGenerateAction] = useState<PendingGenerateAction>(null);
+  const [generateModalOpened, setGenerateModalOpened] = useState(false);
+  const [draftModeChoice, setDraftModeChoice] = useState<DraftModeChoice>("escalation");
+  const [selectedEscalationVariant, setSelectedEscalationVariant] = useState<EscalationVariantKey>("internal");
+  const [selectedPolishVariant, setSelectedPolishVariant] = useState<PolishVariantKey>("polish-customer");
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [outputs, setOutputs] = useState<Record<string, OutputRecord>>({});
-  const [outputVersions, setOutputVersions] = useState<Record<string, string[]>>({});
-  const [compareBaseline, setCompareBaseline] = useState("");
-  const [viewingOutbound, setViewingOutbound] = useState<EscalationDraft | null>(null);
-  const [viewingInternal, setViewingInternal] = useState<EscalationDraft | null>(null);
-  const [viewingPolish, setViewingPolish] = useState<PolishedEmail | null>(null);
+  const [, setOutputVersions] = useState<Record<string, string[]>>({});
+  const [, setCompareBaseline] = useState("");
+  const [, setViewingOutbound] = useState<EscalationDraft | null>(null);
+  const [, setViewingInternal] = useState<EscalationDraft | null>(null);
+  const [, setViewingPolish] = useState<PolishedEmail | null>(null);
   const [extractedContacts, setExtractedContacts] = useState<Map<string, EscalationContact[]>>(new Map());
   const [extracting, setExtracting] = useState<string | null>(null);
-  const [extractError, setExtractError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const carrierAi = useCompletion();
   const internalAi = useCompletion();
@@ -525,9 +379,10 @@ export function EmailAssistantWidget() {
   const polishCustomerAi = useCompletion();
   const polishInternalAi = useCompletion();
   const polishCarrierAi = useCompletion();
+  const polishExecutiveAi = useCompletion();
   const refineAi = useCompletion();
 
-  const sourceText = mode === "escalation" ? notes : draft;
+  const sourceText = notes;
   const normalizedSource = useMemo(() => normalizeSourceText(sourceText), [sourceText]);
   const extractedContext = useMemo(() => extractStructuredContext(normalizedSource), [normalizedSource]);
   const mergedContext = useMemo(() => ({
@@ -542,7 +397,6 @@ export function EmailAssistantWidget() {
     serviceType: serviceType || extractedContext.serviceType,
     ask: concreteAsk || extractedContext.ask,
   }), [carrierTicket, concreteAsk, customerName, eta, extractedContext, impact, nextUpdate, serviceType, site, ticketNumber]);
-  const missingFields = useMemo(() => findMissingFields(mergedContext, mode), [mergedContext, mode]);
 
   const autoMatch: CarrierMatch | null = useMemo(() => {
     if (!escalations.data?.carriers) return null;
@@ -563,7 +417,6 @@ export function EmailAssistantWidget() {
 
     const carrierId = effectiveCarrier.id;
     setExtracting(carrierId);
-    setExtractError(null);
     extractCarrierImages(carrierId, { carrierName: effectiveCarrier.carrier })
       .then((result) => {
         setExtractedContacts((prev) => {
@@ -572,8 +425,8 @@ export function EmailAssistantWidget() {
           return next;
         });
       })
-      .catch((error) => {
-        setExtractError(error instanceof Error ? error.message : String(error));
+      .catch(() => {
+        // Silent fallback: carrier-specific contact extraction is optional in the simplified UI.
       })
       .finally(() => setExtracting(null));
   }, [effectiveCarrier, extractedContacts, extracting]);
@@ -584,11 +437,6 @@ export function EmailAssistantWidget() {
     const extracted = extractedContacts.get(effectiveCarrier.id);
     return extracted ? { ...effectiveCarrier, contacts: extracted } : effectiveCarrier;
   }, [effectiveCarrier, extractedContacts]);
-
-  const contactSplit = useMemo(() => {
-    if (!carrierWithContacts) return null;
-    return splitContactsForEmail(carrierWithContacts.contacts, maxLevel ?? undefined);
-  }, [carrierWithContacts, maxLevel]);
 
   const carrierLevels = useMemo(() => {
     if (!carrierWithContacts) return [];
@@ -636,30 +484,35 @@ export function EmailAssistantWidget() {
     }));
   }
 
-  function applySnippet(snippet: string) {
-    if (mode === "escalation") {
-      setNotes((prev) => `${prev.trim()}${prev.trim() ? "\n" : ""}${snippet}`);
-    } else {
-      setDraft((prev) => `${prev.trim()}${prev.trim() ? "\n" : ""}${snippet}`);
-    }
-  }
+  async function handleMhtmlFile(file: File) {
+    setUploadError(null);
+    setUploadedFileName(file.name);
+    setUploadedFileSize(file.size);
 
-  function fillMissingField(key: string, value: string) {
-    if (!value) return;
-    if (key === "ticketNumber") setTicketNumber(value);
-    if (key === "customerName") setCustomerName(value);
-    if (key === "carrierTicket") setCarrierTicket(value);
-    if (key === "site") setSite(value);
-    if (key === "eta") setEta(value);
-    if (key === "nextUpdate") setNextUpdate(value);
-    if (key === "impact") setImpact(value);
-    if (key === "serviceType") setServiceType(value);
-    if (key === "ask") setConcreteAsk(value);
+    try {
+      const parsed = await parseMhtmlFile(file);
+      if (!parsed.text || parsed.text.length < 100) {
+        setUploadError("Could not extract meaningful text from this file. Is it a valid .mhtml?");
+        setUploadedMhtml(null);
+        return;
+      }
+
+      setUploadedMhtml(parsed);
+      setNotes(parsed.text);
+      setTicketNumber((current) => current || parsed.ticket_number || "");
+      setCustomerName((current) => current || parsed.ticket_subject || parsed.subject || "");
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+      setUploadedMhtml(null);
+    }
   }
 
   function resetAll() {
     setNotes("");
-    setDraft("");
+    setUploadedMhtml(null);
+    setUploadedFileName("");
+    setUploadedFileSize(0);
+    setUploadError(null);
     setTicketNumber("");
     setCustomerName("");
     setCarrierTicket("");
@@ -671,8 +524,10 @@ export function EmailAssistantWidget() {
     setConcreteAsk("");
     setRecipientName("");
     setSelectedRefinement("shorter");
-    setRefinementModalOpened(false);
-    setPendingGenerateAction(null);
+    setGenerateModalOpened(false);
+    setDraftModeChoice("escalation");
+    setSelectedEscalationVariant("internal");
+    setSelectedPolishVariant("polish-customer");
     setOutputs({});
     setOutputVersions({});
     setCompareBaseline("");
@@ -686,12 +541,14 @@ export function EmailAssistantWidget() {
     polishCustomerAi.setResult("");
     polishInternalAi.setResult("");
     polishCarrierAi.setResult("");
+    polishExecutiveAi.setResult("");
     refineAi.setResult("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
   function buildSharedContextLines() {
     const lines: string[] = [];
-    if (mergedContext.ticketNumber) lines.push(`AppDirect ticket #: ${mergedContext.ticketNumber}`);
+    if (mergedContext.ticketNumber) lines.push(`vCom ticket #: ${mergedContext.ticketNumber}`);
     if (mergedContext.customerName) lines.push(`Customer name: ${mergedContext.customerName}`);
     if (mergedContext.carrierTicket) lines.push(`Carrier ticket / circuit: ${mergedContext.carrierTicket}`);
     if (mergedContext.site) lines.push(`Site/location: ${mergedContext.site}`);
@@ -706,6 +563,24 @@ export function EmailAssistantWidget() {
     return lines;
   }
 
+  function buildSourceReviewInstructions() {
+    const lines: string[] = [];
+
+    if (uploadedMhtml) {
+      lines.push("Primary source: uploaded ticket data dump (.mhtml) exported from the ticketing tool.");
+      lines.push("Review the entire extracted dump below before drafting.");
+      lines.push("Use the full ticket history, timestamps, status notes, and metadata in the dump — not just the short extracted fields above.");
+      lines.push("Treat any manually filled fields as overrides or clarifications, but keep the uploaded dump as the source of truth unless the user clearly changed the text.");
+      lines.push("Generate the strongest complete email you can from the full record, with no placeholders.");
+    } else {
+      lines.push("Primary source: pasted notes or rough draft supplied by the user.");
+      lines.push("Review the full source text below before drafting.");
+      lines.push("Generate the strongest complete email you can from the full record, with no placeholders.");
+    }
+
+    return lines.map((line) => `- ${line}`).join("\n");
+  }
+
   async function runEscalationVariant(key: EscalationVariantKey) {
     if (!normalizedSource.trim()) {
       showToast({ color: "red", title: "Paste investigation notes first" });
@@ -715,9 +590,8 @@ export function EmailAssistantWidget() {
     const refinementInstruction = REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter";
     const shared = buildSharedContextLines();
     const carrierName = carrierWithContacts?.carrier ?? "Carrier";
-    const toLine = (contactSplit?.to ?? []).map((contact) => `${contact.name ?? contact.email} <${contact.email}>`).filter(Boolean).join(", ");
-    const ccLine = (contactSplit?.cc ?? []).map((contact) => `${contact.name ?? contact.email} <${contact.email}>`).filter(Boolean).join(", ");
     const intentLabel = ESCALATION_INTENTS.find((option) => option.value === escalationIntent)?.label ?? escalationIntent;
+    const sourceReviewInstructions = buildSourceReviewInstructions();
 
     const promptBase = [
       ...shared,
@@ -725,15 +599,13 @@ export function EmailAssistantWidget() {
       `Preferred drafting refinement: ${refinementInstruction}`,
       `Carrier-specific guidance: ${carrierStyleGuidance(carrierName)}`,
       carrierWithContacts ? `Carrier: ${carrierName}` : "",
-      toLine ? `Email To: ${toLine}` : "",
-      ccLine ? `Email Cc: ${ccLine}` : "",
     ].filter(Boolean).map((line) => `- ${line}`).join("\n");
 
     const prompts: Record<EscalationVariantKey, string> = {
-      carrier: `${ESC_OUTBOUND_PROMPT}\n\nKnown details:\n${promptBase}\n\nSource notes (normalized):\n${normalizedSource}`,
-      internal: `${ESC_INTERNAL_PROMPT}\n\nKnown details:\n${promptBase}\n\nSource notes (normalized):\n${normalizedSource}`,
-      customer: `${CUSTOMER_PROMPT}\n\nKnown details:\n${promptBase}\n\nThis is a customer-facing update generated from these notes:\n${normalizedSource}`,
-      executive: `${EXEC_PROMPT}\n\nKnown details:\n${promptBase}\n\nThis executive summary is based on these notes:\n${normalizedSource}`,
+      carrier: `${ESC_OUTBOUND_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${normalizedSource}`,
+      internal: `${ESC_INTERNAL_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${normalizedSource}`,
+      customer: `${CUSTOMER_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best customer-ready email based on this full source record:\n${normalizedSource}`,
+      executive: `${EXEC_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best executive summary email based on this full source record:\n${normalizedSource}`,
     };
 
     const runners = {
@@ -758,19 +630,15 @@ export function EmailAssistantWidget() {
         subject: parsed.subject || null,
         body_markdown: parsed.body,
         mode: key === "carrier" ? "outbound" : "internal",
-        to_emails: key === "carrier" && contactSplit ? contactSplit.to.map((contact) => contact.email).filter(Boolean).join(",") : null,
-        cc_emails: key === "carrier" && contactSplit ? contactSplit.cc.map((contact) => contact.email).filter(Boolean).join(",") : null,
+        to_emails: null,
+        cc_emails: null,
         carrier_id: carrierWithContacts?.id ?? null,
       });
       await refreshDrafts();
     }
   }
 
-  async function runAllEscalationVariants() {
-    await Promise.all(ESCALATION_VARIANTS.map((variant) => runEscalationVariant(variant.key)));
-  }
-
-  async function runPolishVariant(key: Audience) {
+  async function runPolishVariant(key: PolishVariantKey) {
     if (!normalizedSource.trim()) {
       showToast({ color: "red", title: "Paste a rough draft first" });
       return;
@@ -778,7 +646,9 @@ export function EmailAssistantWidget() {
 
     const refinementInstruction = REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter";
     const intentLabel = POLISH_INTENTS.find((option) => option.value === polishIntent)?.label ?? polishIntent;
-    const prompt = `${PROMPTS[key]}\n\nKnown details:\n${[
+    const audience = POLISH_VARIANTS.find((variant) => variant.key === key)?.audience ?? "customer";
+    const sourceReviewInstructions = buildSourceReviewInstructions();
+    const prompt = `${PROMPTS[audience]}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${[
       `Recipient profile: ${recipientProfile}`,
       `Recipient name: ${recipientName || "[Recipient]"}`,
       `Customer/company: ${mergedContext.customerName || "[Customer]"}`,
@@ -793,19 +663,20 @@ export function EmailAssistantWidget() {
       mergedContext.ask ? `Key ask: ${mergedContext.ask}` : "",
       senderName ? `Sender: ${senderName}` : "",
       `Carrier-specific guidance: ${carrierStyleGuidance(carrierWithContacts?.carrier ?? carrierOverride ?? "Carrier")}`,
-    ].filter(Boolean).map((line) => `- ${line}`).join("\n")}\n\nRaw draft to polish:\n${normalizedSource}`;
+    ].filter(Boolean).map((line) => `- ${line}`).join("\n")}\n\nFull source text to review before drafting the best email:\n${normalizedSource}`;
 
     const runners = {
-      customer: polishCustomerAi,
-      internal: polishInternalAi,
-      carrier: polishCarrierAi,
+      "polish-customer": polishCustomerAi,
+      "polish-internal": polishInternalAi,
+      "polish-carrier": polishCarrierAi,
+      "polish-executive": polishExecutiveAi,
     } as const;
 
     const result = await runners[key].complete(prompt);
     const parsed = splitSubjectBody(result);
     updateOutput(key, parsed);
     await db.polished_emails.insert({
-      audience: key,
+      audience,
       recipient_name: recipientName.trim() || null,
       customer_name: mergedContext.customerName || null,
       carrier_name: carrierWithContacts?.carrier ?? null,
@@ -820,176 +691,67 @@ export function EmailAssistantWidget() {
     await refreshEmails();
   }
 
-  async function runAllPolishVariants() {
-    await Promise.all(POLISH_VARIANTS.map((variant) => runPolishVariant(variant.key)));
-  }
+  async function confirmGenerate() {
+    setGenerateModalOpened(false);
 
-  function openRefinementModal(action: PendingGenerateAction) {
-    setPendingGenerateAction(action);
-    setRefinementModalOpened(true);
-  }
-
-  async function confirmGenerateWithRefinement() {
-    if (!pendingGenerateAction) return;
-    setRefinementModalOpened(false);
-
-    if (pendingGenerateAction === "escalation-all") {
-      await runAllEscalationVariants();
-    } else if (pendingGenerateAction === "escalation-selected") {
-      await runEscalationVariant(selectedEscalationKey);
-    } else if (pendingGenerateAction === "polish-all") {
-      await runAllPolishVariants();
-    } else if (pendingGenerateAction === "polish-selected") {
-      await runPolishVariant(selectedPolishKey);
+    if (draftModeChoice === "escalation") {
+      setSelectedOutputKey(selectedEscalationVariant);
+      await runEscalationVariant(selectedEscalationVariant);
+      return;
     }
 
-    setPendingGenerateAction(null);
-  }
-
-  async function refineCurrentOutput(style: RefineTone) {
-    const current = activeOutput;
-    if (!current.subject && !current.body) return;
-    const instructions: Record<RefineTone, string> = {
-      shorter: "Make the email shorter while preserving the key facts and asks.",
-      firmer: "Make the tone firmer and more direct, but still professional.",
-      clearer: "Improve clarity and readability for the intended audience.",
-      empathetic: "Make the wording more empathetic and customer-friendly.",
-      technical: "Make the message slightly more technical and operationally precise.",
-      executive: "Rewrite this for executive readability in concise plain language.",
-    };
-    const prompt = `Refine this email. ${instructions[style]} Return markdown that starts with Subject: and then the body.\n\nCurrent email:\nSubject: ${current.subject}\n\n${current.body}`;
-    const result = await refineAi.complete(prompt);
-    const parsed = splitSubjectBody(result);
-    updateOutput(current.key, parsed);
-  }
-
-  async function deleteDraft(id: number) {
-    await db.escalation_drafts.deleteById(id);
-    if (viewingOutbound?.id === id) setViewingOutbound(null);
-    if (viewingInternal?.id === id) setViewingInternal(null);
-    await refreshDrafts();
-  }
-
-  async function deleteEmail(id: number) {
-    await db.polished_emails.deleteById(id);
-    if (viewingPolish?.id === id) setViewingPolish(null);
-    await refreshEmails();
-  }
-
-  function loadEscalationDraft(saved: EscalationDraft, duplicate = false) {
-    setMode("escalation");
-    setNotes(saved.raw_notes ?? "");
-    setTicketNumber(saved.ticket_number ?? "");
-    setCustomerName(saved.customer_name ?? "");
-    setRecipientName(saved.recipient ?? "");
-    setCarrierOverride(saved.carrier_id ?? null);
-    const parsed = { subject: saved.subject ?? "", body: saved.body_markdown ?? "" };
-    updateOutput(saved.mode === "internal" ? "internal" : "carrier", parsed);
-    if (saved.mode === "internal") setSelectedEscalationKey("internal");
-    else setSelectedEscalationKey("carrier");
-    setCompareBaseline(`Subject: ${parsed.subject}\n\n${parsed.body}`);
-    if (!duplicate) {
-      if (saved.mode === "internal") setViewingInternal(saved);
-      else setViewingOutbound(saved);
-    } else {
-      setViewingInternal(null);
-      setViewingOutbound(null);
-    }
-  }
-
-  function loadPolishedEmail(saved: PolishedEmail, duplicate = false) {
-    setMode("polish");
-    const audience = (saved.audience as Audience) ?? "customer";
-    setSelectedPolishKey(audience);
-    setRecipientName(saved.recipient_name ?? "");
-    setCustomerName(saved.customer_name ?? "");
-    setTicketNumber(saved.ticket_number ?? "");
-    setTone(saved.tone ?? "neutral");
-    setLength(saved.length ?? "standard");
-    setDraft(saved.raw_draft ?? "");
-    const parsed = { subject: saved.subject ?? "", body: saved.body_markdown ?? "" };
-    updateOutput(audience, parsed);
-    setCompareBaseline(`Subject: ${parsed.subject}\n\n${parsed.body}`);
-    setViewingPolish(duplicate ? null : saved);
+    setSelectedOutputKey(selectedPolishVariant);
+    await runPolishVariant(selectedPolishVariant);
   }
 
   const escalationOutputs = useMemo<OutputVariant[]>(() => {
     return ESCALATION_VARIANTS.map((variant) => {
       const output = outputs[variant.key] ?? { subject: "", body: "" };
-      const to = variant.key === "carrier" ? (contactSplit?.to.map((contact) => contact.email!).filter(Boolean) ?? []) : [];
-      const cc = variant.key === "carrier" ? (contactSplit?.cc.map((contact) => contact.email!).filter(Boolean) ?? []) : [];
-      const mailtoUrl = variant.key === "carrier" && to.length > 0
-        ? buildMailtoUrl({ to, cc, subject: output.subject, body: markdownToPlainText(output.body) })
-        : null;
+      const to: string[] = [];
+      const cc: string[] = [];
+      const mailtoUrl = null;
       return { ...variant, ...output, to, cc, mailtoUrl };
     });
-  }, [contactSplit, outputs]);
+  }, [outputs]);
 
   const polishOutputs = useMemo<OutputVariant[]>(() => {
     return POLISH_VARIANTS.map((variant) => ({
       ...variant,
       ...((outputs[variant.key] ?? { subject: "", body: "" })),
-      audience: variant.key,
+      audience: variant.audience,
       to: [],
       cc: [],
       mailtoUrl: null,
     }));
   }, [outputs]);
 
+  const allOutputs = useMemo<OutputVariant[]>(() => [...escalationOutputs, ...polishOutputs], [escalationOutputs, polishOutputs]);
+
   const activeOutput = useMemo(() => {
-    const list = mode === "escalation" ? escalationOutputs : polishOutputs;
-    const key = mode === "escalation" ? selectedEscalationKey : selectedPolishKey;
-    return list.find((item) => item.key === key) ?? list[0];
-  }, [escalationOutputs, mode, polishOutputs, selectedEscalationKey, selectedPolishKey]);
+    return allOutputs.find((item) => item.key === selectedOutputKey) ?? allOutputs[0];
+  }, [allOutputs, selectedOutputKey]);
 
   const activeLoading =
-    (mode === "escalation" && (
-      (selectedEscalationKey === "carrier" && carrierAi.isLoading) ||
-      (selectedEscalationKey === "internal" && internalAi.isLoading) ||
-      (selectedEscalationKey === "customer" && customerAi.isLoading) ||
-      (selectedEscalationKey === "executive" && executiveAi.isLoading)
-    )) ||
-    (mode === "polish" && (
-      (selectedPolishKey === "customer" && polishCustomerAi.isLoading) ||
-      (selectedPolishKey === "internal" && polishInternalAi.isLoading) ||
-      (selectedPolishKey === "carrier" && polishCarrierAi.isLoading)
-    )) ||
+    (selectedOutputKey === "carrier" && carrierAi.isLoading) ||
+    (selectedOutputKey === "internal" && internalAi.isLoading) ||
+    (selectedOutputKey === "customer" && customerAi.isLoading) ||
+    (selectedOutputKey === "executive" && executiveAi.isLoading) ||
+    (selectedOutputKey === "polish-customer" && polishCustomerAi.isLoading) ||
+    (selectedOutputKey === "polish-internal" && polishInternalAi.isLoading) ||
+    (selectedOutputKey === "polish-carrier" && polishCarrierAi.isLoading) ||
+    (selectedOutputKey === "polish-executive" && polishExecutiveAi.isLoading) ||
     false;
 
-  const qualityChecks = useMemo(() => buildQualityChecks({
-    mode,
-    audience: mode === "polish" ? selectedPolishKey : activeOutput.audience,
-    subject: activeOutput?.subject ?? "",
-    body: activeOutput?.body ?? "",
-    context: mergedContext,
-  }), [activeOutput, mergedContext, mode, selectedPolishKey]);
-
-  const subjectSuggestions = useMemo(() => generateSubjectSuggestions({
-    mode,
-    audience: selectedPolishKey,
-    customerName: mergedContext.customerName,
-    ticketNumber: mergedContext.ticketNumber,
-    carrierName: carrierWithContacts?.carrier,
-    impact: mergedContext.impact,
-    intentLabel: mode === "escalation"
-      ? ESCALATION_INTENTS.find((item) => item.value === escalationIntent)?.label
-      : POLISH_INTENTS.find((item) => item.value === polishIntent)?.label,
-  }), [carrierWithContacts?.carrier, escalationIntent, mergedContext.customerName, mergedContext.impact, mergedContext.ticketNumber, mode, polishIntent, selectedPolishKey]);
-
-  const currentVersions = outputVersions[activeOutput?.key ?? ""] ?? [];
-  const previousVersion = currentVersions.length > 1 ? currentVersions[currentVersions.length - 2] : compareBaseline;
-  const currentVersion = activeOutput ? `Subject: ${activeOutput.subject}\n\n${activeOutput.body}` : "";
-
-  const globalBusy = [carrierAi, internalAi, customerAi, executiveAi, polishCustomerAi, polishInternalAi, polishCarrierAi, refineAi].some((item) => item.isLoading);
+  const globalBusy = [carrierAi, internalAi, customerAi, executiveAi, polishCustomerAi, polishInternalAi, polishCarrierAi, polishExecutiveAi].some((item) => item.isLoading);
 
   return (
     <WidgetFrame
       title="NOC Email Assistant"
-      subtitle="Generate escalation variants, polish emails, validate quality, and compare revisions in one workspace"
+      subtitle="A simple workspace to turn notes into a clean email draft fast"
       icon={IconMail}
       iconColor="teal"
       loading={globalBusy}
-      status={{ label: "AI", color: "teal", tooltip: "NOC-focused drafting, polishing, QA, and comparison" }}
+      status={{ label: "AI", color: "teal", tooltip: "Simple NOC email drafting" }}
       headerActions={
         <Tooltip label="Reset current workspace">
           <ActionIcon variant="subtle" onClick={resetAll}>
@@ -1001,77 +763,93 @@ export function EmailAssistantWidget() {
       <ToastStack toasts={toasts} onClose={(id) => setToasts((prev) => prev.filter((item) => item.id !== id))} />
 
       <Modal
-        opened={refinementModalOpened}
-        onClose={() => {
-          setRefinementModalOpened(false);
-          setPendingGenerateAction(null);
-        }}
-        title="Choose drafting refinement"
+        opened={generateModalOpened}
+        onClose={() => setGenerateModalOpened(false)}
+        title="Generate email"
         centered
         radius="lg"
       >
         <Stack gap="md">
-          <Text size="sm" c="dimmed">
-            Select the refinement style first. Drafting will begin only after you confirm.
-          </Text>
           <Select
-            label="Refinement"
+            label="1. What do you want to do?"
+            data={[
+              { value: "polish", label: "Polish email" },
+              { value: "escalation", label: "Escalation" },
+            ]}
+            value={draftModeChoice}
+            onChange={(value) => setDraftModeChoice((value as DraftModeChoice) ?? "escalation")}
+            allowDeselect={false}
+          />
+
+          {draftModeChoice === "escalation" ? (
+            <Select
+              label="2. Which escalation email?"
+              data={[
+                { value: "internal", label: "Internal escalation email (ESC_MGR)" },
+                { value: "carrier", label: "Carrier-facing escalation email" },
+              ]}
+              value={selectedEscalationVariant}
+              onChange={(value) => setSelectedEscalationVariant((value as EscalationVariantKey) ?? "internal")}
+              allowDeselect={false}
+            />
+          ) : (
+            <Select
+              label="2. Who is the polished email for?"
+              data={[
+                { value: "polish-customer", label: "Customer" },
+                { value: "polish-carrier", label: "Carrier" },
+                { value: "polish-internal", label: "Internal" },
+                { value: "polish-executive", label: "Executive level" },
+              ]}
+              value={selectedPolishVariant}
+              onChange={(value) => setSelectedPolishVariant((value as PolishVariantKey) ?? "polish-customer")}
+              allowDeselect={false}
+            />
+          )}
+
+          <Select
+            label="3. Drafting style"
             data={REFINEMENT_OPTIONS}
             value={selectedRefinement}
             onChange={(value) => setSelectedRefinement((value as RefineTone) ?? "shorter")}
             allowDeselect={false}
           />
+
+          {draftModeChoice === "polish" ? (
+            <Group grow>
+              <Select label="Tone" size="sm" data={TONE_OPTIONS} value={tone} onChange={(value) => setTone(value ?? "neutral")} allowDeselect={false} />
+              <Select label="Length" size="sm" data={LENGTH_OPTIONS} value={length} onChange={(value) => setLength(value ?? "standard")} allowDeselect={false} />
+            </Group>
+          ) : null}
+
+          <Card withBorder radius="md" p="sm" bg="dark.7">
+            <Text size="xs" c="dimmed" mb={4}>You are about to generate</Text>
+            <Text fw={600} size="sm">
+              {draftModeChoice === "escalation"
+                ? (selectedEscalationVariant === "internal" ? "Internal escalation email (ESC_MGR)" : "Carrier-facing escalation email")
+                : POLISH_VARIANTS.find((variant) => variant.key === selectedPolishVariant)?.title}
+            </Text>
+            <Text size="xs" c="dimmed" mt={4}>
+              Style: {REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter"}
+            </Text>
+          </Card>
+
           <Group justify="flex-end">
-            <Button variant="default" onClick={() => {
-              setRefinementModalOpened(false);
-              setPendingGenerateAction(null);
-            }}>
+            <Button variant="default" onClick={() => setGenerateModalOpened(false)}>
               Cancel
             </Button>
-            <Button color={mode === "escalation" ? "teal" : "lime"} leftSection={<IconSparkles size={14} />} onClick={confirmGenerateWithRefinement}>
-              Start drafting
+            <Button color="teal" leftSection={<IconSparkles size={14} />} onClick={confirmGenerate}>
+              Generate draft
             </Button>
           </Group>
         </Stack>
       </Modal>
 
       <Stack gap="lg">
-        <Card withBorder radius="lg" p="md" style={{ position: "sticky", top: 12, zIndex: 20, backdropFilter: "blur(10px)", background: "rgba(17, 24, 39, 0.88)" }}>
-          <Group justify="space-between" align="flex-end" wrap="wrap">
-            <Stack gap={8} style={{ flex: 1, minWidth: 260 }}>
-              <Text fw={600}>Workflow</Text>
-              <SegmentedControl
-                fullWidth
-                radius="md"
-                color={mode === "escalation" ? "teal" : "lime"}
-                value={mode}
-                onChange={(value) => setMode(value as AssistantMode)}
-                data={[
-                  { value: "escalation", label: "Escalation Draft" },
-                  { value: "polish", label: "Polish Existing Draft" },
-                ]}
-              />
-            </Stack>
+        <Card withBorder radius="lg" p="md">
+          <Group justify="space-between" align="center" wrap="wrap">
+            <Text size="sm" c="dimmed">If you upload a ticket data dump, the assistant reviews the full extracted record before generating the email.</Text>
             <Group gap="xs" wrap="wrap">
-              {mode === "escalation" ? (
-                <>
-                  <Button color="teal" leftSection={<IconSparkles size={14} />} onClick={() => openRefinementModal("escalation-all")} disabled={!normalizedSource.trim()}>
-                    Generate all variants
-                  </Button>
-                  <Button variant="light" color="teal" onClick={() => openRefinementModal("escalation-selected")} disabled={!normalizedSource.trim()}>
-                    Generate selected
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button color="lime" leftSection={<IconSparkles size={14} />} onClick={() => openRefinementModal("polish-all")} disabled={!normalizedSource.trim()}>
-                    Generate all audiences
-                  </Button>
-                  <Button variant="light" color="lime" onClick={() => openRefinementModal("polish-selected")} disabled={!normalizedSource.trim()}>
-                    Generate selected
-                  </Button>
-                </>
-              )}
               {globalBusy ? (
                 <Button
                   color="red"
@@ -1085,12 +863,20 @@ export function EmailAssistantWidget() {
                     polishCustomerAi.abort();
                     polishInternalAi.abort();
                     polishCarrierAi.abort();
-                    refineAi.abort();
+                    polishExecutiveAi.abort();
                   }}
                 >
                   Stop
                 </Button>
               ) : null}
+              <Button
+                color="teal"
+                leftSection={<IconSparkles size={14} />}
+                onClick={() => setGenerateModalOpened(true)}
+                disabled={!normalizedSource.trim()}
+              >
+                Generate
+              </Button>
             </Group>
           </Group>
         </Card>
@@ -1099,87 +885,133 @@ export function EmailAssistantWidget() {
           <Grid.Col span={{ base: 12, md: 5 }}>
             <Stack gap="md">
               <SectionCard
-                title="Input"
-                description={mode === "escalation" ? "Paste raw investigation notes; normalization removes extra email clutter before drafting." : "Paste an existing rough draft to clean up, retarget, or adapt for different audiences."}
+                title="Add your source"
+                description="Paste notes manually or upload a ticket data dump (.mhtml) from your ticketing tool. The assistant will review the full extracted dump before drafting."
+              >
+                  {!uploadedMhtml ? (
+                    <Box
+                      onClick={() => fileInputRef.current?.click()}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        setDragOver(true);
+                      }}
+                      onDragLeave={() => setDragOver(false)}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        setDragOver(false);
+                        const file = event.dataTransfer.files?.[0];
+                        if (file) void handleMhtmlFile(file);
+                      }}
+                      style={{
+                        border: `2px dashed ${dragOver ? "var(--mantine-color-teal-5)" : "var(--mantine-color-dark-4)"}`,
+                        borderRadius: 12,
+                        padding: "20px 16px",
+                        textAlign: "center",
+                        cursor: "pointer",
+                        background: dragOver ? "var(--mantine-color-teal-9)" : "var(--mantine-color-dark-7)",
+                        transition: "all 150ms ease",
+                      }}
+                    >
+                      <Stack gap={6} align="center">
+                        <IconUpload size={24} color={dragOver ? "var(--mantine-color-teal-3)" : "var(--mantine-color-dimmed)"} />
+                        <Text size="sm" fw={500}>
+                          Drop an <Code>.mhtml</Code> file here, or click to browse
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          Upload the exported ticket dump and we’ll review the full extracted record before generating the email.
+                        </Text>
+                      </Stack>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".mhtml,.mht,message/rfc822,multipart/related"
+                        hidden
+                        onChange={(event) => {
+                          const file = event.target.files?.[0];
+                          if (file) void handleMhtmlFile(file);
+                        }}
+                      />
+                    </Box>
+                  ) : (
+                    <Card radius="md" withBorder p="md" bg="dark.7">
+                      <Group justify="space-between" align="flex-start" wrap="nowrap">
+                        <Box style={{ minWidth: 0 }}>
+                          <Group gap={6} wrap="nowrap">
+                            <IconFileText size={14} />
+                            <Text fw={600} truncate>Ticket data dump</Text>
+                          </Group>
+                          <Text size="xs" c="dimmed" mt={4} truncate>
+                            {uploadedFileName || uploadedMhtml.ticket_subject || uploadedMhtml.subject || "Uploaded .mhtml file"}
+                          </Text>
+                          <Group gap="sm" mt={6}>
+                            {uploadedMhtml.ticket_number ? (
+                              <Badge variant="light" color="teal" size="sm">{uploadedMhtml.ticket_number}</Badge>
+                            ) : null}
+                            <Text size="xs" c="dimmed">
+                              {(uploadedFileSize / 1024).toFixed(1)} KB · {uploadedMhtml.text.length.toLocaleString()} chars extracted
+                            </Text>
+                          </Group>
+                        </Box>
+                        <Button
+                          variant="light"
+                          size="xs"
+                          onClick={() => {
+                            setUploadedMhtml(null);
+                            setUploadedFileName("");
+                            setUploadedFileSize(0);
+                            setUploadError(null);
+                            if (fileInputRef.current) fileInputRef.current.value = "";
+                          }}
+                        >
+                          Remove file
+                        </Button>
+                      </Group>
+                    </Card>
+                  )}
+
+                  {uploadError ? (
+                    <Alert color="red" icon={<IconAlertCircle size={16} />} variant="light">
+                      {uploadError}
+                    </Alert>
+                  ) : null}
+                </SectionCard>
+
+              <SectionCard
+                title="Paste your source"
+                description="Paste raw investigation notes or an existing rough email. The assistant can draft fresh escalations or polish the message into different outputs."
                 action={<Badge size="xs" variant="light" color="gray">{sourceText.length.toLocaleString()} chars</Badge>}
               >
                 <Textarea
-                  value={mode === "escalation" ? notes : draft}
-                  onChange={(event) => mode === "escalation" ? setNotes(event.currentTarget.value) : setDraft(event.currentTarget.value)}
-                  placeholder={mode === "escalation" ? "Paste timeline, impact, troubleshooting, carrier notes, and next steps." : "Paste the rough email or handoff note you want polished."}
+                  value={notes}
+                  onChange={(event) => setNotes(event.currentTarget.value)}
+                  placeholder="Paste raw notes, troubleshooting updates, or a rough email draft here."
                   autosize
-                  minRows={12}
+                  minRows={14}
                   maxRows={24}
                   styles={{ input: { fontFamily: "ui-monospace, SF Mono, Menlo, monospace", fontSize: 12 } }}
                 />
-                <Divider />
-                <Stack gap={6}>
-                  <Text size="xs" fw={600} c="dimmed">Reusable snippets</Text>
-                  <Group gap={6} wrap="wrap">
-                    {SNIPPETS.map((snippet) => (
-                      <Button key={snippet} size="compact-xs" variant="light" onClick={() => applySnippet(snippet)}>{snippet.slice(0, 28)}…</Button>
-                    ))}
-                  </Group>
-                </Stack>
               </SectionCard>
 
-              <SectionCard title="Normalized source" description="Cleaner source text improves consistency before the AI prompt is built.">
-                <ScrollArea h={140}>
-                  <Text size="xs" style={{ whiteSpace: "pre-wrap", fontFamily: "ui-monospace, SF Mono, Menlo, monospace" }}>{normalizedSource || "Nothing to normalize yet."}</Text>
-                </ScrollArea>
-              </SectionCard>
-
-              <SectionCard title="Context" description="Structured extraction + manual overrides power better drafts and fewer placeholders.">
+              <SectionCard title="Key details" description="Only the essentials. Fill in what matters; leave the rest blank.">
                 <Stack gap="xs">
                   <Group grow>
-                    <TextInput label="Ticket #" size="xs" value={ticketNumber} onChange={(event) => setTicketNumber(event.currentTarget.value)} placeholder={extractedContext.ticketNumber || "574995"} />
-                    <TextInput label="Customer" size="xs" value={customerName} onChange={(event) => setCustomerName(event.currentTarget.value)} placeholder={extractedContext.customerName || "ACME Corp"} />
+                    <TextInput label="Ticket #" size="sm" value={ticketNumber} onChange={(event) => setTicketNumber(event.currentTarget.value)} placeholder={extractedContext.ticketNumber || "574995"} />
+                    <TextInput label="Customer" size="sm" value={customerName} onChange={(event) => setCustomerName(event.currentTarget.value)} placeholder={extractedContext.customerName || "Customer name"} />
                   </Group>
+                  <TextInput label="Impact" size="sm" value={impact} onChange={(event) => setImpact(event.currentTarget.value)} placeholder={extractedContext.impact || "What is impacted?"} />
                   <Group grow>
-                    <TextInput label="Carrier ticket / circuit" size="xs" value={carrierTicket} onChange={(event) => setCarrierTicket(event.currentTarget.value)} placeholder={extractedContext.carrierTicket || "Carrier ref"} />
-                    <TextInput label="Site / location" size="xs" value={site} onChange={(event) => setSite(event.currentTarget.value)} placeholder={extractedContext.site || "Site / address"} />
+                    <TextInput label="Next update" size="sm" value={nextUpdate} onChange={(event) => setNextUpdate(event.currentTarget.value)} placeholder={extractedContext.nextUpdate || "Next update time or cadence"} />
+                    <TextInput label="Recipient name" size="sm" value={recipientName} onChange={(event) => setRecipientName(event.currentTarget.value)} placeholder="Customer or team name" />
                   </Group>
-                  <Group grow>
-                    <TextInput label="ETA" size="xs" value={eta} onChange={(event) => setEta(event.currentTarget.value)} placeholder={extractedContext.eta || "ETA"} />
-                    <TextInput label="Next update by" size="xs" value={nextUpdate} onChange={(event) => setNextUpdate(event.currentTarget.value)} placeholder={extractedContext.nextUpdate || "Next update cadence"} />
-                  </Group>
-                  <TextInput label="Impact" size="xs" value={impact} onChange={(event) => setImpact(event.currentTarget.value)} placeholder={extractedContext.impact || "What is impacted?"} />
-                  <Group grow>
-                    <TextInput label="Service type" size="xs" value={serviceType} onChange={(event) => setServiceType(event.currentTarget.value)} placeholder={extractedContext.serviceType || "Service type"} />
-                    <TextInput label="Concrete ask" size="xs" value={concreteAsk} onChange={(event) => setConcreteAsk(event.currentTarget.value)} placeholder={extractedContext.ask || "ETA / dispatch / confirmation"} />
-                  </Group>
-                  <Group grow>
-                    <TextInput label="Recipient / greeting" size="xs" value={recipientName} onChange={(event) => setRecipientName(event.currentTarget.value)} placeholder="Sameer & Team" />
-                    <TextInput label="Sender" size="xs" value={senderName} readOnly placeholder="Set your dashboard identity" />
-                  </Group>
-                  <Group grow>
-                    <Select label="Recipient profile" size="xs" data={RECIPIENT_PROFILES} value={recipientProfile} onChange={(value) => setRecipientProfile(value ?? "technical-customer")} allowDeselect={false} />
-                    <Select label="Intent template" size="xs" data={mode === "escalation" ? ESCALATION_INTENTS : POLISH_INTENTS} value={mode === "escalation" ? escalationIntent : polishIntent} onChange={(value) => mode === "escalation" ? setEscalationIntent(value ?? "initial-escalation") : setPolishIntent(value ?? "status-update")} allowDeselect={false} />
-                  </Group>
-                  <Select
-                    label="Draft refinement"
-                    description="Applied during the initial Generate step. Default is Shorter."
-                    size="xs"
-                    allowDeselect={false}
-                    data={REFINEMENT_OPTIONS}
-                    value={selectedRefinement}
-                    onChange={(value) => setSelectedRefinement((value as RefineTone) ?? "shorter")}
-                  />
-                  {mode === "polish" ? (
-                    <Group grow>
-                      <Select label="Tone" size="xs" data={TONE_OPTIONS} value={tone} onChange={(value) => setTone(value ?? "neutral")} allowDeselect={false} />
-                      <Select label="Length" size="xs" data={LENGTH_OPTIONS} value={length} onChange={(value) => setLength(value ?? "standard")} allowDeselect={false} />
-                    </Group>
-                  ) : null}
                 </Stack>
               </SectionCard>
 
-              {mode === "escalation" ? (
-                <SectionCard
-                  title="Carrier routing"
-                  description="Auto-match the carrier, tune the level cutoff, and review the current contact path."
-                  action={autoMatch ? <Badge size="xs" variant="light" color="violet">Detected: {autoMatch.carrier.carrier}</Badge> : undefined}
-                >
+              <SectionCard
+                title="Carrier"
+                description="Optional. If a carrier is detected, we will use the right contact path automatically."
+                action={autoMatch ? <Badge size="xs" variant="light" color="violet">{autoMatch.carrier.carrier}</Badge> : undefined}
+              >
+                <Stack gap="xs">
                   <Select
                     placeholder="Auto-detected from notes"
                     data={carrierOptions}
@@ -1187,178 +1019,51 @@ export function EmailAssistantWidget() {
                     onChange={setCarrierOverride}
                     clearable
                     searchable
-                    size="xs"
+                    size="sm"
                     nothingFoundMessage={escalations.loading ? "Loading carriers…" : "No carriers loaded"}
                   />
                   {carrierLevels.length > 1 ? (
                     <Select
-                      label="Include levels"
+                      label="Contact level"
                       data={[
                         ...carrierLevels.map((level) => ({ value: String(level), label: level === 1 ? "L1 only" : `L1 – L${level}` })),
                         { value: "all", label: "All levels" },
                       ]}
                       value={maxLevel === null ? "all" : String(maxLevel)}
                       onChange={(value) => setMaxLevel(value === "all" || value === null ? null : Number.parseInt(value, 10))}
-                      size="xs"
+                      size="sm"
                       allowDeselect={false}
                     />
                   ) : null}
-                  {carrierWithContacts ? <ContactPreview carrier={carrierWithContacts} contactSplit={contactSplit} /> : <Text size="xs" c="dimmed">Mention a carrier in the notes and the assistant will auto-match it here.</Text>}
-                  {extracting ? <Badge size="xs" variant="light" color="teal">Extracting contacts…</Badge> : null}
-                  {extractError ? <Alert color="red" icon={<IconAlertCircle size={14} />} variant="light">{extractError}</Alert> : null}
-                </SectionCard>
-              ) : null}
-
-              <SectionCard title="Missing-field checklist" description="Detected gaps that are likely to create placeholders or weak asks.">
-                {missingFields.length === 0 ? (
-                  <Alert color="green" icon={<IconCheck size={14} />} variant="light">No obvious gaps detected from the current source + manual context.</Alert>
-                ) : (
-                  <Stack gap={6}>
-                    {missingFields.map((field) => (
-                      <Group key={field.key} justify="space-between" wrap="nowrap">
-                        <Text size="xs">{field.label}</Text>
-                        {extractedContext[field.key as keyof typeof extractedContext] ? (
-                          <Button size="compact-xs" variant="light" onClick={() => fillMissingField(field.key, String(extractedContext[field.key as keyof typeof extractedContext] ?? ""))}>Use extracted value</Button>
-                        ) : (
-                          <Badge size="xs" color="yellow" variant="light">Needs input</Badge>
-                        )}
-                      </Group>
-                    ))}
-                  </Stack>
-                )}
+                  <Text size="xs" c="dimmed">Optional: choose a carrier if you want carrier-facing drafts tailored to that provider.</Text>
+                </Stack>
               </SectionCard>
+
             </Stack>
           </Grid.Col>
 
           <Grid.Col span={{ base: 12, md: 7 }}>
             <Stack gap="md">
-              <SectionCard title="Output" description="Generate multiple variants, refine one click at a time, and edit the final subject inline.">
-                {mode === "escalation" ? (
-                  <Tabs value={selectedEscalationKey} onChange={(value) => setSelectedEscalationKey((value as EscalationVariantKey) ?? "carrier")}>
-                    <Tabs.List>
-                      {escalationOutputs.map((output) => <Tabs.Tab key={output.key} value={output.key}>{output.title}</Tabs.Tab>)}
-                    </Tabs.List>
-                  </Tabs>
-                ) : (
-                  <Tabs value={selectedPolishKey} onChange={(value) => setSelectedPolishKey((value as Audience) ?? "customer")}>
-                    <Tabs.List>
-                      {polishOutputs.map((output) => <Tabs.Tab key={output.key} value={output.key}>{output.title}</Tabs.Tab>)}
-                    </Tabs.List>
-                  </Tabs>
-                )}
+              <SectionCard title="Current output" description="The last generated draft appears here. Use Generate to choose a new draft type and style.">
+                <Group gap="sm" wrap="wrap">
+                  <Badge size="sm" variant="light" color={activeOutput.color}>{activeOutput.title}</Badge>
+                  <Badge size="sm" variant="light" color="gray">
+                    {activeOutput.key.startsWith("polish-") ? "Polish" : activeOutput.key === "internal" ? "ESC_MGR" : activeOutput.key === "carrier" ? "Carrier escalation" : "Email draft"}
+                  </Badge>
+                  <Badge size="sm" variant="light" color="gray">
+                    Style: {REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter"}
+                  </Badge>
+                </Group>
               </SectionCard>
 
               <OutputCard
                 output={activeOutput}
-                loading={activeLoading || refineAi.isLoading}
+                loading={activeLoading}
                 onCopy={copyToClipboard}
                 onSubjectChange={(value) => updateOutputSubject(activeOutput.key, value)}
               />
 
-              <Grid gutter="md">
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <SectionCard title="Subject line tools" description="Use presets, alternates, and suggestions for the current email.">
-                    <Group gap={6} wrap="wrap">
-                      {SUBJECT_PRESETS.map((preset) => (
-                        <Button key={preset.label} size="compact-xs" variant="light" onClick={() => updateOutputSubject(activeOutput.key, preset.build(mergedContext))}>{preset.label}</Button>
-                      ))}
-                    </Group>
-                    <Divider />
-                    <Stack gap={6}>
-                      {subjectSuggestions.map((suggestion) => (
-                        <Group key={suggestion} justify="space-between" wrap="nowrap">
-                          <Text size="xs" style={{ flex: 1 }}>{suggestion}</Text>
-                          <Button size="compact-xs" variant="subtle" onClick={() => updateOutputSubject(activeOutput.key, suggestion)}>Use</Button>
-                        </Group>
-                      ))}
-                    </Stack>
-                  </SectionCard>
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <SectionCard title="Second-pass rewrite" description="Optional: re-apply the selected refinement after generation if you want another pass.">
-                    <Stack gap="sm">
-                      <Text size="sm" c="dimmed">
-                        Current drafting preference: <Text span fw={600} c="white">{REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter"}</Text>
-                      </Text>
-                      <Button
-                        variant="light"
-                        leftSection={<IconReplace size={14} />}
-                        onClick={() => refineCurrentOutput(selectedRefinement)}
-                        disabled={!activeOutput.subject && !activeOutput.body}
-                      >
-                        Rewrite with selected refinement
-                      </Button>
-                    </Stack>
-                  </SectionCard>
-                </Grid.Col>
-              </Grid>
-
-              <Grid gutter="md">
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <SectionCard title="Quality check" description="Pre-send validation for the currently selected email.">
-                    <Stack gap={6}>
-                      {qualityChecks.map((check) => (
-                        <Group key={check.label} justify="space-between" align="flex-start" wrap="nowrap">
-                          <Box style={{ flex: 1 }}>
-                            <Text size="sm" fw={600}>{check.label}</Text>
-                            <Text size="xs" c="dimmed">{check.detail}</Text>
-                          </Box>
-                          <Badge size="xs" color={check.status === "good" ? "green" : check.status === "warn" ? "yellow" : "red"} variant="light">
-                            {check.status === "good" ? "Ready" : check.status === "warn" ? "Review" : "Missing"}
-                          </Badge>
-                        </Group>
-                      ))}
-                    </Stack>
-                  </SectionCard>
-                </Grid.Col>
-                <Grid.Col span={{ base: 12, md: 6 }}>
-                  <SectionCard title="Diff / compare" description="Compare the current draft to the last version or a history item you restored for comparison.">
-                    <DiffPanel previousText={previousVersion} currentText={currentVersion} />
-                  </SectionCard>
-                </Grid.Col>
-              </Grid>
             </Stack>
-          </Grid.Col>
-        </Grid>
-
-        <Grid gutter="lg">
-          <Grid.Col span={{ base: 12, md: 6 }}>
-            <HistoryPanel<EscalationDraft>
-              title="Recent escalation drafts"
-              rows={drafts}
-              count={drafts.length}
-              renderMeta={(saved) => (
-                <>
-                  {saved.ticket_number ? <Badge size="xs" variant="light" color="teal">{saved.ticket_number}</Badge> : null}
-                  <Badge size="xs" variant="light" color={saved.mode === "outbound" ? "teal" : "violet"}>{saved.mode === "outbound" ? "Carrier" : "Internal"}</Badge>
-                  <Text size="xs" c="dimmed">{formatDateTime(new Date(saved.created_at as unknown as string))}</Text>
-                </>
-              )}
-              renderTitle={(saved) => saved.subject ?? "(no subject)"}
-              onLoad={(saved) => loadEscalationDraft(saved, false)}
-              onDuplicate={(saved) => loadEscalationDraft(saved, true)}
-              onCompare={(saved) => setCompareBaseline(`Subject: ${saved.subject ?? ""}\n\n${saved.body_markdown ?? ""}`)}
-              onDelete={(saved) => deleteDraft(saved.id)}
-            />
-          </Grid.Col>
-          <Grid.Col span={{ base: 12, md: 6 }}>
-            <HistoryPanel<PolishedEmail>
-              title="Recent polished emails"
-              rows={emails}
-              count={emails.length}
-              renderMeta={(saved) => (
-                <>
-                  <Badge size="xs" variant="light" color={saved.audience === "customer" ? "cyan" : saved.audience === "internal" ? "violet" : "orange"}>{saved.audience}</Badge>
-                  {saved.ticket_number ? <Badge size="xs" variant="default">#{saved.ticket_number}</Badge> : null}
-                  <Text size="xs" c="dimmed">{formatDateTime(new Date(saved.created_at as unknown as string))}</Text>
-                </>
-              )}
-              renderTitle={(saved) => saved.subject ?? "(no subject)"}
-              onLoad={(saved) => loadPolishedEmail(saved, false)}
-              onDuplicate={(saved) => loadPolishedEmail(saved, true)}
-              onCompare={(saved) => setCompareBaseline(`Subject: ${saved.subject ?? ""}\n\n${saved.body_markdown ?? ""}`)}
-              onDelete={(saved) => deleteEmail(saved.id)}
-            />
           </Grid.Col>
         </Grid>
       </Stack>

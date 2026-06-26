@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Grid,
   Group,
   Modal,
@@ -21,24 +22,31 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle,
+  IconArrowUpRight,
   IconBulb,
   IconCheck,
   IconClipboardList,
+  IconClock,
+  IconDownload,
   IconEdit,
+  IconHistory,
   IconPlus,
   IconSearch,
   IconTrash,
   IconUserCheck,
 } from "@tabler/icons-react";
 import { db } from "../../db";
+import { api } from "../../lib/api";
+import { downloadBlob } from "../../lib/download";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
 import { WidgetTile } from "../WidgetTile";
 
 type Enhancement = Awaited<ReturnType<typeof db.enhancements.list>>[number];
 type EnhancementStatus = "pending" | "approved" | "in_progress" | "completed" | "rejected";
-
 type EnhancementPlatform = "ipath" | "noc_dashboard";
+type QuickView = "all_open" | "actionable" | "pending" | "approved" | "in_progress" | "completed";
+type SortOption = "newest" | "oldest" | "priority" | "status" | "legacy_id";
 
 type FormState = {
   legacy_id: string;
@@ -50,6 +58,17 @@ type FormState = {
   status: EnhancementStatus;
   manager_notes: string;
   target_quarter: string;
+  assignee_name: string;
+  assignee_email: string;
+  update_note: string;
+};
+
+type UpdateEntry = {
+  id?: string;
+  type?: string;
+  actor_name?: string;
+  summary?: string;
+  created_at?: string;
 };
 
 const PLATFORM_OPTIONS = [
@@ -81,16 +100,36 @@ const STATUS_OPTIONS: Array<{ value: EnhancementStatus; label: string; color: st
   { value: "rejected", label: "Rejected", color: "red" },
 ];
 
+const QUICK_VIEWS: Array<{ value: QuickView; label: string }> = [
+  { value: "all_open", label: "All open" },
+  { value: "actionable", label: "Actionable" },
+  { value: "pending", label: "Pending review" },
+  { value: "approved", label: "Approved" },
+  { value: "in_progress", label: "In progress" },
+  { value: "completed", label: "Completed" },
+];
+
+const SORT_OPTIONS: Array<{ value: SortOption; label: string }> = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "priority", label: "Priority" },
+  { value: "status", label: "Status" },
+  { value: "legacy_id", label: "Legacy ID" },
+];
+
 const EMPTY_FORM: FormState = {
   legacy_id: "",
   title: "",
   description: "",
-  platform: "noc_dashboard",
+  platform: "ipath",
   category: "workflow",
   priority: "medium",
   status: "pending",
   manager_notes: "",
   target_quarter: "",
+  assignee_name: "",
+  assignee_email: "",
+  update_note: "",
 };
 
 function statusMeta(status: string | null | undefined) {
@@ -101,17 +140,110 @@ function platformLabel(platform: string | null | undefined) {
   return PLATFORM_OPTIONS.find((item) => item.value === platform)?.label ?? "NOC Dashboard";
 }
 
-function formatDate(value: string | null | undefined) {
+function formatDate(value: string | null | undefined, withTime = false) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString();
+  return withTime
+    ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
+    : date.toLocaleDateString();
 }
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string") return error;
   return "Something went wrong";
+}
+
+function getInputValue(event: unknown) {
+  if (
+    event &&
+    typeof event === "object" &&
+    "currentTarget" in event &&
+    event.currentTarget &&
+    typeof event.currentTarget === "object" &&
+    "value" in event.currentTarget
+  ) {
+    return String(event.currentTarget.value ?? "");
+  }
+
+  return "";
+}
+
+function parseUpdates(value: unknown): UpdateEntry[] {
+  try {
+    const parsed = JSON.parse(String(value ?? "[]"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getAnchorDate(row: Enhancement) {
+  return String(row.updated_at ?? row.approved_at ?? row.created_at ?? "");
+}
+
+function getAgeInDays(row: Enhancement) {
+  const anchor = new Date(getAnchorDate(row));
+  if (Number.isNaN(anchor.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - anchor.getTime()) / 86_400_000));
+}
+
+function getAgingMeta(days: number) {
+  if (days >= 90) return { label: `Stale ${days}d`, color: "red" };
+  if (days >= 60) return { label: `${days}d old`, color: "orange" };
+  if (days >= 30) return { label: `${days}d aging`, color: "yellow" };
+  return null;
+}
+
+function priorityRank(priority: string | null | undefined) {
+  switch (priority) {
+    case "critical":
+      return 4;
+    case "high":
+      return 3;
+    case "medium":
+      return 2;
+    default:
+      return 1;
+  }
+}
+
+function statusRank(status: string | null | undefined) {
+  switch (status) {
+    case "pending":
+      return 1;
+    case "approved":
+      return 2;
+    case "in_progress":
+      return 3;
+    case "completed":
+      return 4;
+    case "rejected":
+      return 5;
+    default:
+      return 99;
+  }
+}
+
+function normalizeCsv(value: unknown) {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function quarterKeyForDate(value: string | null | undefined) {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return null;
+  const quarter = Math.floor(date.getMonth() / 3) + 1;
+  return `${date.getFullYear()}-Q${quarter}`;
+}
+
+function currentQuarterKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
 }
 
 export function EnhancementsWidget() {
@@ -124,13 +256,23 @@ export function EnhancementsWidget() {
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Enhancement | null>(null);
+  const [historyRow, setHistoryRow] = useState<Enhancement | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [platformTab, setPlatformTab] = useState<EnhancementPlatform>("noc_dashboard");
+  const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [platformTab, setPlatformTab] = useState<EnhancementPlatform>("ipath");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
   const [managerView, setManagerView] = useState<"all" | "pending">("all");
+  const [quickView, setQuickView] = useState<QuickView>("all_open");
+  const [sortBy, setSortBy] = useState<SortOption>("priority");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkStatus, setBulkStatus] = useState<string>("");
+  const [bulkPriority, setBulkPriority] = useState<string>("");
+  const [bulkTargetQuarter, setBulkTargetQuarter] = useState("");
+  const [bulkAssigneeName, setBulkAssigneeName] = useState("");
+  const [bulkAssigneeEmail, setBulkAssigneeEmail] = useState("");
+  const [bulkNote, setBulkNote] = useState("");
   const [importingBaseline, setImportingBaseline] = useState(false);
 
   async function load() {
@@ -150,21 +292,55 @@ export function EnhancementsWidget() {
     void load();
   }, []);
 
-  const pendingCount = useMemo(() => rows.filter((row) => row.status === "pending").length, [rows]);
-  const approvedCount = useMemo(() => rows.filter((row) => row.status === "approved").length, [rows]);
-  const completedCount = useMemo(() => rows.filter((row) => row.status === "completed").length, [rows]);
-  const ipathCount = useMemo(() => rows.filter((row) => row.platform === "ipath").length, [rows]);
-  const nocDashboardCount = useMemo(() => rows.filter((row) => row.platform === "noc_dashboard").length, [rows]);
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => rows.some((row) => row.id === id)));
+  }, [rows]);
+
+  const platformRows = useMemo(
+    () => rows.filter((row) => row.platform === platformTab),
+    [rows, platformTab],
+  );
+
+  const kpis = useMemo(() => {
+    const currentQuarter = currentQuarterKey();
+    return {
+      actionable: platformRows.filter((row) => ["approved", "in_progress"].includes(String(row.status))).length,
+      pending: platformRows.filter((row) => row.status === "pending").length,
+      inProgress: platformRows.filter((row) => row.status === "in_progress").length,
+      completedThisQuarter: platformRows.filter(
+        (row) => row.status === "completed" && quarterKeyForDate(getAnchorDate(row)) === currentQuarter,
+      ).length,
+    };
+  }, [platformRows]);
+
+  const quickViewCounts = useMemo(() => ({
+    all_open: platformRows.filter((row) => row.status !== "completed" && row.status !== "rejected").length,
+    actionable: platformRows.filter((row) => ["approved", "in_progress"].includes(String(row.status))).length,
+    pending: platformRows.filter((row) => row.status === "pending").length,
+    approved: platformRows.filter((row) => row.status === "approved").length,
+    in_progress: platformRows.filter((row) => row.status === "in_progress").length,
+    completed: platformRows.filter((row) => row.status === "completed").length,
+  }), [platformRows]);
 
   const filteredRows = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return rows.filter((row) => {
+    const nextRows = rows.filter((row) => {
       const matchesManagerView = !isManager || managerView === "all" || row.status === "pending";
-      const matchesStatus = statusFilter === "all" || row.status === statusFilter;
+      const matchesStatus = statusFilter === "all"
+        ? true
+        : statusFilter === "open"
+          ? row.status !== "completed" && row.status !== "rejected"
+          : row.status === statusFilter;
       const matchesPlatform = row.platform === platformTab;
       const matchesCategory = categoryFilter === "all" || row.category === categoryFilter;
       const matchesPriority = priorityFilter === "all" || row.priority === priorityFilter;
+      const matchesQuickView = quickView === "all_open"
+        ? row.status !== "completed" && row.status !== "rejected"
+        : quickView === "actionable"
+          ? row.status === "approved" || row.status === "in_progress"
+          : row.status === quickView;
+
       const haystack = [
         row.legacy_id,
         row.title,
@@ -176,19 +352,43 @@ export function EnhancementsWidget() {
         row.category,
         row.priority,
         row.platform,
+        row.assignee_name,
+        row.assignee_email,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       const matchesSearch = !query || haystack.includes(query);
 
-      return matchesManagerView && matchesStatus && matchesPlatform && matchesCategory && matchesPriority && matchesSearch;
+      return matchesManagerView && matchesStatus && matchesPlatform && matchesCategory && matchesPriority && matchesQuickView && matchesSearch;
     });
-  }, [rows, search, statusFilter, platformTab, categoryFilter, priorityFilter, isManager, managerView]);
+
+    return [...nextRows].sort((a, b) => {
+      switch (sortBy) {
+        case "oldest":
+          return new Date(String(a.created_at ?? 0)).getTime() - new Date(String(b.created_at ?? 0)).getTime();
+        case "priority": {
+          const rankDiff = priorityRank(b.priority) - priorityRank(a.priority);
+          if (rankDiff !== 0) return rankDiff;
+          return new Date(getAnchorDate(b)).getTime() - new Date(getAnchorDate(a)).getTime();
+        }
+        case "status": {
+          const rankDiff = statusRank(a.status) - statusRank(b.status);
+          if (rankDiff !== 0) return rankDiff;
+          return priorityRank(b.priority) - priorityRank(a.priority);
+        }
+        case "legacy_id":
+          return String(a.legacy_id ?? "zzzz").localeCompare(String(b.legacy_id ?? "zzzz"), undefined, { numeric: true });
+        case "newest":
+        default:
+          return new Date(getAnchorDate(b)).getTime() - new Date(getAnchorDate(a)).getTime();
+      }
+    });
+  }, [rows, search, statusFilter, platformTab, categoryFilter, priorityFilter, isManager, managerView, quickView, sortBy]);
 
   function openSubmitModal() {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, platform: platformTab });
     setModalOpen(true);
   }
 
@@ -204,6 +404,9 @@ export function EnhancementsWidget() {
       status: (row.status as EnhancementStatus) ?? "pending",
       manager_notes: row.manager_notes ?? "",
       target_quarter: row.target_quarter ?? "",
+      assignee_name: row.assignee_name ?? "",
+      assignee_email: row.assignee_email ?? "",
+      update_note: "",
     });
     setModalOpen(true);
   }
@@ -228,7 +431,7 @@ export function EnhancementsWidget() {
     setError(null);
     try {
       if (editing) {
-        await db.enhancements.updateById(editing.id, {
+        await api.patch(`/api/enhancements/${editing.id}`, {
           legacy_id: form.legacy_id.trim() || null,
           title: form.title.trim(),
           description: form.description.trim(),
@@ -238,6 +441,9 @@ export function EnhancementsWidget() {
           status: form.status,
           manager_notes: form.manager_notes.trim() || null,
           target_quarter: form.target_quarter.trim() || null,
+          assignee_name: form.assignee_name.trim() || null,
+          assignee_email: form.assignee_email.trim() || null,
+          update_note: form.update_note.trim() || null,
         });
       } else {
         await db.enhancements.insert({
@@ -263,9 +469,12 @@ export function EnhancementsWidget() {
     setSaving(true);
     setError(null);
     try {
-      await db.enhancements.updateById(row.id, {
+      await api.patch(`/api/enhancements/${row.id}`, {
         status: "approved",
         manager_notes: row.manager_notes ?? null,
+        assignee_name: row.assignee_name ?? null,
+        assignee_email: row.assignee_email ?? null,
+        update_note: "Approved from backlog view.",
       });
       await load();
     } catch (err) {
@@ -312,6 +521,120 @@ export function EnhancementsWidget() {
     }
   }
 
+  function toggleSelection(id: number) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((value) => value !== id) : [...prev, id]));
+  }
+
+  function toggleSelectAllVisible() {
+    const visibleIds = filteredRows.map((row) => row.id);
+    const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+    setSelectedIds((prev) => {
+      if (allSelected) {
+        return prev.filter((id) => !visibleIds.includes(id));
+      }
+      return Array.from(new Set([...prev, ...visibleIds]));
+    });
+  }
+
+  async function applyBulkAction() {
+    if (!selectedIds.length) {
+      setError("Select at least one enhancement for bulk actions.");
+      return;
+    }
+
+    const patch: Record<string, string> = {};
+    if (bulkStatus) patch.status = bulkStatus;
+    if (bulkPriority) patch.priority = bulkPriority;
+    if (bulkTargetQuarter.trim()) patch.target_quarter = bulkTargetQuarter.trim();
+    if (bulkAssigneeName.trim()) patch.assignee_name = bulkAssigneeName.trim();
+    if (bulkAssigneeEmail.trim()) patch.assignee_email = bulkAssigneeEmail.trim();
+
+    if (Object.keys(patch).length === 0 && !bulkNote.trim()) {
+      setError("Choose at least one bulk field or add a note.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post("/api/enhancements", {
+        action: "bulk_update",
+        ids: selectedIds,
+        patch,
+        note: bulkNote.trim() || null,
+      });
+      setSelectedIds([]);
+      setBulkStatus("");
+      setBulkPriority("");
+      setBulkTargetQuarter("");
+      setBulkAssigneeName("");
+      setBulkAssigneeEmail("");
+      setBulkNote("");
+      await load();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function exportCsv() {
+    const headers = [
+      "legacy_id",
+      "title",
+      "platform",
+      "category",
+      "priority",
+      "status",
+      "submitted_by_name",
+      "submitted_by_email",
+      "assignee_name",
+      "assignee_email",
+      "target_quarter",
+      "approved_by_name",
+      "approved_at",
+      "updated_at",
+      "created_at",
+      "description",
+      "manager_notes",
+    ];
+
+    const csv = [
+      headers.join(","),
+      ...filteredRows.map((row) =>
+        [
+          row.legacy_id,
+          row.title,
+          row.platform,
+          row.category,
+          row.priority,
+          row.status,
+          row.submitted_by_name,
+          row.submitted_by_email,
+          row.assignee_name,
+          row.assignee_email,
+          row.target_quarter,
+          row.approved_by_name,
+          row.approved_at,
+          row.updated_at,
+          row.created_at,
+          row.description,
+          row.manager_notes,
+        ]
+          .map(normalizeCsv)
+          .join(","),
+      ),
+    ].join("\n");
+
+    downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `enhancements-${platformTab}.csv`);
+  }
+
+  const visibleIds = filteredRows.map((row) => row.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id));
+  const historyEntries = parseUpdates(historyRow?.updates_json).sort(
+    (a, b) => new Date(String(b.created_at ?? 0)).getTime() - new Date(String(a.created_at ?? 0)).getTime(),
+  );
+
   return (
     <WidgetFrame
       title="Enhancement Tracker"
@@ -320,7 +643,7 @@ export function EnhancementsWidget() {
       iconColor="yellow"
       onRefresh={load}
       loading={loading}
-      status={isManager ? { label: pendingCount > 0 ? `${pendingCount} pending` : "Manager mode", color: pendingCount > 0 ? "yellow" : "green" } : { label: "Team view", color: "blue" }}
+      status={isManager ? { label: kpis.pending > 0 ? `${kpis.pending} pending` : "Manager mode", color: kpis.pending > 0 ? "yellow" : "green" } : { label: "Team view", color: "blue" }}
     >
       <Stack gap="lg" p="md">
         {error && (
@@ -329,10 +652,11 @@ export function EnhancementsWidget() {
           </Alert>
         )}
 
-        <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="md">
-          <StatCard label="Pending" value={pendingCount} color="yellow" />
-          <StatCard label="Approved" value={approvedCount} color="green" />
-          <StatCard label="Completed" value={completedCount} color="teal" />
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md">
+          <StatCard label="Actionable" value={kpis.actionable} color="indigo" detail="Approved or in progress" />
+          <StatCard label="Pending review" value={kpis.pending} color="yellow" detail="Needs manager triage" />
+          <StatCard label="In progress" value={kpis.inProgress} color="blue" detail="Actively moving" />
+          <StatCard label="Completed this quarter" value={kpis.completedThisQuarter} color="teal" detail={currentQuarterKey()} />
         </SimpleGrid>
 
         <Card withBorder radius="lg" p="lg">
@@ -341,10 +665,13 @@ export function EnhancementsWidget() {
               <Stack gap={4}>
                 <Text fw={700}>Enhancement backlog</Text>
                 <Text size="sm" c="dimmed">
-                  Track ideas across iPath enhancements and the NOC Dashboard. Non-managers can submit and view all requests. Managers can edit every field and approve requests.
+                  Track ideas across iPath enhancements and the NOC Dashboard. Quick views, aging indicators, owner assignment, and history are built in for review meetings and follow-up.
                 </Text>
               </Stack>
               <Group gap="sm">
+                <Button variant="default" leftSection={<IconDownload size={16} />} onClick={exportCsv}>
+                  Export CSV
+                </Button>
                 {isManager && platformTab === "ipath" && (
                   <Button
                     variant="default"
@@ -366,37 +693,55 @@ export function EnhancementsWidget() {
                 onChange={(value) => setManagerView(value as "all" | "pending")}
                 data={[
                   { label: `All enhancements (${rows.length})`, value: "all" },
-                  { label: `My pending approvals (${pendingCount})`, value: "pending" },
+                  { label: `My pending approvals (${rows.filter((row) => row.status === "pending").length})`, value: "pending" },
                 ]}
               />
             )}
 
             <Tabs value={platformTab} onChange={(value) => value && setPlatformTab(value as EnhancementPlatform)}>
               <Tabs.List>
-                <Tabs.Tab value="ipath">iPath enhancements ({ipathCount})</Tabs.Tab>
-                <Tabs.Tab value="noc_dashboard">NOC Dashboard ({nocDashboardCount})</Tabs.Tab>
+                <Tabs.Tab value="ipath">iPath enhancements ({rows.filter((row) => row.platform === "ipath").length})</Tabs.Tab>
+                <Tabs.Tab value="noc_dashboard">NOC Dashboard ({rows.filter((row) => row.platform === "noc_dashboard").length})</Tabs.Tab>
               </Tabs.List>
             </Tabs>
 
+            <Group gap="xs">
+              {QUICK_VIEWS.map((view) => (
+                <Button
+                  key={view.value}
+                  variant={quickView === view.value ? "filled" : "light"}
+                  color={quickView === view.value ? "yellow" : "gray"}
+                  onClick={() => setQuickView(view.value)}
+                  size="xs"
+                >
+                  {view.label} ({quickViewCounts[view.value]})
+                </Button>
+              ))}
+            </Group>
+
             <Grid>
-              <Grid.Col span={{ base: 12, md: 6 }}>
+              <Grid.Col span={{ base: 12, lg: 4 }}>
                 <TextInput
                   label="Search"
-                  placeholder="Search legacy ID, title, notes, submitter, or description"
+                  placeholder="Search legacy ID, title, owner, notes, or description"
                   value={search}
-                  onChange={(event) => setSearch(event.currentTarget.value)}
+                  onChange={(event) => setSearch(getInputValue(event))}
                   leftSection={<IconSearch size={16} />}
                 />
               </Grid.Col>
-              <Grid.Col span={{ base: 12, sm: 4, md: 2 }}>
+              <Grid.Col span={{ base: 12, sm: 6, lg: 2 }}>
                 <Select
                   label="Status"
                   value={statusFilter}
-                  onChange={(value) => setStatusFilter(value || "all")}
-                  data={[{ value: "all", label: "All statuses" }, ...STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))]}
+                  onChange={(value) => setStatusFilter(value || "open")}
+                  data={[
+                    { value: "open", label: "Open enhancements" },
+                    { value: "all", label: "All statuses" },
+                    ...STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label })),
+                  ]}
                 />
               </Grid.Col>
-              <Grid.Col span={{ base: 12, sm: 4, md: 2 }}>
+              <Grid.Col span={{ base: 12, sm: 6, lg: 2 }}>
                 <Select
                   label="Category"
                   value={categoryFilter}
@@ -404,7 +749,7 @@ export function EnhancementsWidget() {
                   data={[{ value: "all", label: "All categories" }, ...CATEGORY_OPTIONS]}
                 />
               </Grid.Col>
-              <Grid.Col span={{ base: 12, sm: 4, md: 2 }}>
+              <Grid.Col span={{ base: 12, sm: 6, lg: 2 }}>
                 <Select
                   label="Priority"
                   value={priorityFilter}
@@ -412,9 +757,93 @@ export function EnhancementsWidget() {
                   data={[{ value: "all", label: "All priorities" }, ...PRIORITY_OPTIONS]}
                 />
               </Grid.Col>
+              <Grid.Col span={{ base: 12, sm: 6, lg: 2 }}>
+                <Select
+                  label="Sort by"
+                  value={sortBy}
+                  onChange={(value) => setSortBy((value as SortOption) || "priority")}
+                  data={SORT_OPTIONS}
+                />
+              </Grid.Col>
             </Grid>
           </Stack>
         </Card>
+
+        {isManager && selectedIds.length > 0 && (
+          <Card withBorder radius="lg" p="lg">
+            <Stack gap="md">
+              <Group justify="space-between" align="center">
+                <div>
+                  <Text fw={700}>Bulk actions</Text>
+                  <Text size="sm" c="dimmed">Update {selectedIds.length} selected enhancements at once.</Text>
+                </div>
+                <Button variant="subtle" color="gray" onClick={() => setSelectedIds([])}>
+                  Clear selection
+                </Button>
+              </Group>
+              <Grid>
+                <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+                  <Select
+                    label="Status"
+                    placeholder="Leave unchanged"
+                    value={bulkStatus}
+                    onChange={(value) => setBulkStatus(value || "")}
+                    data={STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+                    clearable
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+                  <Select
+                    label="Priority"
+                    placeholder="Leave unchanged"
+                    value={bulkPriority}
+                    onChange={(value) => setBulkPriority(value || "")}
+                    data={PRIORITY_OPTIONS}
+                    clearable
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+                  <TextInput
+                    label="Target quarter"
+                    placeholder="2026-Q3"
+                    value={bulkTargetQuarter}
+                    onChange={(event) => setBulkTargetQuarter(getInputValue(event))}
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+                  <TextInput
+                    label="Assignee"
+                    placeholder="Owner name"
+                    value={bulkAssigneeName}
+                    onChange={(event) => setBulkAssigneeName(getInputValue(event))}
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, sm: 6, lg: 3 }}>
+                  <TextInput
+                    label="Assignee email"
+                    placeholder="owner@appdirect.com"
+                    value={bulkAssigneeEmail}
+                    onChange={(event) => setBulkAssigneeEmail(getInputValue(event))}
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, lg: 9 }}>
+                  <Textarea
+                    label="Bulk note"
+                    placeholder="Optional update that will be recorded in each item's history"
+                    value={bulkNote}
+                    onChange={(event) => setBulkNote(getInputValue(event))}
+                    minRows={2}
+                  />
+                </Grid.Col>
+              </Grid>
+              <Group justify="flex-end">
+                <Button color="yellow" onClick={() => void applyBulkAction()} loading={saving}>
+                  Apply to selected items
+                </Button>
+              </Group>
+            </Stack>
+          </Card>
+        )}
 
         {rows.length === 0 && !loading ? (
           <Card withBorder radius="lg" p="xl">
@@ -439,61 +868,101 @@ export function EnhancementsWidget() {
               </ThemeIcon>
               <Text fw={700}>No matching enhancements</Text>
               <Text c="dimmed" size="sm" ta="center">
-                Try adjusting the search term or filters to find enhancements across iPath and the NOC Dashboard, including legacy request IDs.
+                Try adjusting the quick view, search term, or filters to find enhancements across iPath and the NOC Dashboard.
               </Text>
             </Stack>
           </Card>
         ) : (
           <Card withBorder radius="lg" p={0}>
-            <Table.ScrollContainer minWidth={1100}>
+            <Table.ScrollContainer minWidth={1450}>
               <Table highlightOnHover verticalSpacing="md">
                 <Table.Thead>
                   <Table.Tr>
-                    <Table.Th>Legacy ID</Table.Th>
+                    {isManager && (
+                      <Table.Th style={{ width: 52 }}>
+                        <Checkbox checked={allVisibleSelected} onChange={toggleSelectAllVisible} aria-label="Select all visible enhancements" />
+                      </Table.Th>
+                    )}
+                    <Table.Th style={{ width: 120, minWidth: 120, whiteSpace: "nowrap" }}>Legacy ID</Table.Th>
                     <Table.Th>Title</Table.Th>
-                    <Table.Th>Platform</Table.Th>
-                    <Table.Th>Category</Table.Th>
-                    <Table.Th>Priority</Table.Th>
-                    <Table.Th>Status</Table.Th>
-                    <Table.Th>Submitted by</Table.Th>
-                    <Table.Th>Target</Table.Th>
-                    <Table.Th>Manager notes</Table.Th>
-                    <Table.Th>Approved by</Table.Th>
+                    <Table.Th style={{ minWidth: 110, whiteSpace: "nowrap" }}>Platform</Table.Th>
+                    <Table.Th style={{ minWidth: 130, whiteSpace: "nowrap" }}>Category</Table.Th>
+                    <Table.Th style={{ minWidth: 100, whiteSpace: "nowrap" }}>Priority</Table.Th>
+                    <Table.Th style={{ minWidth: 130, whiteSpace: "nowrap" }}>Status</Table.Th>
+                    <Table.Th style={{ minWidth: 120, whiteSpace: "nowrap" }}>Aging</Table.Th>
+                    <Table.Th style={{ minWidth: 150 }}>Submitted by</Table.Th>
+                    <Table.Th style={{ minWidth: 150 }}>Owner</Table.Th>
+                    <Table.Th style={{ minWidth: 90, whiteSpace: "nowrap" }}>Target</Table.Th>
+                    <Table.Th style={{ minWidth: 120 }}>Approved by</Table.Th>
+                    <Table.Th style={{ minWidth: 90, whiteSpace: "nowrap" }}>Updates</Table.Th>
                     {isManager && <Table.Th style={{ width: 160 }}>Actions</Table.Th>}
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
                   {filteredRows.map((row) => {
                     const meta = statusMeta(row.status);
+                    const agingDays = getAgeInDays(row);
+                    const agingMeta = getAgingMeta(agingDays);
+                    const updates = parseUpdates(row.updates_json);
                     return (
                       <Table.Tr key={row.id}>
-                        <Table.Td>
+                        {isManager && (
+                          <Table.Td>
+                            <Checkbox checked={selectedIds.includes(row.id)} onChange={() => toggleSelection(row.id)} aria-label={`Select enhancement ${row.title}`} />
+                          </Table.Td>
+                        )}
+                        <Table.Td style={{ width: 120, minWidth: 120, whiteSpace: "nowrap" }}>
                           {row.legacy_id ? (
-                            <Badge variant="light" color="gray">#{row.legacy_id}</Badge>
+                            <Badge variant="light" color="gray" style={{ whiteSpace: "nowrap", flexShrink: 0, minWidth: "fit-content" }}>
+                              #{row.legacy_id}
+                            </Badge>
                           ) : (
                             <Text size="sm" c="dimmed">—</Text>
                           )}
                         </Table.Td>
                         <Table.Td>
-                          <Stack gap={2}>
-                            <Text fw={600}>{row.title}</Text>
+                          <Stack gap={4}>
+                            <Group gap="xs" wrap="wrap">
+                              <Text fw={600}>{row.title}</Text>
+                              {row.status === "approved" && !row.assignee_name && !row.assignee_email && (
+                                <Badge color="orange" variant="light">Needs owner</Badge>
+                              )}
+                            </Group>
                             <Text size="sm" c="dimmed" lineClamp={2}>{row.description}</Text>
-                            <Text size="xs" c="dimmed">Created {formatDate(String(row.created_at ?? ""))}</Text>
+                            <Text size="xs" c="dimmed">Created {formatDate(String(row.created_at ?? ""))} · Updated {formatDate(getAnchorDate(row))}</Text>
                           </Stack>
                         </Table.Td>
-                        <Table.Td>
-                          <Badge color="violet" variant="light">{platformLabel(row.platform)}</Badge>
+                        <Table.Td style={{ minWidth: 110, whiteSpace: "nowrap" }}>
+                          <Badge color="violet" variant="light" style={{ whiteSpace: "nowrap", flexShrink: 0, minWidth: "fit-content" }}>
+                            {platformLabel(row.platform)}
+                          </Badge>
                         </Table.Td>
-                        <Table.Td>
-                          <Badge variant="light">{row.category}</Badge>
+                        <Table.Td style={{ minWidth: 130, whiteSpace: "nowrap" }}>
+                          <Badge variant="light" style={{ whiteSpace: "nowrap", flexShrink: 0, minWidth: "fit-content" }}>
+                            {row.category}
+                          </Badge>
                         </Table.Td>
-                        <Table.Td>
-                          <Badge color={row.priority === "critical" ? "red" : row.priority === "high" ? "orange" : row.priority === "medium" ? "yellow" : "gray"} variant="light">
+                        <Table.Td style={{ minWidth: 100, whiteSpace: "nowrap" }}>
+                          <Badge color={row.priority === "critical" ? "red" : row.priority === "high" ? "orange" : row.priority === "medium" ? "yellow" : "gray"} variant="light" style={{ whiteSpace: "nowrap", flexShrink: 0, minWidth: "fit-content" }}>
                             {row.priority}
                           </Badge>
                         </Table.Td>
-                        <Table.Td>
-                          <Badge color={meta.color} variant="light">{meta.label}</Badge>
+                        <Table.Td style={{ minWidth: 130, whiteSpace: "nowrap" }}>
+                          <Badge color={meta.color} variant="light" style={{ whiteSpace: "nowrap", flexShrink: 0, minWidth: "fit-content" }}>
+                            {meta.label}
+                          </Badge>
+                        </Table.Td>
+                        <Table.Td style={{ minWidth: 120, whiteSpace: "nowrap" }}>
+                          <Stack gap={4}>
+                            {agingMeta ? (
+                              <Badge color={agingMeta.color} variant="light" leftSection={<IconClock size={12} />}>
+                                {agingMeta.label}
+                              </Badge>
+                            ) : (
+                              <Badge color="green" variant="light">Fresh {agingDays}d</Badge>
+                            )}
+                            <Text size="xs" c="dimmed">Last touch {agingDays}d ago</Text>
+                          </Stack>
                         </Table.Td>
                         <Table.Td>
                           <Stack gap={2}>
@@ -501,15 +970,23 @@ export function EnhancementsWidget() {
                             <Text size="xs" c="dimmed">{row.submitted_by_email || "No email"}</Text>
                           </Stack>
                         </Table.Td>
-                        <Table.Td>{row.target_quarter || "—"}</Table.Td>
                         <Table.Td>
-                          <Text size="sm" c="dimmed" lineClamp={2}>{row.manager_notes || "—"}</Text>
+                          <Stack gap={2}>
+                            <Text size="sm">{row.assignee_name || "—"}</Text>
+                            <Text size="xs" c="dimmed">{row.assignee_email || "Unassigned"}</Text>
+                          </Stack>
                         </Table.Td>
-                        <Table.Td>
+                        <Table.Td style={{ minWidth: 90, whiteSpace: "nowrap" }}>{row.target_quarter || "—"}</Table.Td>
+                        <Table.Td style={{ minWidth: 120 }}>
                           <Stack gap={2}>
                             <Text size="sm">{row.approved_by_name || "—"}</Text>
                             <Text size="xs" c="dimmed">{formatDate(row.approved_at)}</Text>
                           </Stack>
+                        </Table.Td>
+                        <Table.Td>
+                          <Button variant="subtle" size="compact-sm" leftSection={<IconHistory size={14} />} onClick={() => setHistoryRow(row)}>
+                            {updates.length}
+                          </Button>
                         </Table.Td>
                         {isManager && (
                           <Table.Td>
@@ -551,20 +1028,20 @@ export function EnhancementsWidget() {
             label="Legacy ID"
             placeholder="Optional, e.g. 19396"
             value={form.legacy_id}
-            onChange={(event) => setForm((prev) => ({ ...prev, legacy_id: event.currentTarget.value.replace(/[^0-9-]/g, "") }))}
+            onChange={(event) => setForm((prev) => ({ ...prev, legacy_id: getInputValue(event).replace(/[^0-9-]/g, "") }))}
           />
           <TextInput
             label="Title"
             placeholder="Short, clear title"
             value={form.title}
-            onChange={(event) => setForm((prev) => ({ ...prev, title: event.currentTarget.value }))}
+            onChange={(event) => setForm((prev) => ({ ...prev, title: getInputValue(event) }))}
             required
           />
           <Textarea
             label="Description"
             placeholder="Describe the problem, expected improvement, and why it matters"
             value={form.description}
-            onChange={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
+            onChange={(event) => setForm((prev) => ({ ...prev, description: getInputValue(event) }))}
             minRows={4}
             required
           />
@@ -594,26 +1071,59 @@ export function EnhancementsWidget() {
               />
             </Grid.Col>
           </Grid>
-          <TextInput
-            label="Target quarter"
-            placeholder="Optional, e.g. 2026-Q3"
-            value={form.target_quarter}
-            onChange={(event) => setForm((prev) => ({ ...prev, target_quarter: event.currentTarget.value }))}
-          />
+          <Grid>
+            <Grid.Col span={{ base: 12, sm: 6 }}>
+              <TextInput
+                label="Target quarter"
+                placeholder="Optional, e.g. 2026-Q3"
+                value={form.target_quarter}
+                onChange={(event) => setForm((prev) => ({ ...prev, target_quarter: getInputValue(event) }))}
+              />
+            </Grid.Col>
+            {isManager && editing && (
+              <Grid.Col span={{ base: 12, sm: 6 }}>
+                <Select
+                  label="Status"
+                  data={STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+                  value={form.status}
+                  onChange={(value) => setForm((prev) => ({ ...prev, status: (value as EnhancementStatus) || "pending" }))}
+                />
+              </Grid.Col>
+            )}
+          </Grid>
           {isManager && editing && (
             <>
-              <Select
-                label="Status"
-                data={STATUS_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
-                value={form.status}
-                onChange={(value) => setForm((prev) => ({ ...prev, status: (value as EnhancementStatus) || "pending" }))}
-              />
+              <Grid>
+                <Grid.Col span={{ base: 12, sm: 6 }}>
+                  <TextInput
+                    label="Assignee name"
+                    placeholder="Person responsible for follow-up"
+                    value={form.assignee_name}
+                    onChange={(event) => setForm((prev) => ({ ...prev, assignee_name: getInputValue(event) }))}
+                  />
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, sm: 6 }}>
+                  <TextInput
+                    label="Assignee email"
+                    placeholder="owner@appdirect.com"
+                    value={form.assignee_email}
+                    onChange={(event) => setForm((prev) => ({ ...prev, assignee_email: getInputValue(event) }))}
+                  />
+                </Grid.Col>
+              </Grid>
               <Textarea
                 label="Manager notes"
-                placeholder="Approval notes, implementation guidance, blockers, etc."
+                placeholder="Current guidance, blockers, or implementation notes"
                 value={form.manager_notes}
-                onChange={(event) => setForm((prev) => ({ ...prev, manager_notes: event.currentTarget.value }))}
+                onChange={(event) => setForm((prev) => ({ ...prev, manager_notes: getInputValue(event) }))}
                 minRows={3}
+              />
+              <Textarea
+                label="Add update to history"
+                placeholder="Optional timeline entry, e.g. aligned with SD, waiting on requirements, owner assigned"
+                value={form.update_note}
+                onChange={(event) => setForm((prev) => ({ ...prev, update_note: getInputValue(event) }))}
+                minRows={2}
               />
             </>
           )}
@@ -625,11 +1135,74 @@ export function EnhancementsWidget() {
           </Group>
         </Stack>
       </Modal>
+
+      <Modal
+        opened={Boolean(historyRow)}
+        onClose={() => setHistoryRow(null)}
+        title={historyRow ? `Update history · ${historyRow.title}` : "Update history"}
+        centered
+        radius="lg"
+        size="lg"
+      >
+        <Stack gap="md">
+          {historyRow && (
+            <Card withBorder radius="lg" p="md">
+              <Stack gap={4}>
+                <Text fw={700}>{historyRow.title}</Text>
+                <Text size="sm" c="dimmed">{historyRow.description}</Text>
+                <Group gap="xs">
+                  <Badge variant="light" color="violet">{platformLabel(historyRow.platform)}</Badge>
+                  <Badge variant="light" color={statusMeta(historyRow.status).color}>{statusMeta(historyRow.status).label}</Badge>
+                  {historyRow.assignee_name && <Badge variant="light" color="blue">Owner: {historyRow.assignee_name}</Badge>}
+                </Group>
+              </Stack>
+            </Card>
+          )}
+
+          {historyEntries.length === 0 ? (
+            <Card withBorder radius="lg" p="lg">
+              <Stack align="center" gap="xs">
+                <ThemeIcon size={40} radius="xl" color="gray" variant="light">
+                  <IconHistory size={20} />
+                </ThemeIcon>
+                <Text fw={600}>No update history yet</Text>
+                <Text size="sm" c="dimmed" ta="center">
+                  Timeline entries appear here whenever an item is submitted, edited, approved, or updated in bulk.
+                </Text>
+              </Stack>
+            </Card>
+          ) : (
+            <Stack gap="sm">
+              {historyEntries.map((entry, index) => (
+                <Card key={entry.id ?? `${entry.created_at}-${index}`} withBorder radius="lg" p="md">
+                  <Stack gap={6}>
+                    <Group justify="space-between" align="flex-start">
+                      <Group gap="xs">
+                        <ThemeIcon size="sm" color={entry.type === "submitted" ? "yellow" : entry.type === "bulk_update" ? "blue" : "indigo"} variant="light">
+                          <IconArrowUpRight size={12} />
+                        </ThemeIcon>
+                        <div>
+                          <Text fw={600}>{entry.actor_name || "System update"}</Text>
+                          <Text size="xs" c="dimmed">{formatDate(entry.created_at, true)}</Text>
+                        </div>
+                      </Group>
+                      {entry.type && (
+                        <Badge variant="light" color="gray">{entry.type.replace(/_/g, " ")}</Badge>
+                      )}
+                    </Group>
+                    <Text size="sm">{entry.summary || "Updated enhancement."}</Text>
+                  </Stack>
+                </Card>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </Modal>
     </WidgetFrame>
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
+function StatCard({ label, value, color, detail }: { label: string; value: number; color: string; detail: string }) {
   return (
     <Card withBorder radius="lg" p="lg">
       <Stack gap={4}>
@@ -640,6 +1213,7 @@ function StatCard({ label, value, color }: { label: string; value: number; color
           </ThemeIcon>
           <Text fw={800} size="xl">{value}</Text>
         </Group>
+        <Text size="xs" c="dimmed">{detail}</Text>
       </Stack>
     </Card>
   );
@@ -666,7 +1240,7 @@ export function EnhancementsTile({ onExpand }: { onExpand: () => void }) {
     >
       <Stack gap="sm" style={{ height: "100%" }}>
         <Text size="sm" c="dimmed">
-          Team members can submit ideas and view the full backlog. Managers can approve, edit, and update enhancement status.
+          Team members can submit ideas and view the full backlog. Managers can sort, assign owners, run bulk actions, and review full update history.
         </Text>
       </Stack>
     </WidgetTile>

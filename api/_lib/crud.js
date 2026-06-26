@@ -35,6 +35,7 @@ const ALLOWED_TABLES = new Set([
   "team_members",
   "manager_updates",
   "kudos",
+  "celebrations",
   "metric_disputes",
 ]);
 

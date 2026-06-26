@@ -1,7 +1,7 @@
 export type AssistantMode = "escalation" | "polish";
-export type Audience = "customer" | "internal" | "carrier";
+export type Audience = "customer" | "internal" | "carrier" | "executive";
 export type EscalationVariantKey = "carrier" | "internal" | "customer" | "executive";
-export type PolishVariantKey = Audience;
+export type PolishVariantKey = "polish-customer" | "polish-internal" | "polish-carrier" | "polish-executive";
 export type OutputVariantKey = EscalationVariantKey | PolishVariantKey;
 
 export type StructuredContext = {
@@ -225,7 +225,7 @@ export function buildQualityChecks(params: {
       status: hasTicketReference ? "good" : "missing",
       detail: hasTicketReference
         ? "A ticket or case reference is present."
-        : "Add the AppDirect ticket or case number so the update can be tracked.",
+        : "Add the vCom ticket or case number so the update can be tracked.",
     },
     {
       label: "Customer impact statement",

@@ -24,6 +24,7 @@ import {
   IconBook,
   IconArrowsShuffle,
   IconBulb,
+  IconGift,
 } from "@tabler/icons-react";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
@@ -82,6 +83,7 @@ import { EnhancementsWidget, EnhancementsTile } from "./Enhancements";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
 import { AttendanceTrackerWidget, AttendanceTrackerTile } from "./AttendanceTracker";
+import { CelebrationsTrackerWidget, CelebrationsTrackerTile } from "./CelebrationsTracker";
 import { TicketRebalancerWidget, TicketRebalancerTile } from "./TicketRebalancer";
 import {
   MaintenanceNoteGeneratorWidget,
@@ -194,6 +196,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: TrainingUpdatesTile,
     Full: TrainingUpdatesWidget,
+  },
+  {
+    id: "celebrations-tracker",
+    title: "Celebrations Tracker",
+    description: "Birthdays, work anniversaries, and marriage anniversaries",
+    icon: IconGift,
+    iconColor: "pink",
+    tileSize: "sm",
+    Tile: CelebrationsTrackerTile,
+    Full: CelebrationsTrackerWidget,
   },
   {
     id: "meeting-notes",

@@ -263,8 +263,11 @@ export const enhancements = pgTable("enhancements", {
   submitted_by_email: text("submitted_by_email"),
   approved_by_name: text("approved_by_name"),
   approved_at: text("approved_at"),
+  assignee_name: text("assignee_name"),
+  assignee_email: text("assignee_email"),
   manager_notes: text("manager_notes"),
   target_quarter: text("target_quarter"),
+  updates_json: text("updates_json"),
   updated_at: text("updated_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
@@ -473,6 +476,21 @@ export const kudos = pgTable("kudos", {
   message: text("message").notNull(),
   category: text("category").notNull(), // teamwork | problem-solving | customer-service | above-beyond | mentorship
   is_pinned: boolean("is_pinned").notNull().default(false),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+// =============================================================================
+// Celebrations Tracker — recurring birthdays and anniversaries
+// =============================================================================
+export const celebrations = pgTable("celebrations", {
+  id: serial("id").primaryKey(),
+  person_name: text("person_name").notNull(),
+  event_type: text("event_type").notNull(), // birthday | work_anniversary | marriage_anniversary
+  event_month: integer("event_month").notNull(), // 1-12
+  event_day: integer("event_day").notNull(), // 1-31
+  event_year: integer("event_year"),
+  notes: text("notes"),
+  created_by: text("created_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
