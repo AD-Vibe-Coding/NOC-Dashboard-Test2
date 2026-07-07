@@ -89,6 +89,7 @@ import {
   MaintenanceNoteGeneratorWidget,
   MaintenanceNoteGeneratorTile,
 } from "./MaintenanceNoteGenerator";
+import { NocMttrReportWidget, NocMttrReportTile } from "./NocMttrReport";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -125,6 +126,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: PerformanceTrackerTile,
     Full: PerformanceTrackerWidget,
+  },
+  {
+    id: "noc-mttr-report",
+    title: "NOC MTTR Report",
+    description: "Upload MTTR Excel data and trend average resolve time month over month",
+    icon: IconClockRecord,
+    iconColor: "orange",
+    tileSize: "sm",
+    Tile: NocMttrReportTile,
+    Full: NocMttrReportWidget,
   },
   {
     id: "logic-monitor",

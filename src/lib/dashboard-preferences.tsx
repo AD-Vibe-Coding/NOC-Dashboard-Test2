@@ -44,7 +44,7 @@ export const DASHBOARD_TEMPLATES: Array<{
 const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   classic: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "meeting-notes", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "noc-mttr-report", "meeting-notes", "break-tracker"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
       { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-checklist", "qs-escalations"] },
@@ -54,7 +54,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   },
   focus: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
       { key: "communication", hidden: true, itemIds: ["shift-checklist", "escalation-email", "email-polisher", "qs-escalations"] },
@@ -66,7 +66,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
       { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-checklist", "qs-escalations", "email-polisher"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "mobility-troubleshooter", "smart-search", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-updates"] },
       { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
@@ -77,7 +77,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
-      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "meeting-notes", "my-day", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "my-day", "break-tracker"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor"] },
       { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
     ],
@@ -85,7 +85,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   "command-center": {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "meeting-notes", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "noc-mttr-report", "meeting-notes", "break-tracker"] },
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "escalation-email", "qs-escalations", "email-polisher"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "noc-troubleshooter", "mobility-troubleshooter", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
@@ -94,7 +94,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   },
   velocity: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "zoom-queue", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "zoom-queue", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "email-polisher", "escalation-email", "qs-escalations"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["logic-monitor"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
@@ -105,7 +105,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   "night-shift": {
     sections: [
       { key: "queue-monitoring", hidden: false, itemIds: ["logic-monitor", "zoom-queue"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "qs-escalations", "escalation-email", "email-polisher"] },
       { key: "requests", hidden: true, itemIds: ["training-updates", "wfh"] },
@@ -124,7 +124,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   },
   trainer: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "meeting-notes", "my-day", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "my-day", "break-tracker"] },
       { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "mobility-troubleshooter", "noc-troubleshooter", "timezone-helper", "kb-gap-finder"] },
@@ -136,7 +136,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
     sections: [
       { key: "communication", hidden: false, itemIds: ["escalation-email", "shift-checklist", "qs-escalations", "email-polisher"] },
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "performance-tracker", "break-tracker"] },
+      { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "performance-tracker", "noc-mttr-report", "break-tracker"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
       { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
@@ -183,8 +183,10 @@ function getStorageKey(viewer: string | null | undefined) {
  *  layouts if missing (one-time forward-migration for users with old saved prefs). */
 const REQUIRED_WIDGETS: Array<{ id: string; section: DashboardSectionKey; afterId?: string }> = [
   { id: "meeting-notes", section: "my-work", afterId: "my-day" },
+  { id: "noc-mttr-report", section: "my-work", afterId: "performance-tracker" },
   { id: "timezone-helper", section: "ai-tools" },
-  { id: "enhancement-tracker", section: "team", afterId: "kudos-board" },
+  { id: "celebrations-tracker", section: "team", afterId: "kudos-board" },
+  { id: "enhancement-tracker", section: "team", afterId: "celebrations-tracker" },
 ];
 
 function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>): Record<DashboardTemplate, DashboardLayoutState> {

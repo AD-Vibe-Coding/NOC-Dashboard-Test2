@@ -80,6 +80,8 @@ function ckey(s: string): string {
     .replace(/[\u200B-\u200D\uFEFF]/g, "")   // zero-width chars
     .replace(/[\u2013\u2014\u2212]/g, "-")   // en/em/minus → ASCII hyphen
     .replace(/[\u00A0\u202F]/g, " ")         // non-breaking spaces → space
+    .replace(/\([^)]*\)/g, " ")              // remove parenthetical suffixes
+    .replace(/<[^>]+>/g, " ")                  // remove angle-bracket emails
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
@@ -138,6 +140,12 @@ const ALIASES: Array<[string, string]> = [
   ["perry", "Perry Cox"],
   ["cox", "Perry Cox"],
   ["perry cox", "Perry Cox"],
+
+  // Matt Marquez
+  ["matt", "Matt Marquez"],
+  ["matt marquez", "Matt Marquez"],
+  ["marquez", "Matt Marquez"],
+  ["m marqu", "Matt Marquez"],
 
   // Zubairuddin — sometimes appears as "Zubair Mohammed" (old Slack handle)
   ["zubairuddin", "Mohammed Zubairuddin"],
@@ -238,6 +246,28 @@ for (const m of LOCKED_TEAM) {
   VARIANT_MAP.set(ckey(m.name), m.name);
 }
 
+// Auto-register unique first-name / last-name shortcuts for names that are
+// unambiguous across the locked roster. This helps with exports that use
+// only a first name (e.g. "Kenya") or only a surname (e.g. "Marquez").
+const firstNameCounts = new Map<string, number>();
+const lastNameCounts = new Map<string, number>();
+for (const m of LOCKED_TEAM) {
+  const parts = ckey(m.name).split(" ").filter(Boolean);
+  if (parts.length === 0) continue;
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  firstNameCounts.set(first, (firstNameCounts.get(first) ?? 0) + 1);
+  lastNameCounts.set(last, (lastNameCounts.get(last) ?? 0) + 1);
+}
+for (const m of LOCKED_TEAM) {
+  const parts = ckey(m.name).split(" ").filter(Boolean);
+  if (parts.length === 0) continue;
+  const first = parts[0];
+  const last = parts[parts.length - 1];
+  if ((firstNameCounts.get(first) ?? 0) === 1) VARIANT_MAP.set(first, m.name);
+  if ((lastNameCounts.get(last) ?? 0) === 1) VARIANT_MAP.set(last, m.name);
+}
+
 /**
  * Resolve a raw name (from Excel, Slack, etc.) to its canonical roster name.
  * Returns null if the name doesn't unambiguously map to anyone on the
@@ -270,6 +300,25 @@ export function resolveTeamMember(rawName: string | null | undefined): string | 
   const stripped = stripInitialsPrefix(key);
   if (stripped && stripped !== key) {
     const retry = tryResolveKey(stripped);
+    if (retry) return retry;
+  }
+
+  // Step 4: handle "Last, First" / "Last, First Middle" exports.
+  if (key.includes(",")) {
+    const commaParts = key.split(",").map((p) => p.trim()).filter(Boolean);
+    if (commaParts.length >= 2) {
+      const reordered = [...commaParts.slice(1), commaParts[0]].join(" ");
+      const retry = tryResolveKey(reordered);
+      if (retry) return retry;
+    }
+  }
+
+  // Step 5: if the export put an email address in the name field, try the
+  // local part and common separators: first.last, first_last, flast, etc.
+  const emailMatch = /([a-z0-9._%+-]+)@[a-z0-9.-]+\.[a-z]{2,}/i.exec(String(rawName));
+  if (emailMatch) {
+    const local = ckey(emailMatch[1].replace(/[._+-]+/g, " "));
+    const retry = tryResolveKey(local);
     if (retry) return retry;
   }
 

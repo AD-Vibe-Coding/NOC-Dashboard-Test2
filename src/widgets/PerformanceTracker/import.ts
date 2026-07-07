@@ -48,6 +48,8 @@ export const TICKET_OWNER_COLUMN = "first_contact_name";
 
 /** The agent-attribution column for inbound call sheets (Zoom Phone export). */
 export const CALL_AGENT_COLUMN = "To Name";
+/** Secondary fallback when Zoom Phone agent names don't line up with roster names. */
+export const CALL_AGENT_EMAIL_COLUMN = "To Email";
 
 /**
  * The agent-attribution column for task sheets. Per the user mapping,
@@ -1432,8 +1434,14 @@ export async function parseWorkbook(file: File): Promise<SheetInfo[]> {
     let projectedMatches = 0;
     if (detectedNameColumn) {
       for (const r of rows) {
-        const v = r[detectedNameColumn];
-        if (v && resolveTeamMember(String(v))) projectedMatches++;
+        const primary = r[detectedNameColumn];
+        const fallbackEmail = detectedType === "calls" ? r[CALL_AGENT_EMAIL_COLUMN] : null;
+        if (
+          (primary && resolveTeamMember(String(primary))) ||
+          (fallbackEmail && resolveTeamMember(String(fallbackEmail)))
+        ) {
+          projectedMatches++;
+        }
       }
     }
 
@@ -1493,14 +1501,17 @@ export async function executeImport(
 
     for (const row of rows) {
       const rawName = row[effectiveNameCol];
-      if (rawName == null || rawName === "") {
+      const rawEmail = entry.sourceType === "calls" ? row[CALL_AGENT_EMAIL_COLUMN] : null;
+      if ((rawName == null || rawName === "") && (rawEmail == null || rawEmail === "")) {
         skipped++;
         continue;
       }
-      const canonical = resolveTeamMember(String(rawName));
+      const canonical =
+        (rawName != null && rawName !== "" ? resolveTeamMember(String(rawName)) : null) ||
+        (rawEmail != null && rawEmail !== "" ? resolveTeamMember(String(rawEmail)) : null);
       if (!canonical) {
         skipped++;
-        skippedNamesSet.add(String(rawName).trim());
+        skippedNamesSet.add(String(rawName ?? rawEmail).trim());
         continue;
       }
       const summary = extractSummary(row, entry.sourceType);
