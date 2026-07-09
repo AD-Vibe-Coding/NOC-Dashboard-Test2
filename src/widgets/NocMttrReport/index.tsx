@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as XLSX from "xlsx";
 import {
   Alert,
@@ -27,12 +27,14 @@ import {
   IconDatabase,
   IconEye,
   IconFilter,
+  IconPresentation,
   IconUpload,
 } from "@tabler/icons-react";
 import { db, schema } from "../../db";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
 import { WidgetTile } from "../WidgetTile";
+import { exportNocMttrPowerPoint } from "./powerpoint";
 
 export interface MttrRow {
   customer: string;
@@ -177,6 +179,10 @@ const CHART_PANEL_OVERLAY = [
   "linear-gradient(180deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.02) 100%)",
 ].join(", ");
 const CHART_LOGO_SRC = "/vcom-logo.png";
+const CHART_TEXT_PRIMARY = "#17324d";
+const CHART_TEXT_SECONDARY = "#2f4a63";
+const CHART_TEXT_MUTED = "#5a738d";
+const CHART_BORDER_SOFT = "rgba(23, 50, 77, 0.14)";
 const PREFERRED_TREND_SECTION_ORDER = [
   "Ticket Volume",
   "First Touch Distribution",
@@ -693,7 +699,6 @@ function filterSheetRowsByOperationalFilters(
     rows: sheet.rows.filter((row) => rowMatchesOperationalFilters(row, sheet, filters)),
   };
 }
-
 
 function buildChronicCircuitTableData(
   parsed: ParsedWorkbook | null,
@@ -1892,14 +1897,11 @@ function ChartLogoStamp() {
       style={{
         position: "absolute",
         right: 14,
-        bottom: 12,
+        bottom: 10,
         zIndex: 2,
         pointerEvents: "none",
         borderRadius: "8px",
         overflow: "hidden",
-        boxShadow: "0 8px 18px rgba(15, 23, 42, 0.14)",
-        border: "1px solid rgba(255,255,255,0.18)",
-        background: "rgba(15, 23, 42, 0.12)",
       }}
     >
       <img
@@ -1972,7 +1974,8 @@ function TicketVolumesChart({
         maxWidth: "1360px",
         margin: "0 auto",
         background: CHART_PANEL_BACKGROUND,
-        padding: "10px 14px 6px",
+        padding: "10px 14px 44px",
+        position: "relative",
       }}
     >
       <div
@@ -2006,7 +2009,6 @@ function TicketVolumesChart({
               position: "relative",
             }}
           >
-            <ChartLogoStamp />
             <svg
               width="100%"
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
@@ -2021,7 +2023,7 @@ function TicketVolumesChart({
                 textAnchor="middle"
                 fontSize="34"
                 fontWeight="800"
-                fill="#24324a"
+                fill={CHART_TEXT_PRIMARY}
                 letterSpacing="-0.03em"
               >
                 {title}
@@ -2099,7 +2101,7 @@ function TicketVolumesChart({
                       textAnchor="middle"
                       fontSize="14"
                       fontWeight="800"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.total.toLocaleString()}
                     </text>
@@ -2121,7 +2123,7 @@ function TicketVolumesChart({
                       textAnchor="middle"
                       fontSize="12"
                       fontWeight="700"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.monthLabel}
                     </text>
@@ -2147,7 +2149,7 @@ function TicketVolumesChart({
                 size="10px"
                 tt="uppercase"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.18em", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 Issue Type
@@ -2178,7 +2180,7 @@ function TicketVolumesChart({
                         flexShrink: 0,
                       }}
                     />
-                    <Text size="10px" fw={700} c="#334155" style={{ lineHeight: 1.2 }}>
+                    <Text size="10px" fw={700} c={CHART_TEXT_SECONDARY} style={{ lineHeight: 1.2 }}>
                       {series.label}
                     </Text>
                   </div>
@@ -2187,7 +2189,7 @@ function TicketVolumesChart({
               <Text
                 size="10px"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.14em", textTransform: "uppercase", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 {seriesDefinitions.length} Categories
@@ -2225,12 +2227,12 @@ function TicketVolumesChart({
             <div
               style={{
                 padding: "0 0 10px",
-                borderBottom: "1px solid rgba(226, 232, 240, 0.95)",
+                borderBottom: `1px solid ${CHART_BORDER_SOFT}`,
               }}
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c="#94a3b8"
+                  c={CHART_TEXT_MUTED}
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2240,16 +2242,16 @@ function TicketVolumesChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Customer Opened</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.customerOpenedPercent ?? "—"}</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Customer Opened</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.customerOpenedPercent ?? "—"}</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>vCom Opened</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.vcomOpenedPercent ?? "—"}</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>vCom Opened</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.vcomOpenedPercent ?? "—"}</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>MTTR &gt; 8h</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary ? summary.over8HourTicketCount.toLocaleString() : "—"}</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>MTTR &gt; 8h</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary ? summary.over8HourTicketCount.toLocaleString() : "—"}</Text>
                 </Group>
               </Stack>
             </div>
@@ -2270,21 +2272,21 @@ function TicketVolumesChart({
                 >
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "22%", borderBottom: "1px solid rgba(226, 232, 240, 0.95)", fontWeight: 800, color: "#64748b" }}>Ticket</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "24%", borderBottom: "1px solid rgba(226, 232, 240, 0.95)", fontWeight: 800, color: "#64748b" }}>Carrier</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "36%", borderBottom: "1px solid rgba(226, 232, 240, 0.95)", fontWeight: 800, color: "#64748b" }}>Resolution</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "18%", textAlign: "right", borderBottom: "1px solid rgba(226, 232, 240, 0.95)", fontWeight: 800, color: "#64748b" }}>MTTR</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "22%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Ticket</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "24%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Carrier</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "36%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Resolution</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "18%", textAlign: "right", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>MTTR</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
                     {displayedHighMttrTickets.map((ticket) => (
                       <Table.Tr key={`${ticket.ticketId}-${ticket.carrier}-${ticket.mttr}`}>
-                        <Table.Td style={{ padding: "10px 8px 11px", fontWeight: 700, verticalAlign: "top", borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>{ticket.ticketId}</Table.Td>
-                        <Table.Td style={{ padding: "10px 8px 11px", verticalAlign: "top", overflowWrap: "anywhere", wordBreak: "break-word", borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>{ticket.carrier}</Table.Td>
-                        <Table.Td style={{ padding: "10px 8px 11px", verticalAlign: "top", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal", borderBottom: "1px solid rgba(241, 245, 249, 1)" }}>
+                        <Table.Td style={{ padding: "10px 8px 11px", fontWeight: 700, verticalAlign: "top", borderBottom: `1px solid ${CHART_BORDER_SOFT}` }}>{ticket.ticketId}</Table.Td>
+                        <Table.Td style={{ padding: "10px 8px 11px", verticalAlign: "top", overflowWrap: "anywhere", wordBreak: "break-word", borderBottom: `1px solid ${CHART_BORDER_SOFT}` }}>{ticket.carrier}</Table.Td>
+                        <Table.Td style={{ padding: "10px 8px 11px", verticalAlign: "top", overflowWrap: "anywhere", wordBreak: "break-word", whiteSpace: "normal", borderBottom: `1px solid ${CHART_BORDER_SOFT}` }}>
                           {ticket.resolution ?? "—"}
                         </Table.Td>
-                        <Table.Td style={{ padding: "10px 8px 11px", textAlign: "right", whiteSpace: "nowrap", verticalAlign: "top", borderBottom: "1px solid rgba(241, 245, 249, 1)", fontWeight: 700 }}>{formatMttrValue(ticket.mttr)}</Table.Td>
+                        <Table.Td style={{ padding: "10px 8px 11px", textAlign: "right", whiteSpace: "nowrap", verticalAlign: "top", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 700 }}>{formatMttrValue(ticket.mttr)}</Table.Td>
                       </Table.Tr>
                     ))}
                   </Table.Tbody>
@@ -2298,6 +2300,7 @@ function TicketVolumesChart({
           </div>
         </div>
       </div>
+      <ChartLogoStamp />
     </div>
   );
 }
@@ -2334,7 +2337,8 @@ function TimeToCarrierPercentageChart({
         maxWidth: "1360px",
         margin: "0 auto",
         background: CHART_PANEL_BACKGROUND,
-        padding: "10px 14px 6px",
+        padding: "10px 14px 44px",
+        position: "relative",
       }}
     >
       <div
@@ -2368,7 +2372,6 @@ function TimeToCarrierPercentageChart({
               position: "relative",
             }}
           >
-            <ChartLogoStamp />
             <svg
               width="100%"
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
@@ -2383,7 +2386,7 @@ function TimeToCarrierPercentageChart({
                 textAnchor="middle"
                 fontSize="34"
                 fontWeight="800"
-                fill="#24324a"
+                fill={CHART_TEXT_PRIMARY}
                 letterSpacing="-0.03em"
               >
                 {title}
@@ -2407,7 +2410,7 @@ function TimeToCarrierPercentageChart({
                       textAnchor="end"
                       fontSize="11"
                       fontWeight="700"
-                      fill="#64748b"
+                      fill={CHART_TEXT_MUTED}
                     >
                       {tick}%
                     </text>
@@ -2471,7 +2474,7 @@ function TimeToCarrierPercentageChart({
                       textAnchor="middle"
                       fontSize="14"
                       fontWeight="800"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       100%
                     </text>
@@ -2481,7 +2484,7 @@ function TimeToCarrierPercentageChart({
                       textAnchor="middle"
                       fontSize="12"
                       fontWeight="700"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.monthLabel}
                     </text>
@@ -2507,7 +2510,7 @@ function TimeToCarrierPercentageChart({
                 size="10px"
                 tt="uppercase"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.18em", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 Bucket
@@ -2538,7 +2541,7 @@ function TimeToCarrierPercentageChart({
                         flexShrink: 0,
                       }}
                     />
-                    <Text size="10px" fw={700} c="#334155" style={{ lineHeight: 1.2 }}>
+                    <Text size="10px" fw={700} c={CHART_TEXT_SECONDARY} style={{ lineHeight: 1.2 }}>
                       {series.label}
                     </Text>
                   </div>
@@ -2547,7 +2550,7 @@ function TimeToCarrierPercentageChart({
               <Text
                 size="10px"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.14em", textTransform: "uppercase", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 2 Series
@@ -2585,12 +2588,12 @@ function TimeToCarrierPercentageChart({
             <div
               style={{
                 padding: "0 0 10px",
-                borderBottom: "1px solid rgba(226, 232, 240, 0.95)",
+                borderBottom: `1px solid ${CHART_BORDER_SOFT}`,
               }}
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c="#94a3b8"
+                  c={CHART_TEXT_MUTED}
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2600,12 +2603,12 @@ function TimeToCarrierPercentageChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Under 15 Minutes</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{under15Latest.toFixed(1)}%</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Under 15 Minutes</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{under15Latest.toFixed(1)}%</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Over 15 Minutes</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over15Latest.toFixed(1)}%</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Over 15 Minutes</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over15Latest.toFixed(1)}%</Text>
                 </Group>
               </Stack>
             </div>
@@ -2616,6 +2619,7 @@ function TimeToCarrierPercentageChart({
           </div>
         </div>
       </div>
+      <ChartLogoStamp />
     </div>
   );
 }
@@ -2652,7 +2656,8 @@ function FirstTouchPercentageChart({
         maxWidth: "1360px",
         margin: "0 auto",
         background: CHART_PANEL_BACKGROUND,
-        padding: "10px 14px 6px",
+        padding: "10px 14px 44px",
+        position: "relative",
       }}
     >
       <div
@@ -2686,7 +2691,6 @@ function FirstTouchPercentageChart({
               position: "relative",
             }}
           >
-            <ChartLogoStamp />
             <svg
               width="100%"
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
@@ -2701,7 +2705,7 @@ function FirstTouchPercentageChart({
                 textAnchor="middle"
                 fontSize="34"
                 fontWeight="800"
-                fill="#24324a"
+                fill={CHART_TEXT_PRIMARY}
                 letterSpacing="-0.03em"
               >
                 {title}
@@ -2725,7 +2729,7 @@ function FirstTouchPercentageChart({
                       textAnchor="end"
                       fontSize="11"
                       fontWeight="700"
-                      fill="#64748b"
+                      fill={CHART_TEXT_MUTED}
                     >
                       {tick}%
                     </text>
@@ -2789,7 +2793,7 @@ function FirstTouchPercentageChart({
                       textAnchor="middle"
                       fontSize="12"
                       fontWeight="700"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.monthLabel}
                     </text>
@@ -2815,7 +2819,7 @@ function FirstTouchPercentageChart({
                 size="10px"
                 tt="uppercase"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.18em", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 Metric
@@ -2846,7 +2850,7 @@ function FirstTouchPercentageChart({
                         flexShrink: 0,
                       }}
                     />
-                    <Text size="10px" fw={700} c="#334155" style={{ lineHeight: 1.2 }}>
+                    <Text size="10px" fw={700} c={CHART_TEXT_SECONDARY} style={{ lineHeight: 1.2 }}>
                       {series.label}
                     </Text>
                   </div>
@@ -2855,7 +2859,7 @@ function FirstTouchPercentageChart({
               <Text
                 size="10px"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.14em", textTransform: "uppercase", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 2 Series
@@ -2893,12 +2897,12 @@ function FirstTouchPercentageChart({
             <div
               style={{
                 padding: "0 0 10px",
-                borderBottom: "1px solid rgba(226, 232, 240, 0.95)",
+                borderBottom: `1px solid ${CHART_BORDER_SOFT}`,
               }}
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c="#94a3b8"
+                  c={CHART_TEXT_MUTED}
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2908,18 +2912,19 @@ function FirstTouchPercentageChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% within 5 min</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{within5Latest.toFixed(1)}%</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% within 5 min</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{within5Latest.toFixed(1)}%</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% over 5 min</Text>
-                  <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over5Latest.toFixed(1)}%</Text>
+                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% over 5 min</Text>
+                  <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over5Latest.toFixed(1)}%</Text>
                 </Group>
               </Stack>
             </div>
           </div>
         </div>
       </div>
+      <ChartLogoStamp />
     </div>
   );
 }
@@ -2978,7 +2983,8 @@ function TicketResolutionsChart({
         maxWidth: "1360px",
         margin: "0 auto",
         background: CHART_PANEL_BACKGROUND,
-        padding: "10px 14px 6px",
+        padding: "10px 14px 44px",
+        position: "relative",
       }}
     >
       <div
@@ -3012,7 +3018,6 @@ function TicketResolutionsChart({
               position: "relative",
             }}
           >
-            <ChartLogoStamp />
             <svg
               width="100%"
               viewBox={`0 0 ${chartWidth} ${chartHeight}`}
@@ -3027,7 +3032,7 @@ function TicketResolutionsChart({
                 textAnchor="middle"
                 fontSize="34"
                 fontWeight="800"
-                fill="#24324a"
+                fill={CHART_TEXT_PRIMARY}
                 letterSpacing="-0.03em"
               >
                 {title}
@@ -3105,7 +3110,7 @@ function TicketResolutionsChart({
                       textAnchor="middle"
                       fontSize="14"
                       fontWeight="800"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.total.toLocaleString()}
                     </text>
@@ -3127,7 +3132,7 @@ function TicketResolutionsChart({
                       textAnchor="middle"
                       fontSize="12"
                       fontWeight="700"
-                      fill="#475569"
+                      fill={CHART_TEXT_SECONDARY}
                     >
                       {month.monthLabel}
                     </text>
@@ -3153,7 +3158,7 @@ function TicketResolutionsChart({
                 size="10px"
                 tt="uppercase"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.18em", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 Resolution
@@ -3184,7 +3189,7 @@ function TicketResolutionsChart({
                         flexShrink: 0,
                       }}
                     />
-                    <Text size="10px" fw={700} c="#334155" style={{ lineHeight: 1.2 }}>
+                    <Text size="10px" fw={700} c={CHART_TEXT_SECONDARY} style={{ lineHeight: 1.2 }}>
                       {series.label}
                     </Text>
                   </div>
@@ -3193,7 +3198,7 @@ function TicketResolutionsChart({
               <Text
                 size="10px"
                 fw={800}
-                c="#94a3b8"
+                c={CHART_TEXT_MUTED}
                 style={{ letterSpacing: "0.14em", textTransform: "uppercase", whiteSpace: "nowrap", paddingTop: "2px" }}
               >
                 {seriesDefinitions.length} Categories
@@ -3231,12 +3236,12 @@ function TicketResolutionsChart({
             <div
               style={{
                 padding: "0 0 10px",
-                borderBottom: "1px solid rgba(226, 232, 240, 0.95)",
+                borderBottom: `1px solid ${CHART_BORDER_SOFT}`,
               }}
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c="#94a3b8"
+                  c={CHART_TEXT_MUTED}
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -3247,8 +3252,8 @@ function TicketResolutionsChart({
               <Stack gap={8}>
                 {summaryRows.map((row) => (
                   <Group key={row.label} justify="space-between" gap={12} wrap="nowrap" align="start">
-                    <Text c="#64748b" style={{ fontSize: "0.84rem", lineHeight: 1.15, maxWidth: "70%" }}>{row.label}</Text>
-                    <Text fw={800} c="#1e293b" style={{ fontSize: "1.05rem", lineHeight: 1 }}>{row.value}</Text>
+                    <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15, maxWidth: "70%" }}>{row.label}</Text>
+                    <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{row.value}</Text>
                   </Group>
                 ))}
               </Stack>
@@ -3256,6 +3261,7 @@ function TicketResolutionsChart({
           </div>
         </div>
       </div>
+      <ChartLogoStamp />
     </div>
   );
 }
@@ -3379,6 +3385,16 @@ export function NocMttrReportWidget() {
   const [maintenanceFilter, setMaintenanceFilter] = useState<MaintenanceFilter>("include");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("both");
   const [monthDetailModal, setMonthDetailModal] = useState<MonthDetailModalState | null>(null);
+  const [exportingPowerPoint, setExportingPowerPoint] = useState(false);
+  const networkVolumeChartRef = useRef<HTMLDivElement | null>(null);
+  const networkFirstTouchChartRef = useRef<HTMLDivElement | null>(null);
+  const networkTimeToCarrierChartRef = useRef<HTMLDivElement | null>(null);
+  const networkResolutionChartRef = useRef<HTMLDivElement | null>(null);
+  const mobilityVolumeChartRef = useRef<HTMLDivElement | null>(null);
+  const mobilityFirstTouchChartRef = useRef<HTMLDivElement | null>(null);
+  const mobilityTimeToCarrierChartRef = useRef<HTMLDivElement | null>(null);
+  const mobilityResolutionChartRef = useRef<HTMLDivElement | null>(null);
+  const chronicCircuitsRef = useRef<HTMLDivElement | null>(null);
 
   function applySavedReport(report: SavedMttrReportRecord) {
     const savedParsed = parseSavedWorkbook(report.parsed_json);
@@ -3818,6 +3834,93 @@ export function NocMttrReportWidget() {
     () => buildChronicCircuitTableData(parsed, sheetName, operationalFilters),
     [parsed, sheetName, operationalFilters],
   );
+  const exportCustomerName = useMemo(() => {
+    if (selectedCustomers.length === 1) return selectedCustomers[0];
+    if (selectedCustomers.length > 1) return `${selectedCustomers.length} selected customers`;
+    return customerOptions[0]?.label ?? "All Customers";
+  }, [selectedCustomers, customerOptions]);
+  const exportFilterSummary = useMemo(() => {
+    const customerLabel = selectedCustomers.length === 0
+      ? "Customer: all"
+      : selectedCustomers.length === 1
+        ? `Customer: ${selectedCustomers[0]}`
+        : `Customers: ${selectedCustomers.slice(0, 3).join(", ")}${selectedCustomers.length > 3 ? ` +${selectedCustomers.length - 3} more` : ""}`;
+    return [
+      customerLabel,
+      `Reported via: ${reportedViaFilter === "both" ? "NOC + Mobility" : reportedViaFilter === "noc" ? "NOC only" : "Mobility only"}`,
+      `Channel: ${channelFilter === "both" ? "Buyers' Club + MSP" : channelFilter === "buyers_club" ? "Buyers' Club only" : "MSP only"}`,
+      `Maintenance: ${maintenanceFilter === "include" ? "Included" : "Excluded"}`,
+    ];
+  }, [selectedCustomers, reportedViaFilter, channelFilter, maintenanceFilter]);
+  async function handleExportPowerPoint() {
+    if (!parsed) return;
+    setExportingPowerPoint(true);
+    setError(null);
+    setSaveNotice(null);
+    try {
+      await exportNocMttrPowerPoint({
+        reportName: parsed.fileName,
+        customerName: exportCustomerName,
+        generatedBy: identity?.name ?? "Unknown",
+        generatedAt: new Date(),
+        selectedSheetName: sheetName,
+        filtersSummary: exportFilterSummary,
+        thankYouLine: `Questions on ${exportCustomerName}'s MTTR trends or chronic circuits?`,
+        charts: [
+          {
+            title: "Ticket Volumes - Network",
+            subtitle: "Top Issue Types · NOC only",
+            element: networkVolumeChartRef.current,
+          },
+          {
+            title: "Ticket Acknowledgement Time - Network",
+            subtitle: "First Touch Distribution · NOC only",
+            element: networkFirstTouchChartRef.current,
+          },
+          {
+            title: "Time to Carrier Ticket - Network",
+            subtitle: "Carrier ticket timing · NOC only",
+            element: networkTimeToCarrierChartRef.current,
+          },
+          {
+            title: "Ticket Resolutions - Network",
+            subtitle: "Resolution mix · NOC only",
+            element: networkResolutionChartRef.current,
+          },
+          {
+            title: "Ticket Volumes - Mobility",
+            subtitle: "Top Issue Types · Mobility only",
+            element: mobilityVolumeChartRef.current,
+          },
+          {
+            title: "Ticket Acknowledgement Time - Mobility",
+            subtitle: "First Touch Distribution · Mobility only",
+            element: mobilityFirstTouchChartRef.current,
+          },
+          {
+            title: "Time to Carrier Ticket - Mobility",
+            subtitle: "Carrier ticket timing · Mobility only",
+            element: mobilityTimeToCarrierChartRef.current,
+          },
+          {
+            title: "Ticket Resolutions - Mobility",
+            subtitle: "Resolution mix · Mobility only",
+            element: mobilityResolutionChartRef.current,
+          },
+          {
+            title: "Top 10 Chronic Circuits",
+            subtitle: "Current workbook and active trend filters",
+            element: chronicCircuitsRef.current,
+          },
+        ],
+      });
+      setSaveNotice("PowerPoint exported successfully.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to generate the PowerPoint export.");
+    } finally {
+      setExportingPowerPoint(false);
+    }
+  }
   const monthDetailTickets = useMemo(() => {
     if (!monthDetailModal || monthDetailModal.sectionTitle === "Top Issue Types" || monthDetailModal.detailType === "resolution-summary") {
       return [] as ExtendedMttrTicket[];
@@ -4175,16 +4278,27 @@ export function NocMttrReportWidget() {
                         <Title order={5}>Visual charts</Title>
                         <Text size="sm" c="dimmed">This charts tab now includes stacked monthly ticket-volume slides for both Network (NOC) and Mobility, each based on the workbook's Top Issue Types section. Both charts respect the current customer, channel, and maintenance filters while forcing their own reported-via scope.</Text>
                       </Stack>
-                      <Group gap="xs">
+                      <Group gap="xs" align="center">
                         <Badge color="orange" variant="light">NOC only</Badge>
                         <Badge color="blue" variant="light">Mobility only</Badge>
+                        <Button
+                          color="orange"
+                          leftSection={<IconPresentation size={16} />}
+                          onClick={() => {
+                            void handleExportPowerPoint();
+                          }}
+                          loading={exportingPowerPoint}
+                          disabled={!parsed}
+                        >
+                          Generate PowerPoint
+                        </Button>
                       </Group>
                     </Group>
                   </Stack>
                 </Card>
 
                 <Stack gap="xl" style={{ width: "100%" }}>
-                  <div style={{ width: "100%" }}>
+                  <div ref={networkVolumeChartRef} style={{ width: "100%" }}>
                     {networkTicketVolumeChartData.length > 0 ? (
                       <TicketVolumesChart
                         title="Ticket Volumes - Network"
@@ -4207,7 +4321,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={networkFirstTouchChartRef} style={{ width: "100%" }}>
                     {networkFirstTouchChartData.length > 0 ? (
                       <FirstTouchPercentageChart
                         title="Ticket Acknowledgement Time - Network"
@@ -4227,7 +4341,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={networkTimeToCarrierChartRef} style={{ width: "100%" }}>
                     {networkTimeToCarrierChartData.length > 0 ? (
                       <TimeToCarrierPercentageChart
                         title="Time to Carrier Ticket - Network"
@@ -4247,7 +4361,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={networkResolutionChartRef} style={{ width: "100%" }}>
                     {networkResolutionChartData.length > 0 ? (
                       <TicketResolutionsChart
                         title="Ticket Resolutions - Network"
@@ -4270,7 +4384,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={mobilityVolumeChartRef} style={{ width: "100%" }}>
                     {mobilityTicketVolumeChartData.length > 0 ? (
                       <TicketVolumesChart
                         title="Ticket Volumes - Mobility"
@@ -4294,7 +4408,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={mobilityFirstTouchChartRef} style={{ width: "100%" }}>
                     {mobilityFirstTouchChartData.length > 0 ? (
                       <FirstTouchPercentageChart
                         title="Ticket Acknowledgement Time - Mobility"
@@ -4314,7 +4428,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={mobilityTimeToCarrierChartRef} style={{ width: "100%" }}>
                     {mobilityTimeToCarrierChartData.length > 0 ? (
                       <TimeToCarrierPercentageChart
                         title="Time to Carrier Ticket - Mobility"
@@ -4334,7 +4448,7 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%" }}>
+                  <div ref={mobilityResolutionChartRef} style={{ width: "100%" }}>
                     {mobilityResolutionChartData.length > 0 ? (
                       <TicketResolutionsChart
                         title="Ticket Resolutions - Mobility"
@@ -4357,114 +4471,118 @@ export function NocMttrReportWidget() {
                     )}
                   </div>
 
-                  <div style={{ width: "100%", maxWidth: "1180px", margin: "0 auto" }}>
-                    <Card
-                      withBorder
-                      radius="md"
-                      p="sm"
+                  <div
+                    ref={chronicCircuitsRef}
+                    style={{
+                      width: "100%",
+                      maxWidth: "1360px",
+                      margin: "0 auto",
+                      background: CHART_PANEL_BACKGROUND,
+                      padding: "10px 14px 44px",
+                      minHeight: "650px",
+                    }}
+                  >
+                    <div
                       style={{
-                        minHeight: "auto",
-                        background: CHART_PANEL_BACKGROUND,
-                        color: "#000000",
-                        borderColor: "rgba(37, 99, 235, 0.16)",
+                        width: "100%",
+                        aspectRatio: "16 / 9",
+                        minHeight: "650px",
+                        display: "grid",
+                        gridTemplateRows: "88px minmax(0, 1fr) 48px",
                       }}
                     >
-                      <Stack gap="sm" h="100%" justify="space-between">
-                        <Stack gap="sm">
-                          <Title order={5} c="black">Top 10 Chronic Circuits</Title>
+                      <div />
+                      <div style={{ minWidth: 0, minHeight: 0, padding: "0 18px" }}>
+                        <Title
+                          order={3}
+                          ta="center"
+                          c="black"
+                          style={{ marginBottom: "18px", fontSize: "34px", fontWeight: 800, letterSpacing: "-0.03em" }}
+                        >
+                          Top 10 Chronic Circuits
+                        </Title>
 
-                          {chronicCircuitTableData.monthLabels.length === 0 ? (
-                            <Alert color="gray" variant="light">No monthly chronic ticket data available.</Alert>
-                          ) : chronicCircuitTableData.rows.length === 0 ? (
-                            <Alert color="gray" variant="light">No chronic circuits found for the selected report.</Alert>
-                          ) : (
-                            <div
-                              style={{
-                                background: "rgba(255,255,255,0.92)",
-                                border: "1px solid rgba(15, 23, 42, 0.12)",
-                                borderRadius: "14px",
-                                boxShadow: "0 12px 26px rgba(15, 23, 42, 0.12)",
-                                padding: "10px",
-                                backdropFilter: "blur(2px)",
-                              }}
-                            >
-                              <Table
-                                withTableBorder
-                                withColumnBorders
-                                highlightOnHover={false}
-                                fz="xs"
-                                c="black"
-                                style={{
-                                  tableLayout: "fixed",
-                                  width: "100%",
-                                  background: "white",
-                                  borderColor: "rgba(15, 23, 42, 0.2)",
-                                }}
-                              >
-                              <Table.Thead>
-                                <Table.Tr>
-                                  <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "rgba(255,255,255,0.14)" }}>Account</Table.Th>
-                                  <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "rgba(255,255,255,0.14)" }}>Circuit ID</Table.Th>
-                                  <Table.Th w="16%" px={8} py={6} c="black" style={{ background: "rgba(255,255,255,0.14)" }}>Carrier Name</Table.Th>
-                                  {chronicCircuitTableData.monthLabels.map((monthLabel) => (
-                                    <Table.Th key={monthLabel} w="7%" px={6} py={6} ta="center" c="black" style={{ background: "rgba(255,255,255,0.14)" }}>{monthLabel}</Table.Th>
-                                  ))}
-                                  <Table.Th w="9%" px={6} py={6} ta="center" c="black" style={{ background: "rgba(255,255,255,0.14)" }}>Grand Total</Table.Th>
-                                </Table.Tr>
-                              </Table.Thead>
-                              <Table.Tbody>
-                                {chronicCircuitTableData.rows.map((row) => (
-                                  <Table.Tr key={`${row.account}-${row.circuitId}-${row.carrier}`} style={{ background: "transparent" }}>
-                                    <Table.Td px={8} py={6} c="black" style={{ background: "transparent" }}>
-                                      <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.account}</Text>
-                                    </Table.Td>
-                                    <Table.Td px={8} py={6} c="black" style={{ background: "transparent" }}>
-                                      <Stack gap={4}>
-                                        <Text fw={600} size="xs" c="black" style={{ lineHeight: 1.2 }}>{row.circuitId}</Text>
-                                        {row.isLatestMonthPriority ? (
-                                          <Badge
-                                            size="xs"
-                                            variant="filled"
-                                            styles={{
-                                              root: {
-                                                alignSelf: "flex-start",
-                                                backgroundColor: "white",
-                                                color: "#dc2626",
-                                                border: "1px solid #fecaca",
-                                              },
-                                              label: {
-                                                fontSize: "9px",
-                                                lineHeight: 1,
-                                                padding: 0,
-                                                color: "#dc2626",
-                                              },
-                                            }}
-                                          >
-                                            Latest month ≥ 2
-                                          </Badge>
-                                        ) : null}
-                                      </Stack>
-                                    </Table.Td>
-                                    <Table.Td px={8} py={6} c="black" style={{ background: "transparent" }}>
-                                      <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.carrier}</Text>
-                                    </Table.Td>
-                                    {chronicCircuitTableData.monthKeys.map((monthKey) => (
-                                      <Table.Td key={`${row.account}-${row.circuitId}-${row.carrier}-${monthKey}`} px={6} py={6} ta="center" c="black" style={{ background: "transparent" }}>
-                                        <Text size="xs" c="black">{row.monthlyCounts[monthKey] ?? 0}</Text>
-                                      </Table.Td>
-                                    ))}
-                                    <Table.Td px={6} py={6} ta="center" fw={700} c="black" style={{ background: "transparent" }}>
-                                      <Text size="xs" fw={700} c="black">{row.grandTotal}</Text>
-                                    </Table.Td>
-                                  </Table.Tr>
+                        {chronicCircuitTableData.monthLabels.length === 0 ? (
+                          <Alert color="gray" variant="light">No monthly chronic ticket data available.</Alert>
+                        ) : chronicCircuitTableData.rows.length === 0 ? (
+                          <Alert color="gray" variant="light">No chronic circuits found for the selected report.</Alert>
+                        ) : (
+                          <Table
+                            withTableBorder
+                            withColumnBorders
+                            highlightOnHover={false}
+                            fz="xs"
+                            c="black"
+                            style={{
+                              tableLayout: "fixed",
+                              width: "100%",
+                              background: "transparent",
+                              borderColor: "#000000",
+                            }}
+                          >
+                            <Table.Thead>
+                              <Table.Tr>
+                                <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Account</Table.Th>
+                                <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Circuit ID</Table.Th>
+                                <Table.Th w="16%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Carrier Name</Table.Th>
+                                {chronicCircuitTableData.monthLabels.map((monthLabel) => (
+                                  <Table.Th key={monthLabel} w="7%" px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>{monthLabel}</Table.Th>
                                 ))}
-                              </Table.Tbody>
-                            </Table>
-                            </div>
-                          )}
-                        </Stack>
-                      </Stack>
-                    </Card>
+                                <Table.Th w="9%" px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>Grand Total</Table.Th>
+                              </Table.Tr>
+                            </Table.Thead>
+                            <Table.Tbody>
+                              {chronicCircuitTableData.rows.map((row) => (
+                                <Table.Tr key={`${row.account}-${row.circuitId}-${row.carrier}`} style={{ background: "transparent" }}>
+                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
+                                    <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.account}</Text>
+                                  </Table.Td>
+                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
+                                    <Stack gap={4}>
+                                      <Text fw={600} size="xs" c="black" style={{ lineHeight: 1.2 }}>{row.circuitId}</Text>
+                                      {row.isLatestMonthPriority ? (
+                                        <Badge
+                                          size="xs"
+                                          variant="filled"
+                                          styles={{
+                                            root: {
+                                              alignSelf: "flex-start",
+                                              backgroundColor: "white",
+                                              color: "#dc2626",
+                                              border: "1px solid #fecaca",
+                                            },
+                                            label: {
+                                              fontSize: "9px",
+                                              lineHeight: 1,
+                                              padding: 0,
+                                              color: "#dc2626",
+                                            },
+                                          }}
+                                        >
+                                          Latest month ≥ 2
+                                        </Badge>
+                                      ) : null}
+                                    </Stack>
+                                  </Table.Td>
+                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
+                                    <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.carrier}</Text>
+                                  </Table.Td>
+                                  {chronicCircuitTableData.monthKeys.map((monthKey) => (
+                                    <Table.Td key={`${row.account}-${row.circuitId}-${row.carrier}-${monthKey}`} px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>
+                                      <Text size="xs" c="black">{row.monthlyCounts[monthKey] ?? 0}</Text>
+                                    </Table.Td>
+                                  ))}
+                                  <Table.Td px={6} py={6} ta="center" fw={700} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
+                                    <Text size="xs" fw={700} c="black">{row.grandTotal}</Text>
+                                  </Table.Td>
+                                </Table.Tr>
+                              ))}
+                            </Table.Tbody>
+                          </Table>
+                        )}
+                      </div>
+                      <div />
+                    </div>
                   </div>
                 </Stack>
               </Stack>
