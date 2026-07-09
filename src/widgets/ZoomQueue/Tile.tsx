@@ -4,6 +4,7 @@ import { IconCoffee, IconHeadset, IconPlayerStop, IconSettings, IconUser } from 
 import { db } from "../../db";
 import { useIdentity } from "../../lib/identity";
 import { BREAK_TYPE_COLORS, emojiForBreak, formatBreakStartMessage, postSlackMessage } from "../../lib/slack";
+import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 import { useBreakData } from "../BreakTracker/data";
 import { WidgetTile } from "../WidgetTile";
 import { useZoomQueue } from "./data";
@@ -52,10 +53,19 @@ export function ZoomQueueTile({ onExpand }: Props) {
   const inShift = rosterData?.inShiftNow?.length ?? total;
   const outOfQueueInShift = Math.max(inShift - inQueue, 0);
 
+  const normalizedEmail = identity?.email?.toLowerCase().trim() ?? "";
+  const isManager =
+    identity?.role === "manager" ||
+    (!!identity?.name && ROLE_BY_NAME[identity.name.trim()] === "manager") ||
+    (!!normalizedEmail && ROSTER_BY_EMAIL[normalizedEmail]?.role === "manager");
+
   const youOnBreak = identity?.name
     ? active.find((b) => b.employee_name === identity.name) ?? null
     : null;
-  const canQuickControl = identity?.role !== "manager" && !!identity?.name;
+  const canQuickControl = !isManager && !!identity?.name;
+  const isPunchedIn = lastPunchAction === "punch_in";
+  const statusControlsLocked = !isManager && !isPunchedIn;
+  const availableQuickStatusTypes = QUICK_STATUS_TYPES;
 
   const myBreakRows = useMemo(() => {
     if (!identity?.name) return [] as typeof active;
@@ -112,6 +122,12 @@ export function ZoomQueueTile({ onExpand }: Props) {
     };
   }, [identity?.name]);
 
+  useEffect(() => {
+    if (!statusType) return;
+    if (availableQuickStatusTypes.some((option) => option.value === statusType)) return;
+    setStatusType(availableQuickStatusTypes[0]?.value ?? null);
+  }, [availableQuickStatusTypes, statusType]);
+
   function stopTileExpand(event: MouseEvent<HTMLElement>) {
     event.stopPropagation();
   }
@@ -145,6 +161,12 @@ export function ZoomQueueTile({ onExpand }: Props) {
 
   async function startStatusQuick() {
     if (!identity?.name || !statusType) return;
+
+    if (statusControlsLocked) {
+      window.alert("Punch in first before starting any status.");
+      return;
+    }
+
     setPosting("status");
     let slackTs: string | null = null;
     let slackPosted = false;
@@ -208,6 +230,12 @@ export function ZoomQueueTile({ onExpand }: Props) {
 
   async function quickPunch(action: "punch_in" | "punch_out") {
     if (!identity?.name || posting) return;
+
+    if (action === "punch_out" && youOnBreak && BREAK_ONLY_TYPES.has(youOnBreak.break_type)) {
+      window.alert(`Please end your ${youOnBreak.break_type} break before punching out.`);
+      return;
+    }
+
     setPosting(action);
 
     const storedIn = identity?.name ? localStorage.getItem(`zoom-queue:tile:punch-in:${identity.name.toLowerCase().trim()}`) : null;
@@ -358,10 +386,12 @@ export function ZoomQueueTile({ onExpand }: Props) {
                   <Select
                     size="xs"
                     style={{ flex: 1, minWidth: 0 }}
-                    data={QUICK_STATUS_TYPES}
+                    data={availableQuickStatusTypes}
                     value={statusType}
                     onChange={setStatusType}
                     allowDeselect={false}
+                    disabled={statusControlsLocked}
+                    description={statusControlsLocked ? "Punch in to unlock all status options." : undefined}
                   />
                   <Button
                     size="compact-xs"
@@ -370,6 +400,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
                     color="orange"
                     leftSection={<IconCoffee size={12} />}
                     loading={posting === "status"}
+                    disabled={statusControlsLocked}
                     onClick={() => void startStatusQuick()}
                   >
                     Start

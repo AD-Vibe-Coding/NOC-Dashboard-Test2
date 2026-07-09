@@ -92,6 +92,8 @@ const STATUS_TYPES = [
   { value: "Meeting - External", label: "🤝 Meeting - External" },
 ];
 
+const PRE_PUNCH_NON_MANAGER_ALLOWED_STATUS_TYPES = new Set(["Meeting - Internal", "Meeting - External", "Urgent Task"]);
+
 type Toast = {
   id: number;
   color: "green" | "yellow" | "red" | "blue";
@@ -299,6 +301,10 @@ export function ZoomQueueWidget() {
   });
 
   const effectiveName = (isManager ? (selectedName ?? identity?.name ?? "") : (identity?.name ?? "")).trim();
+  const isPunchedIn = lastPunchAction === "punch_in";
+  const availableStatusTypes = (!isManager && !isPunchedIn)
+    ? STATUS_TYPES.filter((option) => PRE_PUNCH_NON_MANAGER_ALLOWED_STATUS_TYPES.has(option.value))
+    : STATUS_TYPES;
   const effectiveNormalizedEmail = effectiveName
     ? `${effectiveName.toLowerCase().replace(/\s+/g, ".")}@vcom.local`
     : "";
@@ -336,7 +342,26 @@ export function ZoomQueueWidget() {
     };
   }, [effectiveName]);
 
+  useEffect(() => {
+    if (!statusType) return;
+    if (availableStatusTypes.some((option) => option.value === statusType)) return;
+    setStatusType(availableStatusTypes[0]?.value ?? null);
+  }, [availableStatusTypes, statusType]);
+
   function openPunchModal(action: "punch_in" | "punch_out") {
+    if (action === "punch_out") {
+      const activeStatus = effectiveName ? activeBreaks.find((b) => samePerson(b.employee_name, effectiveName)) : null;
+      if (activeStatus && BREAK_ONLY_TYPES.has(activeStatus.break_type)) {
+        window.alert(`Please end your ${activeStatus.break_type} break before punching out.`);
+        showToast({
+          color: "red",
+          title: "End break first",
+          body: `Please end your ${activeStatus.break_type} break before punching out.`,
+        });
+        return;
+      }
+    }
+
     const seed = action === "punch_in" ? punchInMessage : punchOutMessage;
     const entered = window.prompt(
       action === "punch_in" ? "Enter punch-in message" : "Enter punch-out message",
@@ -399,6 +424,15 @@ export function ZoomQueueWidget() {
   async function startStatus() {
     const trimmed = effectiveName;
     if (!trimmed || !statusType || posting) return;
+
+    if (!effectiveIsManager && !isPunchedIn && !PRE_PUNCH_NON_MANAGER_ALLOWED_STATUS_TYPES.has(statusType)) {
+      showToast({
+        color: "red",
+        title: "Punch in first",
+        body: "Non-managers must punch in before starting Lunch or any break status.",
+      });
+      return;
+    }
 
     const alreadyActive = activeBreaks.find((b) => samePerson(b.employee_name, trimmed));
     if (alreadyActive) {
@@ -1367,11 +1401,12 @@ export function ZoomQueueWidget() {
               <Grid.Col span={{ base: 12, md: isManager ? 6 : 4 }}>
                 <Select
                   label="Status"
-                  data={STATUS_TYPES}
+                  data={availableStatusTypes}
                   value={statusType}
                   onChange={setStatusType}
                   allowDeselect={false}
                   size="sm"
+                  description={!isManager && !isPunchedIn ? "Punch in to unlock Lunch and break options." : undefined}
                 />
               </Grid.Col>
               <Grid.Col span={{ base: 12, md: 2 }}>

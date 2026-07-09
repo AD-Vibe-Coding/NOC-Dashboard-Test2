@@ -37,6 +37,7 @@ const ALLOWED_TABLES = new Set([
   "kudos",
   "celebrations",
   "metric_disputes",
+  "noc_mttr_reports",
 ]);
 
 // Strip auto-managed columns from POST/PATCH payloads so callers can't

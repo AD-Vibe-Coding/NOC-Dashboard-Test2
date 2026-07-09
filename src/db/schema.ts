@@ -658,3 +658,21 @@ export const reminder_policies = pgTable("reminder_policies", {
   only_with_join_link: boolean("only_with_join_link"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+// =============================================================================
+// NOC MTTR Reports — saved workbook imports + selected column mappings
+// =============================================================================
+
+export const noc_mttr_reports = pgTable("noc_mttr_reports", {
+  id: serial("id").primaryKey(),
+  file_name: text("file_name").notNull(),
+  file_size_bytes: integer("file_size_bytes"),
+  uploaded_by: text("uploaded_by"),
+  selected_sheet_name: text("selected_sheet_name"),
+  selected_customer_column: text("selected_customer_column"),
+  selected_month_column: text("selected_month_column"),
+  selected_mttr_column: text("selected_mttr_column"),
+  parsed_json: text("parsed_json").notNull(),
+  row_count: integer("row_count").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
