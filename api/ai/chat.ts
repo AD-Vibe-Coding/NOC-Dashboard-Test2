@@ -1,25 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-/**
- * Production serverless port of vite-plugins/ai-proxy.ts.
- *
- * Forwards POST /api/ai/chat requests to the Devs.ai chat completions
- * endpoint with server-side Bearer auth, then streams the upstream SSE
- * response straight back to the browser.
- *
- * The frontend (src/lib/devs-ai/client.ts) doesn't care which environment
- * it's running in — it always POSTs to /api/ai/chat. In dev that's the
- * Vite middleware, in production it's this Vercel function. Both honor
- * the same env vars:
- *   - AI_API_KEY       (required) — Bearer token, never sent to the client
- *   - AI_AGENT_ID      (optional) — defaults to "auto"
- *   - AI_PLATFORM_URL  (optional) — defaults to https://devs.ai
- *
- * To deploy successfully on Vercel, those three variables MUST be set in
- * the Vercel project's Environment Variables (Settings → Environment
- * Variables). Without AI_API_KEY this function returns 500 and every AI
- * widget will show an error.
- */
 export default async function handler(
   req: VercelRequest,
   res: VercelResponse,
@@ -39,37 +19,32 @@ export default async function handler(
   const platformUrl = process.env.AI_PLATFORM_URL || "https://devs.ai";
 
   if (!apiKey) {
-    return res
-      .status(500)
-      .json({ error: "AI_API_KEY not configured on the server" });
+    return res.status(500).json({ error: "AI_API_KEY not configured on the server" });
   }
 
-  // Vercel auto-parses JSON bodies when Content-Type is application/json,
-  // so req.body is already an object. Fall back to manual parse if it's
-  // a string (older Vercel runtimes).
-  const body: { messages?: unknown; model?: string } =
+  const body: { input?: unknown; model?: string; previous_response_id?: unknown } =
     typeof req.body === "string"
       ? JSON.parse(req.body || "{}")
       : (req.body ?? {});
 
   const requestedModel = typeof body.model === "string" ? body.model.trim() : "";
-  const agentId = requestedModel && requestedModel !== "auto" ? requestedModel : "auto";
-
-  if (!Array.isArray(body.messages)) {
-    return res.status(400).json({ error: "messages must be an array" });
-  }
+  const model = requestedModel || process.env.AI_AGENT_ID || "auto";
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${platformUrl}/api/v1/chats/completions`, {
+    upstream = await fetch(`${platformUrl}/api/v2/responses`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: agentId,
-        messages: body.messages,
+        model,
+        input: typeof body.input === "string" ? body.input : "",
+        previous_response_id:
+          typeof body.previous_response_id === "string" && body.previous_response_id.trim()
+            ? body.previous_response_id
+            : undefined,
         stream: true,
       }),
     });
@@ -80,27 +55,18 @@ export default async function handler(
     });
   }
 
-  // Non-2xx upstream — drain the body as text and return a JSON error so
-  // the client sees a useful message instead of a half-open SSE stream.
   if (!upstream.ok) {
     const text = await upstream.text().catch(() => "");
-    console.error(
-      `[api/ai/chat] upstream returned ${upstream.status}:`,
-      text.slice(0, 500),
-    );
+    console.error(`[api/ai/chat] upstream returned ${upstream.status}:`, text.slice(0, 500));
     return res.status(upstream.status).json({
       error: `Upstream returned ${upstream.status}`,
       detail: text.slice(0, 500),
     });
   }
 
-  // Stream SSE back to the client. We MUST set headers before writing
-  // any chunks, and we must NOT call res.json() / res.send() afterward.
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
-  // Disable Vercel/edge buffering that would batch SSE chunks and break
-  // token-by-token streaming on the client.
   res.setHeader("X-Accel-Buffering", "no");
 
   if (!upstream.body) {
@@ -112,7 +78,6 @@ export default async function handler(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      // value is a Uint8Array; Vercel's res.write accepts Buffer/Uint8Array.
       res.write(value);
     }
   } catch (err) {
@@ -122,9 +87,6 @@ export default async function handler(
   }
 }
 
-// Tell Vercel this is a Node.js (not Edge) function, and give it enough
-// runtime to handle long LLM streams. Default maxDuration on Hobby is 10s,
-// which can cut off mid-response on a verbose answer; 60s is generous.
 export const config = {
   runtime: "nodejs",
   maxDuration: 60,

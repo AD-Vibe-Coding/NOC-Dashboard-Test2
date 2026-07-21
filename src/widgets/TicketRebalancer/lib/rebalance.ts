@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import type { ScoredTicket, RosterEntry, AgentLoad, RebalanceMove, RebalanceResult } from "./types";
-import { isManager, normalizeName } from "./team-config";
+import { TEAM, isManager, normalizeName } from "./team-config";
 import {
   type ShiftTransition,
   shiftById,
@@ -9,6 +9,29 @@ import {
 } from "./shifts";
 
 dayjs.extend(customParseFormat);
+
+function buildFallbackRosterEntry(name: string): RosterEntry | null {
+  const member = TEAM.find((entry) => normalizeName(entry.name) === normalizeName(name));
+  if (!member) return null;
+  return {
+    name: member.name,
+    tier: member.tier,
+    isManager: false,
+    cellRaw: "CONFIGURED_TEAM_FALLBACK",
+    status: "Available",
+    available: true,
+  };
+}
+
+function seedConfiguredTeamRoster(rosterByNorm: Map<string, RosterEntry>) {
+  for (const member of TEAM) {
+    const key = normalizeName(member.name);
+    if (!rosterByNorm.has(key)) {
+      const fallback = buildFallbackRosterEntry(member.name);
+      if (fallback) rosterByNorm.set(key, fallback);
+    }
+  }
+}
 
 // "Hot" = stage "Pending Carrier Action / Update" AND priority Critical or High.
 // These are the highest-weight (3.0 – 5.0) tickets actively waiting on
@@ -291,6 +314,7 @@ export function rebalance(
   // Index roster by normalized name.
   const rosterByNorm = new Map<string, RosterEntry>();
   for (const r of roster) rosterByNorm.set(normalizeName(r.name), r);
+  seedConfiguredTeamRoster(rosterByNorm);
 
   // Bucket tickets by owner.
   const ticketsByOwner = new Map<string, ScoredTicket[]>();
@@ -613,6 +637,7 @@ export function rebalanceShiftHandoff(
   const rosterByNorm = new Map<string, RosterEntry>();
   for (const r of roster) rosterByNorm.set(normalizeName(r.name), r);
   for (const r of sourceAgents) rosterByNorm.set(normalizeName(r.name), r);
+  seedConfiguredTeamRoster(rosterByNorm);
 
   // Bucket ALL tickets by owner (not just eligible). The per-agent table
   // displays full workload context — total tickets + total weight + hot

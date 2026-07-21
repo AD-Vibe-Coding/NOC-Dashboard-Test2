@@ -52,6 +52,7 @@ import { NotificationBell } from "./widgets/NotificationBell";
 import { useIdentity } from "./lib/identity";
 import {
   canAccess,
+  effectiveRoleForIdentity,
   ROLE_COLORS,
 } from "./lib/roles";
 import SignInPage from "./SignInPage";
@@ -93,10 +94,12 @@ function AppInner() {
   const isDark = computedColorScheme === "dark";
   const toggleColorScheme = () => setColorScheme(isDark ? "light" : "dark");
 
+  const effectiveRole = effectiveRoleForIdentity(identity);
+
   const visibleWidgets = useMemo(() => {
-    const accessible = !identity ? WIDGETS : WIDGETS.filter((w) => canAccess(identity.role, w.roles));
+    const accessible = !identity ? WIDGETS : WIDGETS.filter((w) => canAccess(effectiveRole, w.roles));
     return accessible.filter((w) => w.id !== "smart-search");
-  }, [identity]);
+  }, [effectiveRole, identity]);
 
   const featuredWidgets = useMemo(
     () => visibleWidgets.filter((w) => w.featured),
@@ -110,14 +113,14 @@ function AppInner() {
   useEffect(() => {
     // Manager-only: deep-link hashes open floating windows.
     // Tech dashboard uses hash routing locally to show full widget views.
-    if (!identity || identity.role !== "manager") return;
+    if (!identity || effectiveRole !== "manager") return;
 
     const fromHash = () => {
       const h = window.location.hash.replace(/^#\/?/, "");
       if (!h) return;
       const widget = WIDGETS.find((w) => w.id === h);
       if (!widget) return;
-      if (!canAccess(identity.role, widget.roles)) {
+      if (!canAccess(effectiveRole, widget.roles)) {
         window.location.hash = "";
         return;
       }
@@ -128,7 +131,7 @@ function AppInner() {
     fromHash();
     window.addEventListener("hashchange", fromHash);
     return () => window.removeEventListener("hashchange", fromHash);
-  }, [identity, openWindow]);
+  }, [effectiveRole, identity, openWindow]);
 
   useEffect(() => {
     if (!identity) return;
@@ -200,7 +203,7 @@ function AppInner() {
 
   // Role-tinted accent under the header. Falls back to the AppDirect brand teal
   // when there's no identity yet.
-  const accentColor = identity ? ROLE_COLORS[identity.role] : "appdirect";
+  const accentColor = effectiveRole ? ROLE_COLORS[effectiveRole] : "appdirect";
   const accentGradient = identity
     ? `linear-gradient(90deg, transparent 0%, var(--mantine-color-${accentColor}-7) 30%, var(--mantine-color-${accentColor}-6) 70%, transparent 100%)`
     : "linear-gradient(90deg, transparent 0%, rgba(0, 96, 128,0.65) 30%, rgba(0, 128, 166,0.65) 70%, transparent 100%)";
@@ -713,16 +716,18 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
       { id: "enhancement-tracker", emoji: "💡", label: "Enhancement Tracker", desc: "Ideas, approvals, and status", color: "yellow" },
+      { id: "building-apps-agents", emoji: "🧩", label: "Building Apps / Agents", desc: "Decision-ready intake wizard", color: "blue" },
     ],
   },
   {
     label: "Monitoring & Operations",
     items: [
-      { id: "logic-monitor",       emoji: "🔔", label: "LogicMonitor",      desc: "Alerts & alert analyzer",     color: "red" },
-      { id: "velocloud-api",       emoji: "🌐", label: "VeloCloud API",     desc: "SD-WAN alerts & link status", color: "cyan" },
-      { id: "zoom-call-metrics",   emoji: "📈", label: "Zoom Call Metrics", desc: "Queue call data",             color: "green" },
-      { id: "data-health",         emoji: "🗄️", label: "Data Health",       desc: "App data table counts",       color: "orange" },
-      { id: "ticket-audit",        emoji: "🔍", label: "Ticket Audit",      desc: "AI-powered QA audits",        color: "pink" },
+      { id: "logic-monitor",            emoji: "🔔", label: "LogicMonitor",             desc: "Alerts & alert analyzer",              color: "red" },
+      { id: "velocloud-api",            emoji: "🌐", label: "VeloCloud API",            desc: "SD-WAN alerts & link status",          color: "cyan" },
+      { id: "zoom-call-metrics",        emoji: "📈", label: "Zoom Call Metrics",        desc: "Queue call data",                      color: "green" },
+      { id: "data-health",              emoji: "🗄️", label: "Data Health",              desc: "App data table counts",                color: "orange" },
+      { id: "ticket-audit",             emoji: "🔍", label: "Ticket Audit",             desc: "AI-powered QA audits",                 color: "pink" },
+      { id: "performance-discussions",  emoji: "🗓️", label: "Half-Yearly Discussions", desc: "Manager performance discussion records", color: "red" },
     ],
   },
   {

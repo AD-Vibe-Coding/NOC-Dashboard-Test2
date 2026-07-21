@@ -1,5 +1,5 @@
 import PptxGenJS from "pptxgenjs";
-import { toPng } from "html-to-image";
+import { toBlob, toPng } from "html-to-image";
 import { downloadBlob } from "../../lib/download";
 
 export interface MttrPptChartTarget {
@@ -20,131 +20,79 @@ export interface MttrPptContext {
 }
 
 const BRAND = {
-  navy: "17324D",
-  slate: "2F4A63",
-  muted: "5A738D",
-  light: "EAF2F8",
-  border: "C6D6E3",
-  accent: "F59E0B",
   white: "FFFFFF",
 };
 
 const LAYOUT = "LAYOUT_WIDE";
 const SLIDE_W = 13.333;
 const SLIDE_H = 7.5;
-const HEADER_H = 0.75;
-const FOOTER_H = 0.38;
 
-function addFrame(slide: PptxGenJS.Slide, title?: string, subtitle?: string) {
-  slide.addShape("rect", {
-    x: 0,
-    y: 0,
-    w: SLIDE_W,
-    h: SLIDE_H,
-    line: { color: BRAND.border, pt: 1 },
-    fill: { color: BRAND.white },
-  });
-  slide.addShape("rect", {
-    x: 0,
-    y: 0,
-    w: SLIDE_W,
-    h: HEADER_H,
-    line: { color: BRAND.navy, pt: 0 },
-    fill: { color: BRAND.navy },
-  });
-  if (title) {
-    slide.addText(title, {
-      x: 0.45,
-      y: 0.18,
-      w: 8.8,
-      h: 0.26,
-      fontFace: "Aptos Display",
-      fontSize: 24,
-      bold: true,
-      color: BRAND.white,
-      margin: 0,
-    });
-  }
-  if (subtitle) {
-    slide.addText(subtitle, {
-      x: 0.45,
-      y: 0.46,
-      w: 9.8,
-      h: 0.16,
-      fontFace: "Aptos",
-      fontSize: 9,
-      color: "D9E6F1",
-      margin: 0,
-    });
-  }
-  slide.addText("vCom NOC MTTR Report", {
-    x: 10.6,
-    y: 7.08,
-    w: 2.3,
-    h: 0.16,
-    align: "right",
-    fontFace: "Aptos",
-    fontSize: 8,
-    color: BRAND.muted,
-    margin: 0,
-  });
-  slide.addShape("line", {
-    x: 0.35,
-    y: SLIDE_H - FOOTER_H,
-    w: 12.65,
-    h: 0,
-    line: { color: BRAND.border, pt: 1 },
-  });
+function imageSizingFill(dataUrl: string, x: number, y: number, w: number, h: number) {
+  return { data: dataUrl, x, y, w, h };
 }
 
-function addBulletList(slide: PptxGenJS.Slide, items: string[], x: number, y: number, w: number) {
-  let currentY = y;
-  for (const item of items) {
-    slide.addShape("ellipse", {
-      x,
-      y: currentY + 0.08,
-      w: 0.09,
-      h: 0.09,
-      line: { color: BRAND.accent, pt: 0 },
-      fill: { color: BRAND.accent },
-    });
-    slide.addText(item, {
-      x: x + 0.18,
-      y: currentY,
-      w,
-      h: 0.3,
-      fontFace: "Aptos",
-      fontSize: 14,
-      color: BRAND.slate,
-      breakLine: false,
-      margin: 0,
-      valign: "mid" as any,
-    });
-    currentY += 0.42;
-  }
+function getCaptureDimensions(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  const width = Math.max(1, Math.round(rect.width || element.offsetWidth || 1600));
+  const height = Math.max(1, Math.round(rect.height || element.offsetHeight || 900));
+
+  return { width, height };
 }
 
-function imageSizingContain(dataUrl: string, x: number, y: number, w: number, h: number) {
-  return { data: dataUrl, x, y, w, h, sizing: { type: "contain", x, y, w, h } as const };
-}
+function buildCaptureOptions(element: HTMLElement) {
+  const { width, height } = getCaptureDimensions(element);
 
-async function captureElement(element: HTMLElement): Promise<string> {
-  return await toPng(element, {
+  return {
     cacheBust: true,
     pixelRatio: 2,
     backgroundColor: "#ffffff",
     skipFonts: false,
-  });
+    width,
+    height,
+    canvasWidth: width * 2,
+    canvasHeight: height * 2,
+    style: {
+      width: `${width}px`,
+      height: `${height}px`,
+      maxWidth: `${width}px`,
+      minWidth: `${width}px`,
+      maxHeight: `${height}px`,
+      minHeight: `${height}px`,
+      margin: "0",
+      inset: "auto",
+      transform: "none",
+      boxSizing: "border-box",
+    },
+  };
 }
 
-function formatDateTime(date: Date) {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(date);
+async function captureElement(element: HTMLElement): Promise<string> {
+  return await toPng(element, buildCaptureOptions(element));
+}
+
+export async function copyElementImageToClipboard(element: HTMLElement, filename: string) {
+  const blob = await toBlob(element, buildCaptureOptions(element));
+
+  if (!blob) {
+    throw new Error("Failed to capture panel image.");
+  }
+
+  if (typeof window === "undefined" || !("ClipboardItem" in window) || !navigator.clipboard?.write) {
+    downloadBlob(blob, filename);
+    return { copied: false, downloaded: true };
+  }
+
+  try {
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        [blob.type || "image/png"]: blob,
+      }),
+    ]);
+    return { copied: true, downloaded: false };
+  } catch {
+    downloadBlob(blob, filename);
+    return { copied: false, downloaded: true };
+  }
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -169,192 +117,22 @@ export async function exportNocMttrPowerPoint(context: MttrPptContext) {
 
   const chartTargets = context.charts.filter((chart) => chart.element);
   const capturedCharts = await Promise.all(
-    chartTargets.map(async (chart) => ({
-      ...chart,
-      imageData: await captureElement(chart.element as HTMLElement),
-    })),
-  );
+    chartTargets.map(async (chart) => {
+      const rootElement = chart.element as HTMLElement;
+      const captureTarget = (rootElement.querySelector('[data-copy-root="true"]') as HTMLElement | null) ?? rootElement;
 
-  const cover = pptx.addSlide();
-  addFrame(cover, "NOC MTTR Report", context.reportName);
-  cover.addText(context.customerName, {
-    x: 0.62,
-    y: 1.18,
-    w: 8.4,
-    h: 0.5,
-    fontFace: "Aptos Display",
-    fontSize: 28,
-    bold: true,
-    color: BRAND.navy,
-    margin: 0,
-  });
-  cover.addText("Monthly operational trends, chart pack, and chronic circuit summary", {
-    x: 0.62,
-    y: 1.72,
-    w: 8.8,
-    h: 0.28,
-    fontFace: "Aptos",
-    fontSize: 16,
-    color: BRAND.slate,
-    margin: 0,
-  });
-  cover.addShape("roundRect", {
-    x: 0.62,
-    y: 2.2,
-    w: 5.65,
-    h: 1.32,
-    rectRadius: 0.08,
-    line: { color: BRAND.border, pt: 1 },
-    fill: { color: BRAND.light },
-  });
-  cover.addText(
-    [
-      { text: "Generated by: ", options: { bold: true, color: BRAND.navy } },
-      { text: context.generatedBy, options: { color: BRAND.slate } },
-      { text: "\nGenerated at: ", options: { bold: true, color: BRAND.navy } },
-      { text: formatDateTime(context.generatedAt), options: { color: BRAND.slate } },
-      { text: "\nWorkbook sheet: ", options: { bold: true, color: BRAND.navy } },
-      { text: context.selectedSheetName || "Primary trend sheet", options: { color: BRAND.slate } },
-    ],
-    {
-      x: 0.92,
-      y: 2.48,
-      w: 4.95,
-      h: 0.76,
-      fontFace: "Aptos",
-      fontSize: 13,
-      breakLine: false,
-      margin: 0,
-      valign: "mid" as any,
-    },
-  );
-  cover.addShape("roundRect", {
-    x: 8.15,
-    y: 1.22,
-    w: 4.32,
-    h: 2.3,
-    rectRadius: 0.08,
-    line: { color: BRAND.border, pt: 1 },
-    fill: { color: "F8FBFD" },
-  });
-  cover.addText("APPLIED FILTERS", {
-    x: 8.48,
-    y: 1.46,
-    w: 2.2,
-    h: 0.18,
-    fontFace: "Aptos",
-    fontSize: 11,
-    bold: true,
-    color: BRAND.muted,
-    margin: 0,
-  });
-  addBulletList(cover, context.filtersSummary.length > 0 ? context.filtersSummary : ["No additional filters applied"], 8.48, 1.8, 3.45);
-
-  const overview = pptx.addSlide();
-  addFrame(overview, "Deck overview", "Template-style export generated from the Charts tab");
-  overview.addText("Included slides", {
-    x: 0.62,
-    y: 1.05,
-    w: 3.4,
-    h: 0.28,
-    fontFace: "Aptos Display",
-    fontSize: 20,
-    bold: true,
-    color: BRAND.navy,
-    margin: 0,
-  });
-  addBulletList(
-    overview,
-    capturedCharts.map((chart, index) => `${index + 1}. ${chart.title}`).concat("Final thank-you slide"),
-    0.72,
-    1.52,
-    5.3,
-  );
-  overview.addShape("roundRect", {
-    x: 7.05,
-    y: 1.14,
-    w: 5.55,
-    h: 2.2,
-    rectRadius: 0.08,
-    line: { color: BRAND.border, pt: 1 },
-    fill: { color: BRAND.light },
-  });
-  overview.addText("EXPORT NOTES", {
-    x: 7.36,
-    y: 1.42,
-    w: 2.4,
-    h: 0.16,
-    fontFace: "Aptos",
-    fontSize: 11,
-    bold: true,
-    color: BRAND.muted,
-    margin: 0,
-  });
-  overview.addText(
-    [
-      { text: "• ", options: { color: BRAND.accent } },
-      { text: "Each chart slide is captured from the live Charts tab so the deck matches the current filters.\n", options: { color: BRAND.slate } },
-      { text: "• ", options: { color: BRAND.accent } },
-      { text: "The chronic circuits table is included as its own slide.\n", options: { color: BRAND.slate } },
-      { text: "• ", options: { color: BRAND.accent } },
-      { text: "Cover slide customer text is replaced with the active customer selection.", options: { color: BRAND.slate } },
-    ],
-    {
-      x: 7.36,
-      y: 1.75,
-      w: 4.8,
-      h: 1.2,
-      fontFace: "Aptos",
-      fontSize: 13,
-      margin: 0,
-      breakLine: false,
-      valign: "mid" as any,
-    },
+      return {
+        ...chart,
+        imageData: await captureElement(captureTarget),
+      };
+    }),
   );
 
   for (const chart of capturedCharts) {
     const slide = pptx.addSlide();
     slide.background = { color: BRAND.white };
-    slide.addImage(imageSizingContain(chart.imageData, 0, 0, SLIDE_W, SLIDE_H));
+    slide.addImage(imageSizingFill(chart.imageData, 0, 0, SLIDE_W, SLIDE_H));
   }
-
-  const thanks = pptx.addSlide();
-  addFrame(thanks, "Thank you", context.reportName);
-  thanks.addText("Thank you", {
-    x: 0.65,
-    y: 1.68,
-    w: 4.1,
-    h: 0.6,
-    fontFace: "Aptos Display",
-    fontSize: 30,
-    bold: true,
-    color: BRAND.navy,
-    margin: 0,
-  });
-  thanks.addText(context.thankYouLine || `Questions on ${context.customerName}'s MTTR trends?`, {
-    x: 0.65,
-    y: 2.35,
-    w: 6.6,
-    h: 0.32,
-    fontFace: "Aptos",
-    fontSize: 18,
-    color: BRAND.slate,
-    margin: 0,
-  });
-  thanks.addShape("roundRect", {
-    x: 8,
-    y: 1.5,
-    w: 4.1,
-    h: 2.1,
-    rectRadius: 0.08,
-    line: { color: BRAND.border, pt: 1 },
-    fill: { color: BRAND.light },
-  });
-  addBulletList(thanks, [
-    `Slides exported: ${capturedCharts.length + 3}`,
-    `Customer: ${context.customerName}`,
-    `Prepared by ${context.generatedBy}`,
-  ], 8.28, 1.95, 3.2);
 
   const blob = (await pptx.write({ outputType: "blob" })) as Blob;
   const filename = `noc-mttr-${sanitizeFilenamePart(context.customerName)}-${sanitizeFilenamePart(context.reportName)}.pptx`;

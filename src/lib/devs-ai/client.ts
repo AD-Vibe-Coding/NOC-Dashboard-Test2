@@ -1,51 +1,54 @@
-// SSE client for the Devs.ai chat completions endpoint (via /api/ai/chat
-// server proxy). Parses the platform's named event stream:
-//
-//   event: message.delta
-//   data: { "type": "message.delta", "content": { "type": "text", "text": "..." } }
-//
-//   event: message.complete
-//   data: { "type": "message.complete" }
-//
-//   event: message.error
-//   data: { "error": "..." }
-//
-// DO NOT modify the parser logic — it correctly handles buffering, partial
-// chunks, keep-alive comments, and blank-line event boundaries.
-
 export type Message = { role: "user" | "assistant"; content: string };
 
+export type SendOptions = {
+  model?: string;
+  previousResponseId?: string | null;
+};
+
 export async function sendMessage(
-  messages: Message[],
+  input: string,
+  opts: SendOptions,
   onDelta: (text: string) => void,
-  onComplete: () => void,
+  onComplete: (responseId: string | null) => void,
   onError: (err: string) => void,
   signal?: AbortSignal,
-  model?: string,
 ) {
-  let res: Response;
-  try {
-    res = await fetch("/api/ai/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, model }),
-      signal,
-    });
-  } catch (err) {
-    onError(err instanceof Error ? err.message : String(err));
-    return;
-  }
-  if (!res.ok || !res.body) {
-    onError("Request failed: " + res.status);
-    return;
-  }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let currentEvent = "";
-  let currentData = "";
+  let responseId: string | null = null;
+  let settled = false;
+  const finish = (id: string | null) => {
+    if (!settled) {
+      settled = true;
+      onComplete(id);
+    }
+  };
+  const fail = (msg: string) => {
+    if (!settled) {
+      settled = true;
+      onError(msg);
+    }
+  };
 
   try {
+    const res = await fetch("/api/ai/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        input,
+        model: opts.model,
+        previous_response_id: opts.previousResponseId ?? undefined,
+      }),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      fail("Request failed: " + res.status);
+      return;
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let currentEvent = "";
+    let currentData = "";
+
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -60,15 +63,16 @@ export async function sendMessage(
         } else if (line.startsWith(":")) {
           // SSE comment (keep-alive), ignore
         } else if (line === "") {
-          if (currentEvent && currentData) {
+          if (currentEvent && currentData && currentData !== "[DONE]") {
             try {
               const parsed = JSON.parse(currentData);
-              if (currentEvent === "message.delta" && parsed.content?.text) {
-                onDelta(parsed.content.text);
-              } else if (currentEvent === "message.complete") {
-                onComplete();
-              } else if (currentEvent === "message.error") {
-                onError(parsed.error || "Stream error");
+              if (currentEvent === "response.output_text.delta") {
+                if (typeof parsed.delta === "string") onDelta(parsed.delta);
+              } else if (currentEvent === "response.created" || currentEvent === "response.completed") {
+                if (parsed.response?.id) responseId = parsed.response.id;
+                if (currentEvent === "response.completed") finish(responseId);
+              } else if (currentEvent === "response.failed") {
+                fail(parsed.response?.error?.message || "Stream error");
               }
             } catch {
               // skip malformed JSON
@@ -80,6 +84,8 @@ export async function sendMessage(
       }
     }
   } catch (err) {
-    onError(err instanceof Error ? err.message : String(err));
+    if (!signal?.aborted) fail(err instanceof Error ? err.message : "Stream error");
+  } finally {
+    finish(null);
   }
 }

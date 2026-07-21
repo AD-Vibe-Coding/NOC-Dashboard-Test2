@@ -237,6 +237,49 @@ export const performance_metrics = pgTable("performance_metrics", {
 // Manager Updates — news ticker / bulletin board
 // =============================================================================
 
+export const performance_discussions = pgTable("performance_discussions", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  manager_name: text("manager_name").notNull(),
+  cycle_label: text("cycle_label").notNull(),
+  period_start: text("period_start").notNull(),
+  period_end: text("period_end").notNull(),
+  status: text("status").notNull(), // draft | scheduled | completed
+  scheduled_date: text("scheduled_date"),
+  discussion_date: text("discussion_date"),
+  overall_summary: text("overall_summary"),
+  strengths: text("strengths"),
+  growth_areas: text("growth_areas"),
+  manager_notes: text("manager_notes"),
+  employee_commitments: text("employee_commitments"),
+  metrics_snapshot_json: text("metrics_snapshot_json"),
+  updated_at: text("updated_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const performance_discussion_submissions = pgTable("performance_discussion_submissions", {
+  id: serial("id").primaryKey(),
+  employee_name: text("employee_name").notNull(),
+  cycle_label: text("cycle_label").notNull(),
+  period_start: text("period_start").notNull(),
+  period_end: text("period_end").notNull(),
+  submission_status: text("submission_status").notNull(), // draft | submitted
+  opening_notes: text("opening_notes"),
+  business_impact_notes: text("business_impact_notes"),
+  behaviors_notes: text("behaviors_notes"),
+  feedback_notes: text("feedback_notes"),
+  engagement_notes: text("engagement_notes"),
+  development_notes: text("development_notes"),
+  second_half_priorities: text("second_half_priorities"),
+  closing_summary: text("closing_summary"),
+  overall_summary: text("overall_summary"),
+  employee_commitments: text("employee_commitments"),
+  metrics_snapshot_json: text("metrics_snapshot_json"),
+  submitted_at: text("submitted_at"),
+  updated_at: text("updated_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const manager_updates = pgTable("manager_updates", {
   id: serial("id").primaryKey(),
   author_name: text("author_name").notNull(),

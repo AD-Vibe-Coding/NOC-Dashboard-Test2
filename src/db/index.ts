@@ -117,6 +117,8 @@ type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
 type TeamMemberRow = typeof schema.team_members.$inferSelect;
 type ManagerUpdateRow = typeof schema.manager_updates.$inferSelect;
+type PerformanceDiscussionRow = typeof schema.performance_discussions.$inferSelect;
+type PerformanceDiscussionSubmissionRow = typeof schema.performance_discussion_submissions.$inferSelect;
 type EnhancementRow = typeof schema.enhancements.$inferSelect;
 type KudosRow = typeof schema.kudos.$inferSelect;
 type CelebrationRow = typeof schema.celebrations.$inferSelect;
@@ -154,6 +156,8 @@ export const db = {
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
   team_members: tableClient<TeamMemberRow>("team_members"),
   manager_updates: tableClient<ManagerUpdateRow>("manager_updates"),
+  performance_discussions: tableClient<PerformanceDiscussionRow>("performance_discussions"),
+  performance_discussion_submissions: tableClient<PerformanceDiscussionSubmissionRow>("performance_discussion_submissions"),
   enhancements: tableClient<EnhancementRow>("enhancements"),
   kudos: tableClient<KudosRow>("kudos"),
   celebrations: tableClient<CelebrationRow>("celebrations"),

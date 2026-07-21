@@ -49,7 +49,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
       { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-checklist", "qs-escalations"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
   focus: {
@@ -59,7 +59,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor"] },
       { key: "communication", hidden: true, itemIds: ["shift-checklist", "escalation-email", "email-polisher", "qs-escalations"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
-      { key: "team", hidden: true, itemIds: ["kudos-board"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board", "building-apps-agents", "performance-discussions"] },
     ],
   },
   operations: {
@@ -69,7 +69,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "mobility-troubleshooter", "smart-search", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
   learning: {
@@ -79,7 +79,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "my-work", hidden: false, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "my-day", "break-tracker"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
   "command-center": {
@@ -89,7 +89,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "escalation-email", "qs-escalations", "email-polisher"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "noc-troubleshooter", "mobility-troubleshooter", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
   velocity: {
@@ -99,7 +99,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "queue-monitoring", hidden: false, itemIds: ["logic-monitor"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
       { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: true, itemIds: ["kudos-board"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board", "building-apps-agents", "performance-discussions"] },
     ],
   },
   "night-shift": {
@@ -109,7 +109,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "qs-escalations", "escalation-email", "email-polisher"] },
       { key: "requests", hidden: true, itemIds: ["training-updates", "wfh"] },
-      { key: "team", hidden: true, itemIds: ["kudos-board"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board", "building-apps-agents", "performance-discussions"] },
     ],
   },
   minimalist: {
@@ -119,7 +119,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: true, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["logic-monitor"] },
       { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: true, itemIds: ["kudos-board"] },
+      { key: "team", hidden: true, itemIds: ["kudos-board", "building-apps-agents", "performance-discussions"] },
     ],
   },
   trainer: {
@@ -129,7 +129,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "mobility-troubleshooter", "noc-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
   "escalation-desk": {
@@ -139,7 +139,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "performance-tracker", "noc-mttr-report", "break-tracker"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "enhancement-tracker"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "building-apps-agents", "performance-discussions"] },
     ],
   },
 };
@@ -187,6 +187,8 @@ const REQUIRED_WIDGETS: Array<{ id: string; section: DashboardSectionKey; afterI
   { id: "timezone-helper", section: "ai-tools" },
   { id: "celebrations-tracker", section: "team", afterId: "kudos-board" },
   { id: "enhancement-tracker", section: "team", afterId: "celebrations-tracker" },
+  { id: "building-apps-agents", section: "team", afterId: "enhancement-tracker" },
+  { id: "performance-discussions", section: "queue-monitoring", afterId: "logic-monitor" },
 ];
 
 function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>): Record<DashboardTemplate, DashboardLayoutState> {
@@ -195,11 +197,22 @@ function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>
   // layout must not prevent injection into another template that's missing it.
   for (const tmpl of Object.keys(result) as DashboardTemplate[]) {
     for (const { id, section, afterId } of REQUIRED_WIDGETS) {
-      const idsInTemplate = result[tmpl].sections.flatMap((s) => s.itemIds);
-      if (idsInTemplate.includes(id)) continue; // already present in THIS template
+      let alreadyInTarget = false;
+
+      const strippedSections = result[tmpl].sections.map((s) => {
+        const filteredIds = s.itemIds.filter((itemId) => itemId !== id);
+        if (s.key === section && filteredIds.length !== s.itemIds.length) {
+          alreadyInTarget = true;
+        }
+        return filteredIds.length === s.itemIds.length ? s : { ...s, itemIds: filteredIds };
+      });
+
       result[tmpl] = {
-        sections: result[tmpl].sections.map((s) => {
+        sections: strippedSections.map((s) => {
           if (s.key !== section) return s;
+          if (s.itemIds.includes(id) || alreadyInTarget) {
+            return s.itemIds.includes(id) ? s : { ...s, itemIds: [...s.itemIds, id] };
+          }
           const idx = afterId ? s.itemIds.indexOf(afterId) : -1;
           const newIds = [...s.itemIds];
           newIds.splice(idx >= 0 ? idx + 1 : newIds.length, 0, id);

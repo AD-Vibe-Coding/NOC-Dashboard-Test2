@@ -14,6 +14,7 @@
 
 import "dotenv/config";
 import { verifyJwt } from "./jwt.js";
+import { defaultRoleFor, lookupByEmail } from "./roles.js";
 
 /**
  * Parse the session cookie and return the verified JWT payload.
@@ -46,7 +47,12 @@ export function getSession(req) {
  */
 export function requireManager(req, res) {
   const session = getSession(req);
-  if (!session || session.role !== "manager") {
+  const fallbackRole = session
+    ? lookupByEmail(String(session.email ?? "").toLowerCase())?.role ?? defaultRoleFor(String(session.name ?? ""))
+    : null;
+  const effectiveRole = session?.role ?? fallbackRole;
+
+  if (!session || effectiveRole !== "manager") {
     const send = typeof res.status === "function"
       ? (code, body) => res.status(code).json(body)   // Vercel-style
       : (code, body) => {                               // raw Node http

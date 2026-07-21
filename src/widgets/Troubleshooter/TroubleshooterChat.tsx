@@ -153,17 +153,18 @@ export function TroubleshooterChat({
       // chat-completions endpoint behaves consistently across agent IDs
       // and raw LLM models — both treat the first user message as the
       // de-facto instruction frame.
-      const wire: Message[] = [
-        { role: "user", content: systemPrompt },
-        ...next.slice(0, -1).map(({ role, content }) => ({ role, content })),
-      ];
+      const wire = [
+        systemPrompt,
+        ...next.slice(0, -1).map(({ role, content }) => `${role.toUpperCase()}: ${content}`),
+      ].join("\n\n");
 
       let assembled = "";
       abortRef.current = new AbortController();
 
       await sendMessage(
         wire,
-        (delta) => {
+        { model: agentId, previousResponseId: null },
+        (delta: string) => {
           assembled += delta;
           setMessages((prev) => {
             const updated = [...prev];
@@ -191,7 +192,6 @@ export function TroubleshooterChat({
           });
         },
         abortRef.current.signal,
-        agentId,
       );
     },
     [messages, systemPrompt, isStreaming, agentId],

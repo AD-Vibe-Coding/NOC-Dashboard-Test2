@@ -147,6 +147,10 @@ const REFINEMENT_OPTIONS: RefinementOption[] = [
   { value: "executive", label: "Executive summary" },
 ];
 
+const DIRECT_AI_SOURCE_CHARS = 18_000;
+const AI_CHUNK_CHARS = 14_000;
+const AI_COMBINED_SUMMARY_CHARS = 20_000;
+
 const ESC_INTERNAL_PROMPT = `You are an experienced NOC technician at vCom drafting an internal escalation email to the carrier-escalation team.
 Return markdown that starts with \"Subject:\" followed by a blank line and the email body.
 Use first-person plural voice for vCom, such as \"we want to escalate\", \"we would like to escalate\", or \"we need support with\".
@@ -372,15 +376,15 @@ export function EmailAssistantWidget() {
   const [extracting, setExtracting] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const carrierAi = useCompletion();
-  const internalAi = useCompletion();
-  const customerAi = useCompletion();
-  const executiveAi = useCompletion();
-  const polishCustomerAi = useCompletion();
-  const polishInternalAi = useCompletion();
-  const polishCarrierAi = useCompletion();
-  const polishExecutiveAi = useCompletion();
-  const refineAi = useCompletion();
+  const carrierAi = useCompletion({ model: "auto" });
+  const internalAi = useCompletion({ model: "auto" });
+  const customerAi = useCompletion({ model: "auto" });
+  const executiveAi = useCompletion({ model: "auto" });
+  const polishCustomerAi = useCompletion({ model: "auto" });
+  const polishInternalAi = useCompletion({ model: "auto" });
+  const polishCarrierAi = useCompletion({ model: "auto" });
+  const polishExecutiveAi = useCompletion({ model: "auto" });
+  const refineAi = useCompletion({ model: "auto" });
 
   const sourceText = notes;
   const normalizedSource = useMemo(() => normalizeSourceText(sourceText), [sourceText]);
@@ -568,8 +572,8 @@ export function EmailAssistantWidget() {
 
     if (uploadedMhtml) {
       lines.push("Primary source: uploaded ticket data dump (.mhtml) exported from the ticketing tool.");
-      lines.push("Review the entire extracted dump below before drafting.");
-      lines.push("Use the full ticket history, timestamps, status notes, and metadata in the dump — not just the short extracted fields above.");
+      lines.push("Review the extracted dump below before drafting.");
+      lines.push("Use the ticket history, timestamps, status notes, and metadata in the dump — not just the short extracted fields above.");
       lines.push("Treat any manually filled fields as overrides or clarifications, but keep the uploaded dump as the source of truth unless the user clearly changed the text.");
       lines.push("Generate the strongest complete email you can from the full record, with no placeholders.");
     } else {
@@ -581,9 +585,107 @@ export function EmailAssistantWidget() {
     return lines.map((line) => `- ${line}`).join("\n");
   }
 
+  function splitSourceIntoChunks(source: string, maxChars = AI_CHUNK_CHARS) {
+    const normalized = source.trim();
+    if (!normalized) return [];
+    if (normalized.length <= maxChars) return [normalized];
+
+    const chunks: string[] = [];
+    let start = 0;
+
+    while (start < normalized.length) {
+      let end = Math.min(start + maxChars, normalized.length);
+      if (end < normalized.length) {
+        const boundary = normalized.lastIndexOf("\n", end);
+        if (boundary > start + Math.floor(maxChars * 0.6)) end = boundary;
+      }
+      const chunk = normalized.slice(start, end).trim();
+      if (chunk) chunks.push(chunk);
+      start = end;
+    }
+
+    return chunks;
+  }
+
+  async function buildAiSourceForDraft(source: string, mode: "escalation" | "polish") {
+    if (source.length <= DIRECT_AI_SOURCE_CHARS) return source;
+
+    const chunks = splitSourceIntoChunks(source);
+    showToast({
+      color: "blue",
+      title: "Processing full ticket dump",
+      body: `This upload is being analyzed in ${chunks.length} sections so we can use the full record without truncating it.`,
+    });
+
+    const chunkSummaries: string[] = [];
+    for (let index = 0; index < chunks.length; index += 1) {
+      const prompt = [
+        "You are preparing source material for a NOC email drafting assistant.",
+        `Summarize section ${index + 1} of ${chunks.length} from a full ticket dump.`,
+        "Preserve concrete facts only: timestamps, status changes, customer impact, carrier statements, dispatch details, ETA/ETTR, tests performed, findings, ticket IDs, circuit IDs, site/address references, and promised next steps.",
+        "Do not write the final email.",
+        "Use concise markdown bullets under these headings when relevant: Timeline, Current Status, Impact, Carrier Activity, Troubleshooting, Risks, Next Update / Ask.",
+        "If a detail is absent, skip it. Do not invent anything.",
+        "",
+        `Ticket dump section ${index + 1}:`,
+        chunks[index],
+      ].join("\n");
+
+      const summary = await refineAi.complete(prompt);
+      if (!summary.trim()) {
+        throw new Error(refineAi.error ?? `The AI could not summarize section ${index + 1}.`);
+      }
+      chunkSummaries.push(`## Section ${index + 1}\n${summary.trim()}`);
+    }
+
+    const combined = chunkSummaries.join("\n\n");
+    if (combined.length <= AI_COMBINED_SUMMARY_CHARS) {
+      return [
+        "The full uploaded ticket dump was processed in sections.",
+        "Use the consolidated section summaries below as the complete source of record for drafting.",
+        "",
+        combined,
+      ].join("\n");
+    }
+
+    const finalPrompt = [
+      `You are consolidating section summaries from a full NOC ticket dump for ${mode} email drafting.`,
+      "Preserve all material facts across every section.",
+      "Return markdown with these headings when relevant: Executive Snapshot, Timeline, Current Status, Impact, Carrier / Vendor Activity, Troubleshooting Performed, Outstanding Risks, Next Update / Requested Action.",
+      "Do not draft the email yet, and do not omit late-stage updates.",
+      "",
+      "Section summaries:",
+      combined,
+    ].join("\n");
+
+    const finalSummary = await refineAi.complete(finalPrompt);
+    if (!finalSummary.trim()) {
+      throw new Error(refineAi.error ?? "The AI could not consolidate the full ticket dump.");
+    }
+
+    return [
+      "The full uploaded ticket dump was processed in sections and consolidated below.",
+      "Use this consolidated summary as the complete source of record for drafting.",
+      "",
+      finalSummary.trim(),
+    ].join("\n");
+  }
+
   async function runEscalationVariant(key: EscalationVariantKey) {
     if (!normalizedSource.trim()) {
       showToast({ color: "red", title: "Paste investigation notes first" });
+      return;
+    }
+
+    let aiSource = normalizedSource;
+    try {
+      aiSource = await buildAiSourceForDraft(normalizedSource, "escalation");
+    } catch (err) {
+      showToast({
+        color: "red",
+        title: "Ticket dump processing failed",
+        body: err instanceof Error ? err.message : "The uploaded record could not be prepared for drafting.",
+      });
       return;
     }
 
@@ -602,10 +704,10 @@ export function EmailAssistantWidget() {
     ].filter(Boolean).map((line) => `- ${line}`).join("\n");
 
     const prompts: Record<EscalationVariantKey, string> = {
-      carrier: `${ESC_OUTBOUND_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${normalizedSource}`,
-      internal: `${ESC_INTERNAL_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${normalizedSource}`,
-      customer: `${CUSTOMER_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best customer-ready email based on this full source record:\n${normalizedSource}`,
-      executive: `${EXEC_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best executive summary email based on this full source record:\n${normalizedSource}`,
+      carrier: `${ESC_OUTBOUND_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${aiSource}`,
+      internal: `${ESC_INTERNAL_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nFull source text to review before drafting:\n${aiSource}`,
+      customer: `${CUSTOMER_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best customer-ready email based on this full source record:\n${aiSource}`,
+      executive: `${EXEC_PROMPT}\n\nHow to use the source:\n${sourceReviewInstructions}\n\nKnown details:\n${promptBase}\n\nDraft the best executive summary email based on this full source record:\n${aiSource}`,
     };
 
     const runners = {
@@ -616,6 +718,11 @@ export function EmailAssistantWidget() {
     } as const;
 
     const result = await runners[key].complete(prompts[key]);
+    if (!result.trim()) {
+      const err = runners[key].error ?? "The AI did not return a draft.";
+      showToast({ color: "red", title: "Draft generation failed", body: err });
+      return;
+    }
     const parsed = splitSubjectBody(result);
     updateOutput(key, parsed);
 
@@ -644,6 +751,18 @@ export function EmailAssistantWidget() {
       return;
     }
 
+    let aiSource = normalizedSource;
+    try {
+      aiSource = await buildAiSourceForDraft(normalizedSource, "polish");
+    } catch (err) {
+      showToast({
+        color: "red",
+        title: "Ticket dump processing failed",
+        body: err instanceof Error ? err.message : "The uploaded record could not be prepared for drafting.",
+      });
+      return;
+    }
+
     const refinementInstruction = REFINEMENT_OPTIONS.find((option) => option.value === selectedRefinement)?.label ?? "Shorter";
     const intentLabel = POLISH_INTENTS.find((option) => option.value === polishIntent)?.label ?? polishIntent;
     const audience = POLISH_VARIANTS.find((variant) => variant.key === key)?.audience ?? "customer";
@@ -663,7 +782,7 @@ export function EmailAssistantWidget() {
       mergedContext.ask ? `Key ask: ${mergedContext.ask}` : "",
       senderName ? `Sender: ${senderName}` : "",
       `Carrier-specific guidance: ${carrierStyleGuidance(carrierWithContacts?.carrier ?? carrierOverride ?? "Carrier")}`,
-    ].filter(Boolean).map((line) => `- ${line}`).join("\n")}\n\nFull source text to review before drafting the best email:\n${normalizedSource}`;
+    ].filter(Boolean).map((line) => `- ${line}`).join("\n")}\n\nFull source text to review before drafting the best email:\n${aiSource}`;
 
     const runners = {
       "polish-customer": polishCustomerAi,
@@ -673,6 +792,11 @@ export function EmailAssistantWidget() {
     } as const;
 
     const result = await runners[key].complete(prompt);
+    if (!result.trim()) {
+      const err = runners[key].error ?? "The AI did not return a draft.";
+      showToast({ color: "red", title: "Draft generation failed", body: err });
+      return;
+    }
     const parsed = splitSubjectBody(result);
     updateOutput(key, parsed);
     await db.polished_emails.insert({
@@ -742,7 +866,7 @@ export function EmailAssistantWidget() {
     (selectedOutputKey === "polish-executive" && polishExecutiveAi.isLoading) ||
     false;
 
-  const globalBusy = [carrierAi, internalAi, customerAi, executiveAi, polishCustomerAi, polishInternalAi, polishCarrierAi, polishExecutiveAi].some((item) => item.isLoading);
+  const globalBusy = [carrierAi, internalAi, customerAi, executiveAi, polishCustomerAi, polishInternalAi, polishCarrierAi, polishExecutiveAi, refineAi].some((item) => item.isLoading);
 
   return (
     <WidgetFrame
@@ -864,6 +988,7 @@ export function EmailAssistantWidget() {
                     polishInternalAi.abort();
                     polishCarrierAi.abort();
                     polishExecutiveAi.abort();
+                    refineAi.abort();
                   }}
                 >
                   Stop
@@ -886,7 +1011,7 @@ export function EmailAssistantWidget() {
             <Stack gap="md">
               <SectionCard
                 title="Add your source"
-                description="Paste notes manually or upload a ticket data dump (.mhtml) from your ticketing tool. The assistant will review the full extracted dump before drafting."
+                description="Paste notes manually or upload a ticket data dump (.mhtml / .mht) from your ticketing tool. The assistant will review the full extracted dump before drafting."
               >
                   {!uploadedMhtml ? (
                     <Box
@@ -915,7 +1040,7 @@ export function EmailAssistantWidget() {
                       <Stack gap={6} align="center">
                         <IconUpload size={24} color={dragOver ? "var(--mantine-color-teal-3)" : "var(--mantine-color-dimmed)"} />
                         <Text size="sm" fw={500}>
-                          Drop an <Code>.mhtml</Code> file here, or click to browse
+                          Drop an <Code>.mhtml</Code> or <Code>.mht</Code> file here, or click to browse
                         </Text>
                         <Text size="xs" c="dimmed">
                           Upload the exported ticket dump and we’ll review the full extracted record before generating the email.
@@ -924,7 +1049,7 @@ export function EmailAssistantWidget() {
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept=".mhtml,.mht,message/rfc822,multipart/related"
+                        accept=".mhtml,.mht,.eml,text/html,text/plain,message/rfc822,multipart/related,application/octet-stream,*/*"
                         hidden
                         onChange={(event) => {
                           const file = event.target.files?.[0];

@@ -1,0 +1,459 @@
+Prompt to Build the App / Agent Intake Form
+Build Objective
+Redesign the existing “Start New App / Agent” form so it is not just a tracking form, but a decision-making intake form that helps users determine:
+
+why the App or Agent should be created,
+what business problem it solves,
+whether it is feasible,
+what data/integrations are required,
+whether it delivers measurable value,
+and whether the expected ROI justifies the effort, token usage, and implementation cost.
+The form should guide the user to think through the request clearly before development starts.
+
+Product Requirements Prompt
+Design and build a multi-section intake form for creating a new App or AI Agent inside the application.
+
+The new form should replace the current lightweight fields such as:
+
+Type
+Status
+Name
+Category
+Customer
+Brief overview
+Brief benefit
+Primary benefit
+Progress %
+Link
+Attachment
+Notes
+with a more structured intake experience that captures business context, process understanding, feasibility, requirements, and ROI justification.
+
+Core Goal of the Form
+The form must help answer these questions before work begins:
+
+What problem are we solving?
+Why is an App or AI Agent the right solution?
+What is the current end-to-end process?
+Which steps are manual vs automated vs AI candidates?
+What data, systems, and integrations are required?
+What exactly should the system do?
+What benefits are expected?
+Is there a real ROI or is this only a nice-to-have?
+Is the request ready for technical review or build?
+Recommended UX Structure
+Build the form as a step-by-step wizard or collapsible section form with the following sections:
+
+Section 1: Basic Information
+Capture standard intake metadata.
+
+Fields
+
+Request Title / App or Agent Name (required)
+Request Type (required)
+Options:
+App
+AI Agent
+Workflow Automation
+Assistant / Copilot
+Status (default = Draft / In Progress)
+Category / Business Function (required)
+Requestor Name (required)
+Team / Department (required)
+Business Owner (required)
+Primary Users / Audience (required)
+Customer / Stakeholder (optional)
+Related Link (optional)
+Attachment(s) (optional)
+Section 2: Business Problem / Opportunity
+This section should force the user to explain the business reason behind the request.
+
+Fields
+
+Problem Statement (required)
+Placeholder: “Describe the business problem in 2–3 sentences.”
+Why is this a problem today? (required)
+Who is impacted? (required, multi-select)
+Options:
+Internal Team
+Customers
+Leadership
+Operations
+Compliance / Risk
+What happens if we do nothing? (required)
+Why are you considering an App or AI Agent for this use case? (required)
+Is this a real business need or a nice-to-have? (required)
+Options:
+Critical
+Important
+Helpful but nonessential
+Experimental
+Section 3: Current End-to-End Process
+This section should capture the current workflow and identify AI opportunities.
+
+Fields
+
+Describe the current end-to-end process (required)
+Upload or link process documentation (required if available)
+Examples:
+SOP
+Checklist
+Workflow diagram
+Process map
+List current steps in order (required, repeatable rows)
+Identify manual steps (required)
+Identify already automated steps (required)
+Identify candidate steps for AI support/automation (required)
+Current average time to complete the process (required)
+Process frequency (required)
+Options:
+Daily
+Weekly
+Monthly
+Quarterly
+Ad hoc
+Average volume per period (required)
+Current pain points (required, multi-select + free text)
+Options:
+Delays
+Rework
+Errors
+High manual effort
+Knowledge dependency
+Lack of standardization
+Poor visibility
+Other
+Optional additional fields
+
+Start trigger
+End outcome
+Teams involved
+Hand-offs
+Exceptions / edge cases
+Section 4: Proposed App / Agent Solution
+This section defines what the future solution should do.
+
+Fields
+
+What should the App / Agent do? (required)
+How will it improve the current process? (required)
+What tasks should it perform? (required)
+What should remain manual? (required)
+What decisions must remain human-controlled? (required)
+What outputs should it generate? (required, multi-select)
+Options:
+Answer / Recommendation
+Draft content
+Summary
+Workflow action
+Ticket / Case update
+Report
+Alert / Notification
+Data update
+Other
+Section 5: AI Agent Role Definition
+Treat the AI Agent like a job description.
+
+Fields
+
+Intended role of the AI Agent (required)
+Placeholder: “If this agent were a person, what job would it be doing?”
+Primary responsibilities (required)
+What the agent should not do (required)
+Human-in-the-loop required? (required)
+Options:
+Yes
+No
+Sometimes
+Who reviews or approves the output? (required if human review is needed)
+Section 6: Data, Systems, and Integrations
+This section determines technical feasibility.
+
+Fields
+
+What data is needed? (required)
+Where does the data reside? (required, multi-select)
+Options:
+SharePoint
+Database
+Excel / CSV
+CRM
+Ticketing System
+Email
+Documents
+API
+Data Warehouse
+Other
+Systems/applications involved (required)
+Data owner(s) (required)
+Is the data available today? (required)
+Options:
+Fully available
+Partially available
+Not available
+Data quality concerns (required)
+Security / privacy / compliance concerns (required)
+Integration fields
+Are integrations required? (required)
+Options:
+Yes
+No
+If yes, show:
+
+Systems requiring integration
+API available? (Yes / No / Unknown)
+Required API method (multi-select)
+Options:
+GET
+POST
+PUT / PATCH
+DELETE
+File-based
+Event-based
+What tables, objects, or data sources need to be queried or updated?
+Authentication/permissions available? (Yes / No / Unknown)
+Estimated dev effort (required if integrations are needed)
+Options:
+Low
+Medium
+High
+Trigger fields
+What triggers the App / Agent? (required)
+Manual
+Scheduled
+Event-based
+User initiated
+Does the platform support this trigger today? (required)
+Options:
+Yes
+No
+Unknown
+Section 7: Functional Requirements
+This section should support formal requirement capture.
+
+Fields
+
+Must-have requirements (required, repeatable rows)
+Each requirement should begin with:
+“The system must…”
+Should-have requirements (optional, repeatable rows)
+Each requirement should begin with:
+“The system should…”
+Out-of-scope items (required)
+Business rules / guardrails (required)
+Accuracy / quality expectations (required)
+Are multiple AI Agents needed? (required)
+Options:
+Yes
+No
+Unknown
+If yes:
+
+Describe the roles of each agent
+Section 8: Business Value and ROI
+This section is critical. It should make the user justify effort and token usage.
+
+Fields
+
+Primary benefit category (required)
+Options:
+Cost savings
+Cost avoidance
+Revenue growth
+Productivity improvement
+Compliance / risk reduction
+Customer experience
+Better insights
+Strategic enablement
+Why is this important to build? (required)
+What strategic goal does this support? (required)
+Is this replacing work, augmenting work, or enabling new work? (required)
+Options:
+Replacing work
+Augmenting work
+Enabling new work
+ROI inputs
+Current average time per transaction/process (required)
+Estimated future time after implementation (required)
+Current process volume (required)
+Annual hours spent today (auto-calculate if possible)
+Estimated annual hours saved (auto-calculate if possible)
+Estimated current annual cost (required or calculated)
+Estimated development cost (required)
+Other implementation costs (optional)
+Examples:
+Licensing
+Maintenance
+Support
+Training
+Estimated token / model usage cost (required or estimated)
+Estimated new annual operating cost (required)
+Net savings (auto-calculate)
+Estimated ROI % (auto-calculate if possible)
+Payback period (auto-calculate if possible)
+ROI note
+Display helper text:
+
+Assume 1 headcount = 1800 hours/year
+Savings formula example:
+(Current cost + dev cost + other implementation costs) - new cost = savings
+Validation question
+Does the expected benefit justify the effort and cost? (required)
+Options:
+Yes
+No
+Needs more analysis
+Section 9: Risk, Governance, and Constraints
+Prevent weak or risky use cases from moving forward without review.
+
+Fields
+
+Key risks (required, multi-select + text)
+Options:
+Incorrect outputs
+Hallucination risk
+Data privacy
+Compliance issues
+Poor data quality
+Integration reliability
+Low user adoption
+Operational dependency
+Other
+What could go wrong if the output is wrong? (required)
+Required controls (required)
+Is human approval required before final action? (required)
+Legal / compliance constraints (required)
+Acceptable risk level (required)
+Options:
+Low
+Medium
+High
+Section 10: Readiness and Approval
+This determines whether the request can move to review or build.
+
+Fields
+
+Process documented? (required)
+Yes / No
+Business owner aligned? (required)
+Yes / No
+Data owners identified? (required)
+Yes / No
+Success metrics defined? (required)
+Yes / No
+ROI estimated? (required)
+Yes / No
+Dev / technical review needed? (required)
+Yes / No
+Overall readiness status (required)
+Options:
+Not ready
+Needs clarification
+Ready for technical review
+Ready for build
+Functional Behavior Requirements
+The form should include the following behavior:
+
+1. Progressive disclosure
+Only show advanced fields when relevant. Examples:
+
+Show integration fields only if “Integrations required = Yes”
+Show reviewer fields only if “Human-in-the-loop = Yes”
+Show multi-agent design fields only if “Multiple AI Agents = Yes”
+2. Smart validation
+Prevent submission if critical thinking fields are blank, especially:
+
+Problem statement
+Current process
+Proposed solution
+Data sources
+Requirements
+ROI inputs
+Risks
+Readiness
+3. Inline guidance
+Each section should contain short helper text so users know what good answers look like.
+
+4. Scoring / readiness summary
+At the end of the form, generate a summary card showing:
+
+Business clarity
+Process clarity
+Technical feasibility
+ROI readiness
+Risk level
+Overall readiness
+Possible statuses:
+
+Weak business case
+Needs more definition
+Feasible but requires dev support
+Strong candidate for implementation
+5. Review summary output
+On submission, generate a structured summary for reviewers with these headings:
+
+Business Problem
+Current Process
+Proposed Solution
+Data and Integrations
+Requirements
+ROI
+Risks
+Recommendation
+Design Requirements
+The UI should feel structured, clear, and executive-friendly.
+
+Design guidance
+Use a wizard or sectioned form
+Include a progress indicator
+Group related questions together
+Use tooltips/helper text
+Use repeatable rows for process steps and requirements
+Use auto-calculations for ROI fields where possible
+Keep the layout clean and readable
+Make required fields obvious
+Use warning states if the use case appears weak
+Warning logic examples
+Show warnings such as:
+
+“No current process time entered — ROI cannot be estimated.”
+“No data source identified — technical feasibility is unclear.”
+“No business owner selected — request cannot proceed.”
+“Benefit is described, but not quantified.”
+“This use case may be a nice-to-have rather than a business priority.”
+Suggested Submission Outputs
+When a user submits the intake, store or display:
+
+A. Executive Summary
+A concise summary of:
+
+the business problem,
+proposed app/agent,
+expected value,
+feasibility,
+and readiness.
+B. Decision Snapshot
+Include:
+
+Estimated hours saved
+Estimated cost savings
+Estimated token/implementation cost
+Risk level
+Readiness level
+Recommendation
+C. Review Recommendation
+System-generated recommendation:
+
+Reject
+Return for clarification
+Review with Dev team
+Prioritize for build
+Success Criteria for This Feature
+The new intake form should:
+
+improve the quality of app/agent requests,
+reduce vague or low-value ideas,
+help users determine whether the use case is worth pursuing,
+capture enough detail for business and technical review,
+highlight ROI and token usage considerations early,
+and help teams prioritize high-value, feasible use cases.

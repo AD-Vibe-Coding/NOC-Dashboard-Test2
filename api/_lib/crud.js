@@ -34,6 +34,7 @@ const ALLOWED_TABLES = new Set([
   "performance_metrics",
   "team_members",
   "manager_updates",
+  "performance_discussions",
   "kudos",
   "celebrations",
   "metric_disputes",

@@ -25,7 +25,14 @@ export default defineConfig({
     logicMonitorProxyPlugin(),
   ],
   resolve: {
-    alias: { "@": path.resolve(__dirname, ".") },
+    // Prevent dual-React / dual-context instances that break useContext
+    // ("useIdentity() must be used inside <IdentityProvider>").
+    dedupe: ["react", "react-dom"],
+    alias: {
+      "@": path.resolve(__dirname, "."),
+      react: path.resolve(__dirname, "node_modules/react"),
+      "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
+    },
   },
   server: {
     host: "0.0.0.0",

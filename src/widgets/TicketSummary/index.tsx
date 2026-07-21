@@ -63,7 +63,9 @@ What needs to happen next, and who owns it.
 
 Be terse. Skip Confluence/JIRA-style navigation chrome, copyright footers, signature blocks, and any pasted email headers that don't add information. If the raw text is empty or doesn't look like a ticket, say so and stop.`;
 
-const MAX_PROMPT_CHARS = 60_000;
+const DIRECT_SUMMARY_CHARS = 18_000;
+const SUMMARY_CHUNK_CHARS = 14_000;
+const SUMMARY_REDUCTION_BATCH_SIZE = 8;
 const QUICK_ASSIST_ACTIONS = [
   {
     label: "Executive",
@@ -86,6 +88,40 @@ const QUICK_ASSIST_ACTIONS = [
       "Based on this ticket, tell me exactly what I should do next on shift. Use a short numbered list.",
   },
 ] as const;
+
+function splitIntoChunks(text: string, maxChars: number) {
+  const normalized = text.replace(/\r\n/g, "\n").trim();
+  if (!normalized) return [] as string[];
+  if (normalized.length <= maxChars) return [normalized];
+
+  const lines = normalized.split("\n");
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const line of lines) {
+    const next = current ? `${current}\n${line}` : line;
+    if (next.length <= maxChars) {
+      current = next;
+      continue;
+    }
+
+    if (current) chunks.push(current);
+
+    if (line.length <= maxChars) {
+      current = line;
+      continue;
+    }
+
+    for (let i = 0; i < line.length; i += maxChars) {
+      const slice = line.slice(i, i + maxChars);
+      if (slice) chunks.push(slice);
+    }
+    current = "";
+  }
+
+  if (current) chunks.push(current);
+  return chunks;
+}
 
 function buildAssistantContext(args: {
   fileName: string;
@@ -140,6 +176,9 @@ export function TicketSummaryWidget() {
   const { complete, result, isLoading, error, abort, setResult } = useCompletion({
     model: TICKET_SUMMARY_AGENT_ID,
   });
+  const preprocessAi = useCompletion({
+    model: TICKET_SUMMARY_AGENT_ID,
+  });
   const {
     messages: assistantMessages,
     sendMessage: askAssistant,
@@ -173,21 +212,66 @@ export function TicketSummaryWidget() {
 
   async function runSummary() {
     if (!parsed) return;
-    const truncated = parsed.text.slice(0, MAX_PROMPT_CHARS);
-    const truncationNote =
-      parsed.text.length > MAX_PROMPT_CHARS
-        ? `\n\n[NOTE: ticket body was ${parsed.text.length.toLocaleString()} chars — truncated to first ${MAX_PROMPT_CHARS.toLocaleString()} chars for this summary]`
-        : "";
-    const prompt = `${SUMMARY_INSTRUCTION}
 
----
-File: ${fileName}
-${parsed.subject ? `Subject: ${parsed.subject}\n` : ""}${parsed.ticket_number ? `Detected ticket #: ${parsed.ticket_number}\n` : ""}---
+    const header = [
+      `File: ${fileName}`,
+      parsed.subject ? `Subject: ${parsed.subject}` : "",
+      parsed.ticket_number ? `Detected ticket #: ${parsed.ticket_number}` : "",
+    ].filter(Boolean).join("\n");
 
-RAW TICKET TEXT:
-${truncated}${truncationNote}`;
+    let summary = "";
 
-    const summary = await complete(prompt);
+    if (parsed.text.length <= DIRECT_SUMMARY_CHARS) {
+      const prompt = `${SUMMARY_INSTRUCTION}\n\n---\n${header}\n---\n\nRAW TICKET TEXT:\n${parsed.text}`;
+      summary = await complete(prompt);
+    } else {
+      const chunks = splitIntoChunks(parsed.text, SUMMARY_CHUNK_CHARS);
+      let currentLevel = chunks.map((chunk, index) => ({
+        label: `Section ${index + 1}`,
+        content: chunk,
+      }));
+
+      setResult(`Analyzing full ticket dump in ${currentLevel.length.toLocaleString()} sections…`);
+
+      for (let index = 0; index < currentLevel.length; index += 1) {
+        setResult(`Analyzing section ${index + 1} of ${currentLevel.length}…`);
+        const chunkPrompt = `You are reviewing one section of a large saved support ticket. Extract only the operationally important facts from this section in concise Markdown. Focus on status changes, timestamps, owners, impact, carrier/vendor actions, root cause clues, and next steps. Ignore navigation chrome and repeated boilerplate.\n\n${header}\n${currentLevel[index].label} of ${currentLevel.length}:\n\n${currentLevel[index].content}`;
+        const chunkSummary = await preprocessAi.complete(chunkPrompt);
+        currentLevel[index] = {
+          label: currentLevel[index].label,
+          content: chunkSummary.trim() || "No operationally meaningful information found in this section.",
+        };
+      }
+
+      let round = 1;
+      while (currentLevel.length > 1) {
+        const nextLevel: Array<{ label: string; content: string }> = [];
+        const totalGroups = Math.ceil(currentLevel.length / SUMMARY_REDUCTION_BATCH_SIZE);
+
+        for (let groupIndex = 0; groupIndex < totalGroups; groupIndex += 1) {
+          const start = groupIndex * SUMMARY_REDUCTION_BATCH_SIZE;
+          const group = currentLevel.slice(start, start + SUMMARY_REDUCTION_BATCH_SIZE);
+          const from = start + 1;
+          const to = start + group.length;
+          setResult(`Combining summaries round ${round}: group ${groupIndex + 1} of ${totalGroups}…`);
+
+          const reductionPrompt = `You are consolidating partial findings from a very large saved support ticket. Merge the findings below into one concise Markdown brief. Preserve chronology, keep the newest status when details conflict, remove duplicates, and retain ticket numbers, timestamps, owners, customer impact, root cause clues, carrier/vendor actions, and next steps.\n\n${header}\nRound ${round} · Groups ${from}-${to} of ${currentLevel.length}\n\nPARTIAL FINDINGS:\n${group.map((item) => `## ${item.label}\n${item.content}`).join("\n\n")}`;
+          const reduced = await preprocessAi.complete(reductionPrompt);
+          nextLevel.push({
+            label: `Round ${round} Group ${groupIndex + 1}`,
+            content: reduced.trim() || group.map((item) => item.content).join("\n\n"),
+          });
+        }
+
+        currentLevel = nextLevel;
+        round += 1;
+      }
+
+      setResult("Combining all section findings into one ticket summary…");
+      const combinedPrompt = `${SUMMARY_INSTRUCTION}\n\nYou are given the fully reduced findings extracted from the complete ticket dump. Produce one final unified summary. Deduplicate repeated notes, preserve chronology, and prefer the latest status when facts conflict.\n\n---\n${header}\nOriginal extracted text length: ${parsed.text.length.toLocaleString()} chars\nFull file coverage: yes\nReduction rounds completed: ${Math.max(round - 1, 0)}\n---\n\nREDUCED FINDINGS:\n${currentLevel[0]?.content ?? ""}`;
+      summary = await complete(combinedPrompt);
+    }
+
     if (summary && summary.trim().length > 0) {
       await db.ticket_summaries.insert({
         file_name: fileName,
@@ -267,7 +351,7 @@ ${truncated}${truncationNote}`;
       }
       icon={IconFileText}
       iconColor="indigo"
-      loading={isLoading}
+      loading={isLoading || preprocessAi.isLoading}
       status={{
         label: "AI",
         color: "indigo",
@@ -360,19 +444,21 @@ ${truncated}${truncationNote}`;
                     </Badge>
                   )}
                   <Text size="xs" c="dimmed">
-                    {parsed.text.length.toLocaleString()} chars
-                    {parsed.text.length > MAX_PROMPT_CHARS && " (will be truncated)"}
+                    {parsed.text.length.toLocaleString()} chars · full file analyzed in staged passes when needed
                   </Text>
                 </Group>
               </Box>
               <Group gap="xs" wrap="nowrap">
-                {isLoading ? (
+                {isLoading || preprocessAi.isLoading ? (
                   <Button
                     variant="light"
                     color="red"
                     size="sm"
                     leftSection={<IconPlayerStop size={14} />}
-                    onClick={abort}
+                    onClick={() => {
+                      abort();
+                      preprocessAi.abort();
+                    }}
                   >
                     Stop
                   </Button>
@@ -392,14 +478,14 @@ ${truncated}${truncationNote}`;
           </Card>
         )}
 
-        {error && (
+        {(error || preprocessAi.error) && (
           <Alert color="red" icon={<IconAlertCircle size={16} />} variant="light">
-            AI request failed: {error}
+            AI request failed: {error || preprocessAi.error}
           </Alert>
         )}
 
         {/* Streamed / historical summary output */}
-        {(displayedSummary || isLoading) && (
+        {(displayedSummary || isLoading || preprocessAi.isLoading) && (
           <Card radius="md" withBorder p="md">
             <Group justify="space-between" mb="sm">
               <Group gap="xs">
@@ -417,7 +503,7 @@ ${truncated}${truncationNote}`;
                     <Text size="sm" fw={500}>
                       AI Summary
                     </Text>
-                    {isLoading && <Loader size="xs" />}
+                    {(isLoading || preprocessAi.isLoading) && <Loader size="xs" />}
                   </>
                 )}
               </Group>

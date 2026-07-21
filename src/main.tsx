@@ -87,9 +87,17 @@ const theme = createTheme({
   },
 });
 
-createRoot(document.getElementById("root")!).render(
+const rootEl = document.getElementById("root");
+if (!rootEl) {
+  throw new Error('Missing #root element — cannot mount the dashboard');
+}
+
+createRoot(rootEl).render(
   <StrictMode>
     <MantineProvider defaultColorScheme="light" theme={theme}>
+      {/* IdentityProvider MUST wrap DashboardPreferencesProvider — the latter
+          calls useIdentity() during render. Both contexts also use globalThis
+          singletons so a dual Vite-module load cannot desync them. */}
       <IdentityProvider>
         <DashboardPreferencesProvider>
           <App />

@@ -98,20 +98,141 @@ const raw = (m: PerformanceMetric) => m as Record<string, unknown>;
 const str = (v: unknown): string =>
   v != null && v !== "" ? String(v) : "";
 
-/** Parse raw_json for audit rows — cached per metric id to avoid repeated JSON.parse calls */
-const auditRawCache = new WeakMap<PerformanceMetric, Record<string, unknown>>();
-function auditRaw(m: PerformanceMetric): Record<string, unknown> {
-  if (auditRawCache.has(m)) return auditRawCache.get(m)!;
+const normKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+function lookupTolerant(row: Record<string, unknown>, ...keys: string[]): unknown {
+  const targets = new Set(keys.map(normKey));
+  for (const key of Object.keys(row)) {
+    if (targets.has(normKey(key))) {
+      const value = row[key];
+      if (value != null && value !== "") return value;
+    }
+  }
+  return undefined;
+}
+
+/** Parse raw_json rows — cached per metric id to avoid repeated JSON.parse calls */
+const metricRawCache = new WeakMap<PerformanceMetric, Record<string, unknown>>();
+function metricRaw(m: PerformanceMetric): Record<string, unknown> {
+  if (metricRawCache.has(m)) return metricRawCache.get(m)!;
   try {
     const parsed = JSON.parse((m as any).raw_json ?? "{}");
-    auditRawCache.set(m, parsed);
+    metricRawCache.set(m, parsed);
     return parsed;
   } catch {
-    auditRawCache.set(m, {});
+    metricRawCache.set(m, {});
     return {};
   }
 }
 
+/** Parse raw_json for audit rows — same cache/helper, named alias for clarity */
+function auditRaw(m: PerformanceMetric): Record<string, unknown> {
+  return metricRaw(m);
+}
+
+function parseMinutesLoose(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  const s = String(v).trim();
+  if (!s) return null;
+  const hhmmss = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(s);
+  if (hhmmss) {
+    const hours = Number(hhmmss[1] ?? 0);
+    const minutes = Number(hhmmss[2] ?? 0);
+    const seconds = Number(hhmmss[3] ?? 0);
+    return hours * 60 + minutes + seconds / 60;
+  }
+  const numeric = Number(s.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseWithin24Loose(v: unknown): number | null {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && Number.isFinite(v)) return v > 0 ? 1 : 0;
+  const s = String(v).trim().toLowerCase();
+  if (!s) return null;
+  if (["yes", "y", "true", "1", "within 24", "within 24h", "within 24 hours"].includes(s)) return 1;
+  if (["no", "n", "false", "0", "over 24", "over 24h", "over 24 hours"].includes(s)) return 0;
+  const numeric = Number(s.replace(/[^0-9.-]/g, ""));
+  if (Number.isFinite(numeric)) return numeric <= 24 ? 1 : 0;
+  return null;
+}
+
+function parseDateLoose(v: unknown): Date | null {
+  if (v == null || v === "") return null;
+  if (v instanceof Date && !Number.isNaN(v.getTime())) return v;
+  const parsed = new Date(String(v));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function ticketPeriodStart(m: PerformanceMetric): string | null {
+  if (m.period_start) return m.period_start;
+  const r = metricRaw(m);
+  return str(lookupTolerant(r, "opened_date", "opened date", "add_dtm", "start time")) || null;
+}
+
+function ticketPeriodEnd(m: PerformanceMetric): string | null {
+  if (m.period_end) return m.period_end;
+  const r = metricRaw(m);
+  return str(lookupTolerant(r, "closed_date", "closed date", "end time")) || null;
+}
+
+function ticketQueue(m: PerformanceMetric): string | null {
+  if (m.queue) return m.queue;
+  const r = metricRaw(m);
+  const reportedVia = str(lookupTolerant(r, "reported_via", "reported via", "queue")).toLowerCase();
+  if (!reportedVia) return null;
+  if (reportedVia.includes("mob")) return "mobility";
+  if (reportedVia.includes("noc") || reportedVia.includes("network")) return "noc";
+  return reportedVia;
+}
+
+function ticketHour(m: PerformanceMetric): number | null {
+  const direct = raw(m).hour;
+  if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+  const start = parseDateLoose(ticketPeriodStart(m));
+  return start ? start.getHours() : null;
+}
+
+function ticketIsWeekend(m: PerformanceMetric): boolean | null {
+  const direct = raw(m).is_weekend;
+  if (typeof direct === "boolean") return direct;
+  const start = parseDateLoose(ticketPeriodStart(m));
+  if (!start) return null;
+  const day = start.getDay();
+  return day === 0 || day === 6;
+}
+
+function ticketAckMinutes(m: PerformanceMetric): number | null {
+  if (m.ack_minutes != null) return m.ack_minutes;
+  const r = metricRaw(m);
+  return parseMinutesLoose(lookupTolerant(r, "first_touch", "first touch", "ack_time", "ack time"));
+}
+
+function ticketCarrierMinutes(m: PerformanceMetric): number | null {
+  if (m.carrier_ticket_minutes != null) return m.carrier_ticket_minutes;
+  const r = metricRaw(m);
+  return parseMinutesLoose(lookupTolerant(r, "time_to_carrier_ticket", "time to carrier ticket", "carrier_ticket_minutes", "carrier ticket minutes"));
+}
+
+function ticketWithin24(m: PerformanceMetric): number | null {
+  if (m.success_count != null) return m.success_count;
+  const r = metricRaw(m);
+  return parseWithin24Loose(lookupTolerant(r, "time_taken_to_close_tickets", "time taken to close tickets", "within_24h", "within 24h", "within 24 hours"));
+}
+
+function ticketMttrMinutes(m: PerformanceMetric): number | null {
+  if (m.duration_minutes != null) return m.duration_minutes;
+  const r = metricRaw(m);
+  return parseMinutesLoose(lookupTolerant(r, "mttr", "duration_minutes", "duration minutes"));
+}
+
+function ticketPriority(m: PerformanceMetric): string {
+  if (m.score != null && m.score !== "") return String(m.score);
+  const r = metricRaw(m);
+  return str(lookupTolerant(r, "priority", "severity", "ticket_priority"));
+}
+
+/** Parse raw_json for audit rows — cached per metric id to avoid repeated JSON.parse calls */
 function fmtMin(v: number | null | undefined): string {
   if (v == null) return "—";
   if (v < 1) return `${Math.round(v * 60)}s`;
@@ -178,18 +299,18 @@ const TICKET_COLS: ColDef[] = [
   {
     key: "queue",
     label: "Queue",
-    render: (m) => (m.queue ?? "—").toUpperCase(),
-    sortValue: (m) => m.queue ?? "",
+    render: (m) => (ticketQueue(m) ?? "—").toUpperCase(),
+    sortValue: (m) => ticketQueue(m) ?? "",
     width: 70,
   },
   {
     key: "hour",
     label: "Hour",
     render: (m) => {
-      const h = raw(m).hour as number | null;
+      const h = ticketHour(m);
       return h != null ? `${h}:00` : "—";
     },
-    sortValue: (m) => (raw(m).hour as number) ?? -1,
+    sortValue: (m) => ticketHour(m) ?? -1,
     width: 55,
     align: "right",
   },
@@ -197,17 +318,17 @@ const TICKET_COLS: ColDef[] = [
     key: "is_weekend",
     label: "Day",
     render: (m) => {
-      const w = raw(m).is_weekend;
+      const w = ticketIsWeekend(m);
       return w === true ? "Weekend" : w === false ? "Weekday" : "—";
     },
-    sortValue: (m) => (raw(m).is_weekend === true ? 1 : 0),
+    sortValue: (m) => (ticketIsWeekend(m) === true ? 1 : 0),
     width: 70,
   },
   {
     key: "ack_minutes",
     label: "Ack Time",
-    render: (m) => fmtMin(m.ack_minutes),
-    sortValue: (m) => m.ack_minutes ?? 99999,
+    render: (m) => fmtMin(ticketAckMinutes(m)),
+    sortValue: (m) => ticketAckMinutes(m) ?? 99999,
     width: 70,
     align: "right",
   },
@@ -215,36 +336,39 @@ const TICKET_COLS: ColDef[] = [
     key: "carrier_ticket_minutes",
     label: "Carrier ≤15",
     render: (m) => {
-      if (m.carrier_ticket_minutes == null) return "—";
-      return m.carrier_ticket_minutes <= 15
-        ? `✓ ${fmtMin(m.carrier_ticket_minutes)}`
-        : `✗ ${fmtMin(m.carrier_ticket_minutes)}`;
+      const carrier = ticketCarrierMinutes(m);
+      if (carrier == null) return "—";
+      return carrier <= 15
+        ? `✓ ${fmtMin(carrier)}`
+        : `✗ ${fmtMin(carrier)}`;
     },
-    sortValue: (m) => m.carrier_ticket_minutes ?? 99999,
+    sortValue: (m) => ticketCarrierMinutes(m) ?? 99999,
     width: 85,
     align: "right",
   },
   {
     key: "success_count",
     label: "Within 24h",
-    render: (m) =>
-      m.success_count === 1 ? "Yes" : m.success_count === 0 ? "No" : "—",
-    sortValue: (m) => m.success_count ?? -1,
+    render: (m) => {
+      const within24 = ticketWithin24(m);
+      return within24 === 1 ? "Yes" : within24 === 0 ? "No" : "—";
+    },
+    sortValue: (m) => ticketWithin24(m) ?? -1,
     width: 75,
   },
   {
     key: "duration_minutes",
     label: "MTTR",
-    render: (m) => fmtMin(m.duration_minutes),
-    sortValue: (m) => m.duration_minutes ?? 99999,
+    render: (m) => fmtMin(ticketMttrMinutes(m)),
+    sortValue: (m) => ticketMttrMinutes(m) ?? 99999,
     width: 70,
     align: "right",
   },
   {
     key: "score",
     label: "Priority",
-    render: (m) => m.score ?? "—",
-    sortValue: (m) => m.score ?? "",
+    render: (m) => ticketPriority(m) || "—",
+    sortValue: (m) => ticketPriority(m),
     width: 80,
   },
   {
@@ -257,15 +381,15 @@ const TICKET_COLS: ColDef[] = [
   {
     key: "period_start",
     label: "Opened",
-    render: (m) => m.period_start ?? "—",
-    sortValue: (m) => m.period_start ?? "",
+    render: (m) => ticketPeriodStart(m) ?? "—",
+    sortValue: (m) => ticketPeriodStart(m) ?? "",
     width: 90,
   },
   {
     key: "period_end",
     label: "Closed",
-    render: (m) => m.period_end ?? "—",
-    sortValue: (m) => m.period_end ?? "",
+    render: (m) => ticketPeriodEnd(m) ?? "—",
+    sortValue: (m) => ticketPeriodEnd(m) ?? "",
     width: 90,
   },
 ];

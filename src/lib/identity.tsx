@@ -20,7 +20,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { type Role } from "./roles";
-import { ROLE_BY_NAME } from "./roles";
+import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "./roles";
 
 export interface Identity {
   /** Display name from Google profile (or roster pick in dev mode). */
@@ -46,7 +46,22 @@ interface IdentityContextValue {
   clearIdentity: () => Promise<void>;
 }
 
-const IdentityContext = createContext<IdentityContextValue | null>(null);
+// Keep the context object on globalThis so a dual-module load (e.g. Vite
+// serving the same file with different query strings / HMR re-eval) still
+// shares ONE context instance. Without this, Provider and useIdentity can
+// resolve different IdentityContext objects and throw
+// "useIdentity() must be used inside <IdentityProvider>".
+const IDENTITY_CONTEXT_KEY = "__vcom_identity_context__";
+function getIdentityContext() {
+  const g = globalThis as typeof globalThis & {
+    [IDENTITY_CONTEXT_KEY]?: ReturnType<typeof createContext<IdentityContextValue | null>>;
+  };
+  if (!g[IDENTITY_CONTEXT_KEY]) {
+    g[IDENTITY_CONTEXT_KEY] = createContext<IdentityContextValue | null>(null);
+  }
+  return g[IDENTITY_CONTEXT_KEY]!;
+}
+const IdentityContext = getIdentityContext();
 
 /**
  * Wrap your app in <IdentityProvider> (once, in main.tsx).
@@ -77,9 +92,14 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
         "name" in session
       ) {
         const s = session as { name: string; role: string; email?: string; picture?: string };
+        const canonicalByEmail = s.email
+          ? ROSTER_BY_EMAIL[s.email.trim().toLowerCase()]
+          : undefined;
+        const canonicalName = canonicalByEmail?.name ?? s.name;
+        const canonicalRole = canonicalByEmail?.role ?? (ROLE_BY_NAME[canonicalName] as Role | undefined) ?? (s.role as Role);
         setIdentity({
-          name: s.name,
-          role: s.role as Role,
+          name: canonicalName,
+          role: canonicalRole,
           email: s.email,
           picture: s.picture ?? undefined,
         });
@@ -157,10 +177,38 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
  * Read identity from the shared context. Must be used inside <IdentityProvider>.
  * All 20+ call sites share one fetch — no duplicate /api/auth/me requests.
  */
+/**
+ * Soft fallback used only when the provider context is missing (typically a
+ * dual-module / HMR edge case in the sandboxed preview). Prefer a safe
+ * unauthenticated default over throwing and blanking the entire app.
+ */
+const FALLBACK_IDENTITY: IdentityContextValue = {
+  identity: null,
+  loading: false,
+  ssoEnabled: false,
+  signIn: () => {
+    window.location.href = "/api/auth/login";
+  },
+  devSignIn: async () => {},
+  impersonate: () => {},
+  signOut: async () => {},
+  setRole: () => {},
+  clearIdentity: async () => {},
+};
+
 export function useIdentity(): IdentityContextValue {
   const ctx = useContext(IdentityContext);
   if (!ctx) {
-    throw new Error("useIdentity() must be used inside <IdentityProvider>");
+    // Do not hard-crash the app. A missing context almost always means the
+    // module graph loaded identity.tsx twice (different Vite query strings),
+    // not that the tree is actually unwrapped. The globalThis singleton above
+    // prevents that in steady state; this is the last-resort safety net.
+    if (typeof console !== "undefined") {
+      console.warn(
+        "useIdentity(): IdentityProvider context missing — using safe fallback",
+      );
+    }
+    return FALLBACK_IDENTITY;
   }
   return ctx;
 }

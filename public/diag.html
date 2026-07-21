@@ -1,0 +1,19 @@
+<!doctype html>
+<html><body>
+<div id="root"></div>
+<pre id="log"></pre>
+<script type="module">
+const log = (m) => { document.getElementById('log').textContent += m + '\n'; console.log(m); };
+window.addEventListener('error', e => log('ERROR: ' + e.message + ' @ ' + e.filename + ':' + e.lineno));
+window.addEventListener('unhandledrejection', e => log('REJECTION: ' + (e.reason?.stack || e.reason)));
+log('starting import...');
+try {
+  await import('/src/main.tsx?v=diag');
+  log('import resolved');
+  log('root children: ' + document.getElementById('root').childElementCount);
+  log('root html: ' + document.getElementById('root').innerHTML.slice(0,300));
+} catch (e) {
+  log('IMPORT FAILED: ' + (e?.stack || e));
+}
+</script>
+</body></html>

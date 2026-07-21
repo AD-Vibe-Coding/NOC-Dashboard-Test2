@@ -4,6 +4,7 @@ import {
   IconAddressBook,
   IconChartArea,
   IconChartBar,
+  IconCalendarStats,
   IconClockRecord,
   IconDatabase,
   IconDeviceMobileMessage,
@@ -89,7 +90,12 @@ import {
   MaintenanceNoteGeneratorWidget,
   MaintenanceNoteGeneratorTile,
 } from "./MaintenanceNoteGenerator";
+import { BuildingAppsAgentsWidget, BuildingAppsAgentsTile } from "./BuildingAppsAgents";
 import { NocMttrReportWidget, NocMttrReportTile } from "./NocMttrReport";
+import {
+  PerformanceDiscussionsTile,
+  PerformanceDiscussionsWidget,
+} from "./PerformanceDiscussions";
 import type { WidgetDefinition } from "./types";
 
 /**
@@ -271,6 +277,16 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: AppUsageWidget,
   },
   {
+    id: "performance-discussions",
+    title: "Half-Yearly Discussions",
+    description: "Self-review submissions for team members and manager review workspace",
+    icon: IconCalendarStats,
+    iconColor: "red",
+    tileSize: "sm",
+    Tile: PerformanceDiscussionsTile,
+    Full: PerformanceDiscussionsWidget,
+  },
+  {
     id: "data-health",
     title: "Data Health",
     description: "Read-only table row counts across all app data",
@@ -325,9 +341,19 @@ export const WIDGETS: WidgetDefinition[] = [
     Full: MaintenanceNoteGeneratorWidget,
   },
   {
+    id: "building-apps-agents",
+    title: "Building Apps / Agents",
+    description: "Structured intake for new apps, AI agents, automations, and copilots",
+    icon: IconBulb,
+    iconColor: "blue",
+    tileSize: "lg",
+    Tile: BuildingAppsAgentsTile,
+    Full: BuildingAppsAgentsWidget,
+  },
+  {
     id: "mobility-troubleshooter",
     title: "Mobility Troubleshooter",
-    description: "AI agent for wireless + device troubleshooting",
+    description: "Live OPUS Troubleshooting Workflow + offline fallback",
     icon: IconDeviceMobileMessage,
     iconColor: "violet",
     tileSize: "sm",

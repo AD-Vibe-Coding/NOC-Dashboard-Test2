@@ -21,6 +21,7 @@ export const TEAM: TeamMember[] = [
   { name: "Karthik Damagalla", tier: "Tier 1" },
   { name: "Lokesh Naik Banavath", tier: "Tier 1" },
   { name: "Mahalakshmi Samiti", tier: "Tier 1" },
+  { name: "Tech Support", tier: "Tier 1" },
   // Tier 2
   { name: "Mohammed Zubairuddin", tier: "Tier 2" },
   { name: "Karthik Radhakrishnan", tier: "Tier 2" },

@@ -184,6 +184,27 @@ export const MIGRATE_OLD_ROLE: Record<string, Role> = {
  * Check whether the current user role has access to a widget. If a widget
  * declares no `roles` requirement, all roles can access it.
  */
+export function effectiveRoleForIdentity(identity: {
+  role?: Role | null;
+  name?: string | null;
+  email?: string | null;
+} | null | undefined): Role | null {
+  if (!identity) return null;
+  if (identity.role && ROLES.includes(identity.role)) {
+    if (identity.role === "manager") return "manager";
+  }
+
+  const canonicalByName = identity.name ? ROLE_BY_NAME[identity.name.trim()] : undefined;
+  if (canonicalByName) return canonicalByName;
+
+  const canonicalByEmail = identity.email
+    ? ROSTER_BY_EMAIL[identity.email.trim().toLowerCase()]?.role
+    : undefined;
+  if (canonicalByEmail) return canonicalByEmail;
+
+  return identity.role ?? null;
+}
+
 export function canAccess(
   userRole: Role | null | undefined,
   requiredRoles?: Role[],

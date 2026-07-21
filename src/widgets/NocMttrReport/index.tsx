@@ -24,6 +24,7 @@ import {
   IconChartBar,
   IconChartLine,
   IconClock,
+  IconCopy,
   IconDatabase,
   IconEye,
   IconFilter,
@@ -32,9 +33,12 @@ import {
 } from "@tabler/icons-react";
 import { db, schema } from "../../db";
 import { useIdentity } from "../../lib/identity";
+import vcomCoverBackground from "../../assets/ppt/vcom-cover-bg.png";
+import vcomOpsSupportLogo from "../../assets/ppt/vcom-ops-support-logo.png";
+import vcomThankYouBackground from "../../assets/ppt/vcom-thankyou-bg.png";
 import { WidgetFrame } from "../WidgetFrame";
 import { WidgetTile } from "../WidgetTile";
-import { exportNocMttrPowerPoint } from "./powerpoint";
+import { copyElementImageToClipboard, exportNocMttrPowerPoint } from "./powerpoint";
 
 export interface MttrRow {
   customer: string;
@@ -113,6 +117,8 @@ type ChronicCircuitTableRow = {
   monthlyCounts: Record<string, number>;
   grandTotal: number;
   latestMonthCount: number;
+  recurringMonths: number;
+  peakMonthlyCount: number;
   isLatestMonthPriority: boolean;
 };
 
@@ -278,6 +284,14 @@ function detectHeader(headers: string[], patterns: RegExp[]): string | null {
 
 function normalizeSheetName(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase();
+}
+
+function slugifyFilenamePart(value: string) {
+  return (value ?? "")
+    .trim()
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase() || "panel";
 }
 
 function findPreferredSheet(parsed: ParsedWorkbook | null, preferredName: string) {
@@ -773,6 +787,8 @@ function buildChronicCircuitTableData(
     .map((entry) => {
       const grandTotal = monthKeys.reduce((sum, monthKey) => sum + (entry.monthlyCounts[monthKey] ?? 0), 0);
       const latestMonthCount = entry.monthlyCounts[latestMonthKey] ?? 0;
+      const recurringMonths = monthKeys.reduce((sum, monthKey) => sum + ((entry.monthlyCounts[monthKey] ?? 0) > 0 ? 1 : 0), 0);
+      const peakMonthlyCount = Math.max(...monthKeys.map((monthKey) => entry.monthlyCounts[monthKey] ?? 0), 0);
       return {
         account: entry.account,
         circuitId: entry.circuitId,
@@ -780,6 +796,8 @@ function buildChronicCircuitTableData(
         monthlyCounts: entry.monthlyCounts,
         grandTotal,
         latestMonthCount,
+        recurringMonths,
+        peakMonthlyCount,
         isLatestMonthPriority: latestMonthCount >= 2,
       } satisfies ChronicCircuitTableRow;
     })
@@ -1142,8 +1160,8 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const monthKey = toMonthKey(row[monthSourceColumn]);
-    const resolution = normalizeHeaderValue(row[resolutionColumn]);
-    if (!ticketId || !monthKey || !resolution) continue;
+    const resolution = normalizeHeaderValue(row[resolutionColumn]) || "Others";
+    if (!ticketId || !monthKey) continue;
 
     monthKeySet.add(monthKey);
     totalByMonth.set(monthKey, (totalByMonth.get(monthKey) ?? 0) + 1);
@@ -1601,10 +1619,10 @@ function getResolutionBucketPercentagesForMonth(
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const rowMonthKey = toMonthKey(row[monthSourceColumn]);
     const resolution = normalizeHeaderValue(row[resolutionColumn]);
-    if (!ticketId || rowMonthKey !== monthKey || !resolution) continue;
+    if (!ticketId || rowMonthKey !== monthKey) continue;
 
     total += 1;
-    const normalizedResolution = normalizeResolutionBucket(resolution);
+    const normalizedResolution = normalizeResolutionBucket(resolution || "others");
     if (normalizedResolution === "carrier network issue") {
       carrierNetworkIssue += 1;
     } else if (
@@ -1671,10 +1689,10 @@ function getResolutionSummaryRowsForMonth(
       const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
       const rowMonthKey = toMonthKey(row[monthSourceColumn]);
       const resolution = normalizeHeaderValue(row[resolutionColumn]);
-      if (!ticketId || rowMonthKey !== monthKey || !resolution) continue;
+      if (!ticketId || rowMonthKey !== monthKey) continue;
 
       total += 1;
-      const normalizedResolution = normalizeResolutionBucket(resolution);
+      const normalizedResolution = normalizeResolutionBucket(resolution || "others");
       if (normalizedResolution === "activation assistance") {
         activationAssistance += 1;
       } else if (
@@ -1969,10 +1987,15 @@ function TicketVolumesChart({
 
   return (
     <div
+      data-copy-root="true"
       style={{
         width: "100%",
         maxWidth: "1360px",
         margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
         background: CHART_PANEL_BACKGROUND,
         padding: "10px 14px 44px",
         position: "relative",
@@ -1980,9 +2003,27 @@ function TicketVolumesChart({
     >
       <div
         style={{
+          position: "absolute",
+          top: "75px",
+          left: "14px",
+          right: "14px",
+          textAlign: "center",
+          fontSize: "38px",
+          fontWeight: 800,
+          color: CHART_TEXT_PRIMARY,
+          letterSpacing: "-0.045em",
+          lineHeight: 1.05,
+          zIndex: 2,
+          pointerEvents: "none",
+        }}
+      >
+        {title}
+      </div>
+
+      <div
+        style={{
           width: "100%",
-          aspectRatio: "16 / 9",
-          minHeight: "650px",
+          height: "100%",
           display: "grid",
           gridTemplateColumns: "minmax(0, 3.45fr) minmax(292px, 0.9fr)",
           gap: "36px",
@@ -1993,7 +2034,7 @@ function TicketVolumesChart({
           style={{
             minWidth: 0,
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
           }}
         >
@@ -2017,18 +2058,6 @@ function TicketVolumesChart({
               aria-label={ariaLabel}
               style={{ display: "block", width: "100%", height: "100%" }}
             >
-              <text
-                x={chartWidth / 2}
-                y={-12}
-                textAnchor="middle"
-                fontSize="34"
-                fontWeight="800"
-                fill={CHART_TEXT_PRIMARY}
-                letterSpacing="-0.03em"
-              >
-                {title}
-              </text>
-
               {yTicks.map((tick) => {
                 const y = topPadding + plotHeight - (tick / yAxisMax) * plotHeight;
                 return (
@@ -2079,18 +2108,18 @@ function TicketVolumesChart({
                             rx={isTopSegment || isBottomSegment ? 7 : 0}
                             fill={segment.color}
                           />
-                          {segmentHeight >= 22 ? (
-                            <text
-                              x={slotCenter}
-                              y={y + segmentHeight / 2 + 4}
-                              textAnchor="middle"
-                              fontSize="12"
-                              fontWeight="800"
-                              fill={segment.color === "#A6C557" || segment.color === "#F0A14A" ? "#1f2937" : "white"}
-                            >
-                              {segment.value}
-                            </text>
-                          ) : null}
+                          <text
+                            x={slotCenter}
+                            y={segmentHeight >= 22 ? y + segmentHeight / 2 + 4 : Math.max(topPadding + 12, y - 4)}
+                            textAnchor="middle"
+                            fontSize={segmentHeight >= 22 ? "12" : "10"}
+                            fontWeight="800"
+                            fill={segmentHeight >= 22
+                              ? (segment.color === "#A6C557" || segment.color === "#F0A14A" ? "#1f2937" : "white")
+                              : CHART_TEXT_PRIMARY}
+                          >
+                            {segment.value}
+                          </text>
                         </g>
                       );
                     })}
@@ -2205,7 +2234,7 @@ function TicketVolumesChart({
             minWidth: 0,
             height: "100%",
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
             alignContent: "stretch",
           }}
@@ -2232,7 +2261,7 @@ function TicketVolumesChart({
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c={CHART_TEXT_MUTED}
+                  c="#000000"
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2242,15 +2271,15 @@ function TicketVolumesChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Customer Opened</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Customer Opened</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.customerOpenedPercent ?? "—"}</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>vCom Opened</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>vCom Opened</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary?.vcomOpenedPercent ?? "—"}</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>MTTR &gt; 8h</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>MTTR &gt; 8h</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{summary ? summary.over8HourTicketCount.toLocaleString() : "—"}</Text>
                 </Group>
               </Stack>
@@ -2265,17 +2294,17 @@ function TicketVolumesChart({
                     tableLayout: "fixed",
                     borderCollapse: "separate",
                     borderSpacing: 0,
-                    color: "#334155",
+                    color: "#1f2937",
                     alignSelf: "start",
                     marginTop: 0,
                   }}
                 >
                   <Table.Thead>
                     <Table.Tr>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "22%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Ticket</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "24%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Carrier</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "36%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>Resolution</Table.Th>
-                      <Table.Th style={{ padding: "0 8px 9px", width: "18%", textAlign: "right", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#64748b" }}>MTTR</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "22%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#475569" }}>Ticket</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "24%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#475569" }}>Carrier</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "36%", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#475569" }}>Resolution</Table.Th>
+                      <Table.Th style={{ padding: "0 8px 9px", width: "18%", textAlign: "right", borderBottom: `1px solid ${CHART_BORDER_SOFT}`, fontWeight: 800, color: "#475569" }}>MTTR</Table.Th>
                     </Table.Tr>
                   </Table.Thead>
                   <Table.Tbody>
@@ -2332,10 +2361,15 @@ function TimeToCarrierPercentageChart({
 
   return (
     <div
+      data-copy-root="true"
       style={{
         width: "100%",
         maxWidth: "1360px",
         margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
         background: CHART_PANEL_BACKGROUND,
         padding: "10px 14px 44px",
         position: "relative",
@@ -2343,9 +2377,27 @@ function TimeToCarrierPercentageChart({
     >
       <div
         style={{
+          position: "absolute",
+          top: "75px",
+          left: "14px",
+          right: "14px",
+          textAlign: "center",
+          fontSize: "38px",
+          fontWeight: 800,
+          color: CHART_TEXT_PRIMARY,
+          letterSpacing: "-0.045em",
+          lineHeight: 1.05,
+          zIndex: 2,
+          pointerEvents: "none",
+        }}
+      >
+        {title}
+      </div>
+
+      <div
+        style={{
           width: "100%",
-          aspectRatio: "16 / 9",
-          minHeight: "650px",
+          height: "100%",
           display: "grid",
           gridTemplateColumns: "minmax(0, 3.45fr) minmax(292px, 0.9fr)",
           gap: "36px",
@@ -2356,7 +2408,7 @@ function TimeToCarrierPercentageChart({
           style={{
             minWidth: 0,
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
           }}
         >
@@ -2380,18 +2432,6 @@ function TimeToCarrierPercentageChart({
               aria-label={ariaLabel}
               style={{ display: "block", width: "100%", height: "100%" }}
             >
-              <text
-                x={chartWidth / 2}
-                y={-12}
-                textAnchor="middle"
-                fontSize="34"
-                fontWeight="800"
-                fill={CHART_TEXT_PRIMARY}
-                letterSpacing="-0.03em"
-              >
-                {title}
-              </text>
-
               {yTicks.map((tick) => {
                 const y = topPadding + plotHeight - (tick / yAxisMax) * plotHeight;
                 return (
@@ -2452,18 +2492,18 @@ function TimeToCarrierPercentageChart({
                             rx={isTopSegment || isBottomSegment ? 7 : 0}
                             fill={segment.color}
                           />
-                          {segmentHeight >= 28 ? (
-                            <text
-                              x={slotCenter}
-                              y={y + segmentHeight / 2 + 4}
-                              textAnchor="middle"
-                              fontSize="12"
-                              fontWeight="800"
-                              fill={segment.key === "over-15" ? "#1f2937" : "white"}
-                            >
-                              {segment.value.toFixed(1)}%
-                            </text>
-                          ) : null}
+                          <text
+                            x={slotCenter}
+                            y={segmentHeight >= 28 ? y + segmentHeight / 2 + 4 : Math.max(topPadding + 12, y - 4)}
+                            textAnchor="middle"
+                            fontSize={segmentHeight >= 28 ? "12" : "10"}
+                            fontWeight="800"
+                            fill={segmentHeight >= 28
+                              ? (segment.key === "over-15" ? "#1f2937" : "white")
+                              : CHART_TEXT_PRIMARY}
+                          >
+                            {segment.value.toFixed(1)}%
+                          </text>
                         </g>
                       );
                     })}
@@ -2566,7 +2606,7 @@ function TimeToCarrierPercentageChart({
             minWidth: 0,
             height: "100%",
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
             alignContent: "stretch",
           }}
@@ -2593,7 +2633,7 @@ function TimeToCarrierPercentageChart({
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c={CHART_TEXT_MUTED}
+                  c="#000000"
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2603,19 +2643,16 @@ function TimeToCarrierPercentageChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Under 15 Minutes</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Under 15 Minutes</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{under15Latest.toFixed(1)}%</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Over 15 Minutes</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>Over 15 Minutes</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over15Latest.toFixed(1)}%</Text>
                 </Group>
               </Stack>
             </div>
 
-            <Alert color="blue" variant="light" p="sm">
-              Percentages are calculated per month from the existing Time to Carrier Ticket buckets, with 15–25, 25–35, 35–60, and 60+ all rolled into Over 15 Minutes.
-            </Alert>
           </div>
         </div>
       </div>
@@ -2651,10 +2688,15 @@ function FirstTouchPercentageChart({
 
   return (
     <div
+      data-copy-root="true"
       style={{
         width: "100%",
         maxWidth: "1360px",
         margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
         background: CHART_PANEL_BACKGROUND,
         padding: "10px 14px 44px",
         position: "relative",
@@ -2662,9 +2704,27 @@ function FirstTouchPercentageChart({
     >
       <div
         style={{
+          position: "absolute",
+          top: "75px",
+          left: "14px",
+          right: "14px",
+          textAlign: "center",
+          fontSize: "38px",
+          fontWeight: 800,
+          color: CHART_TEXT_PRIMARY,
+          letterSpacing: "-0.045em",
+          lineHeight: 1.05,
+          zIndex: 2,
+          pointerEvents: "none",
+        }}
+      >
+        {title}
+      </div>
+
+      <div
+        style={{
           width: "100%",
-          aspectRatio: "16 / 9",
-          minHeight: "650px",
+          height: "100%",
           display: "grid",
           gridTemplateColumns: "minmax(0, 3.45fr) minmax(292px, 0.9fr)",
           gap: "36px",
@@ -2675,7 +2735,7 @@ function FirstTouchPercentageChart({
           style={{
             minWidth: 0,
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
           }}
         >
@@ -2699,18 +2759,6 @@ function FirstTouchPercentageChart({
               aria-label={ariaLabel}
               style={{ display: "block", width: "100%", height: "100%" }}
             >
-              <text
-                x={chartWidth / 2}
-                y={-12}
-                textAnchor="middle"
-                fontSize="34"
-                fontWeight="800"
-                fill={CHART_TEXT_PRIMARY}
-                letterSpacing="-0.03em"
-              >
-                {title}
-              </text>
-
               {yTicks.map((tick) => {
                 const y = topPadding + plotHeight - (tick / yAxisMax) * plotHeight;
                 return (
@@ -2875,7 +2923,7 @@ function FirstTouchPercentageChart({
             minWidth: 0,
             height: "100%",
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
             alignContent: "stretch",
           }}
@@ -2902,7 +2950,7 @@ function FirstTouchPercentageChart({
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c={CHART_TEXT_MUTED}
+                  c="#000000"
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -2912,11 +2960,11 @@ function FirstTouchPercentageChart({
               </Group>
               <Stack gap={8}>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% within 5 min</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% within 5 min</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{within5Latest.toFixed(1)}%</Text>
                 </Group>
                 <Group justify="space-between" gap={12} wrap="nowrap">
-                  <Text c={CHART_TEXT_MUTED} style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% over 5 min</Text>
+                  <Text c="#000000" style={{ fontSize: "0.84rem", lineHeight: 1.15 }}>% over 5 min</Text>
                   <Text fw={800} c={CHART_TEXT_PRIMARY} style={{ fontSize: "1.05rem", lineHeight: 1 }}>{over5Latest.toFixed(1)}%</Text>
                 </Group>
               </Stack>
@@ -2978,10 +3026,15 @@ function TicketResolutionsChart({
 
   return (
     <div
+      data-copy-root="true"
       style={{
         width: "100%",
         maxWidth: "1360px",
         margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
         background: CHART_PANEL_BACKGROUND,
         padding: "10px 14px 44px",
         position: "relative",
@@ -2989,9 +3042,27 @@ function TicketResolutionsChart({
     >
       <div
         style={{
+          position: "absolute",
+          top: "75px",
+          left: "14px",
+          right: "14px",
+          textAlign: "center",
+          fontSize: "38px",
+          fontWeight: 800,
+          color: CHART_TEXT_PRIMARY,
+          letterSpacing: "-0.045em",
+          lineHeight: 1.05,
+          zIndex: 2,
+          pointerEvents: "none",
+        }}
+      >
+        {title}
+      </div>
+
+      <div
+        style={{
           width: "100%",
-          aspectRatio: "16 / 9",
-          minHeight: "650px",
+          height: "100%",
           display: "grid",
           gridTemplateColumns: "minmax(0, 3.45fr) minmax(292px, 0.9fr)",
           gap: "36px",
@@ -3002,7 +3073,7 @@ function TicketResolutionsChart({
           style={{
             minWidth: 0,
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
           }}
         >
@@ -3026,18 +3097,6 @@ function TicketResolutionsChart({
               aria-label={ariaLabel}
               style={{ display: "block", width: "100%", height: "100%" }}
             >
-              <text
-                x={chartWidth / 2}
-                y={-12}
-                textAnchor="middle"
-                fontSize="34"
-                fontWeight="800"
-                fill={CHART_TEXT_PRIMARY}
-                letterSpacing="-0.03em"
-              >
-                {title}
-              </text>
-
               {yTicks.map((tick) => {
                 const y = topPadding + plotHeight - (tick / yAxisMax) * plotHeight;
                 return (
@@ -3088,18 +3147,18 @@ function TicketResolutionsChart({
                             rx={isTopSegment || isBottomSegment ? 7 : 0}
                             fill={segment.color}
                           />
-                          {segmentHeight >= 22 ? (
-                            <text
-                              x={slotCenter}
-                              y={y + segmentHeight / 2 + 4}
-                              textAnchor="middle"
-                              fontSize="12"
-                              fontWeight="800"
-                              fill={segment.color === "#A6C557" || segment.color === "#F0A14A" ? "#1f2937" : "white"}
-                            >
-                              {segment.value}
-                            </text>
-                          ) : null}
+                          <text
+                            x={slotCenter}
+                            y={segmentHeight >= 22 ? y + segmentHeight / 2 + 4 : Math.max(topPadding + 12, y - 4)}
+                            textAnchor="middle"
+                            fontSize={segmentHeight >= 22 ? "12" : "10"}
+                            fontWeight="800"
+                            fill={segmentHeight >= 22
+                              ? (segment.color === "#A6C557" || segment.color === "#F0A14A" ? "#1f2937" : "white")
+                              : CHART_TEXT_PRIMARY}
+                          >
+                            {segment.value}
+                          </text>
                         </g>
                       );
                     })}
@@ -3214,7 +3273,7 @@ function TicketResolutionsChart({
             minWidth: 0,
             height: "100%",
             display: "grid",
-            gridTemplateRows: "88px minmax(0, 1fr) 88px",
+            gridTemplateRows: "164px minmax(0, 1fr) 12px",
             gap: 0,
             alignContent: "stretch",
           }}
@@ -3241,7 +3300,7 @@ function TicketResolutionsChart({
             >
               <Group justify="space-between" align="end" gap={10} wrap="nowrap" style={{ marginTop: "64px", marginBottom: "10px" }}>
                 <Text
-                  c={CHART_TEXT_MUTED}
+                  c="#000000"
                   tt="uppercase"
                   fw={800}
                   style={{ fontSize: "0.72rem", lineHeight: 1.1, letterSpacing: "0.24em" }}
@@ -3262,6 +3321,152 @@ function TicketResolutionsChart({
         </div>
       </div>
       <ChartLogoStamp />
+    </div>
+  );
+}
+
+function BrandedCoverSlidePanel({ customerName }: { customerName: string }) {
+  return (
+    <div
+      data-copy-root="true"
+      style={{
+        width: "100%",
+        maxWidth: "1360px",
+        margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        position: "relative",
+        backgroundImage: `url(${vcomCoverBackground})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          right: "3.4%",
+          bottom: "4.2%",
+          width: "17.5%",
+          height: "15.5%",
+          backgroundImage: `url(${vcomOpsSupportLogo})`,
+          backgroundSize: "contain",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          mixBlendMode: "multiply",
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          left: "14%",
+          top: "24.8%",
+          width: "70%",
+          minHeight: "26%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          padding: "0 22px",
+          boxSizing: "border-box",
+          gap: "14px",
+        }}
+      >
+        <div
+          style={{
+            color: "#F3FFF9",
+            fontFamily: "Georgia, serif",
+            fontSize: "clamp(55px, 5.85vw, 86px)",
+            lineHeight: 1.05,
+            whiteSpace: "nowrap",
+            textShadow: "0 2px 4px rgba(27, 67, 50, 0.42)",
+            WebkitTextStroke: "1px #245F4B",
+          }}
+        >
+          {customerName}
+        </div>
+
+        <div
+          style={{
+            color: "#ffffff",
+            fontFamily: 'Inter, "Aptos", sans-serif',
+            fontWeight: 800,
+            fontSize: "clamp(31px, 3.05vw, 47px)",
+            lineHeight: 1.08,
+            letterSpacing: "-0.02em",
+            textShadow: "0 2px 10px rgba(15, 23, 42, 0.28)",
+          }}
+        >
+          vCom Operations &amp; Support
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
+function BrandedThankYouSlidePanel() {
+  return (
+    <div
+      data-copy-root="true"
+      style={{
+        width: "100%",
+        maxWidth: "1360px",
+        margin: "0 auto",
+        aspectRatio: "16 / 9",
+        minHeight: "650px",
+        boxSizing: "border-box",
+        overflow: "hidden",
+        position: "relative",
+        backgroundImage: `url(${vcomThankYouBackground})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat",
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          right: "3.4%",
+          bottom: "4.2%",
+          width: "17.5%",
+          height: "15.5%",
+          backgroundImage: `url(${vcomOpsSupportLogo})`,
+          backgroundSize: "contain",
+          backgroundPosition: "center",
+          backgroundRepeat: "no-repeat",
+          mixBlendMode: "multiply",
+          pointerEvents: "none",
+        }}
+      />
+
+      <div
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          color: "#F3FFF9",
+          fontFamily: "Georgia, serif",
+          fontSize: "clamp(48px, 5vw, 86px)",
+          lineHeight: 1.05,
+          textShadow: "0 2px 4px rgba(27, 67, 50, 0.42)",
+          WebkitTextStroke: "1px #245F4B",
+          boxSizing: "border-box",
+          padding: "0 16%",
+        }}
+      >
+        Thank You
+      </div>
     </div>
   );
 }
@@ -3386,6 +3591,8 @@ export function NocMttrReportWidget() {
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("both");
   const [monthDetailModal, setMonthDetailModal] = useState<MonthDetailModalState | null>(null);
   const [exportingPowerPoint, setExportingPowerPoint] = useState(false);
+  const [copyingPanelTitle, setCopyingPanelTitle] = useState<string | null>(null);
+  const [selectedPanelToCopy, setSelectedPanelToCopy] = useState<string | null>("network-volume");
   const networkVolumeChartRef = useRef<HTMLDivElement | null>(null);
   const networkFirstTouchChartRef = useRef<HTMLDivElement | null>(null);
   const networkTimeToCarrierChartRef = useRef<HTMLDivElement | null>(null);
@@ -3394,7 +3601,9 @@ export function NocMttrReportWidget() {
   const mobilityFirstTouchChartRef = useRef<HTMLDivElement | null>(null);
   const mobilityTimeToCarrierChartRef = useRef<HTMLDivElement | null>(null);
   const mobilityResolutionChartRef = useRef<HTMLDivElement | null>(null);
+  const brandedCoverSlideRef = useRef<HTMLDivElement | null>(null);
   const chronicCircuitsRef = useRef<HTMLDivElement | null>(null);
+  const brandedThankYouSlideRef = useRef<HTMLDivElement | null>(null);
 
   function applySavedReport(report: SavedMttrReportRecord) {
     const savedParsed = parseSavedWorkbook(report.parsed_json);
@@ -3834,6 +4043,30 @@ export function NocMttrReportWidget() {
     () => buildChronicCircuitTableData(parsed, sheetName, operationalFilters),
     [parsed, sheetName, operationalFilters],
   );
+  const chronicCircuitSummary = useMemo(() => {
+    const totalCircuits = chronicCircuitTableData.rows.length;
+    const latestFlagged = chronicCircuitTableData.rows.filter((row) => row.isLatestMonthPriority).length;
+    const recurringCircuits = chronicCircuitTableData.rows.filter((row) => row.recurringMonths >= 3).length;
+    const topCircuit = [...chronicCircuitTableData.rows].sort((a, b) => b.grandTotal - a.grandTotal || b.latestMonthCount - a.latestMonthCount)[0] ?? null;
+    const topCarrierEntry = Array.from(chronicCircuitTableData.rows.reduce((map, row) => {
+      map.set(row.carrier, (map.get(row.carrier) ?? 0) + row.grandTotal);
+      return map;
+    }, new Map<string, number>()).entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
+    const latestMonthLabel = chronicCircuitTableData.monthLabels[chronicCircuitTableData.monthLabels.length - 1] ?? "latest month";
+    const insight = totalCircuits === 0
+      ? "No circuits currently meet the chronic threshold for the selected filters."
+      : `${totalCircuits} circuits met chronic criteria across the last ${chronicCircuitTableData.monthLabels.length} months; ${latestFlagged} were flagged in ${latestMonthLabel}${topCarrierEntry ? `, with ${topCarrierEntry[0]} carrying the highest ticket concentration` : ""}.`;
+
+    return {
+      totalCircuits,
+      latestFlagged,
+      recurringCircuits,
+      highestGrandTotal: topCircuit?.grandTotal ?? 0,
+      topCircuitLabel: topCircuit?.circuitId ?? "—",
+      latestMonthLabel,
+      insight,
+    };
+  }, [chronicCircuitTableData]);
   const exportCustomerName = useMemo(() => {
     if (selectedCustomers.length === 1) return selectedCustomers[0];
     if (selectedCustomers.length > 1) return `${selectedCustomers.length} selected customers`;
@@ -3852,6 +4085,19 @@ export function NocMttrReportWidget() {
       `Maintenance: ${maintenanceFilter === "include" ? "Included" : "Excluded"}`,
     ];
   }, [selectedCustomers, reportedViaFilter, channelFilter, maintenanceFilter]);
+  const copyPanelOptions = [
+    { value: "cover-slide", label: "Branded Title Slide", element: brandedCoverSlideRef.current },
+    { value: "network-volume", label: "Ticket Volumes - Network", element: networkVolumeChartRef.current },
+    { value: "network-first-touch", label: "Ticket Acknowledgement Time - Network", element: networkFirstTouchChartRef.current },
+    { value: "network-time-to-carrier", label: "Time to Carrier Ticket - Network", element: networkTimeToCarrierChartRef.current },
+    { value: "network-resolutions", label: "Ticket Resolutions - Network", element: networkResolutionChartRef.current },
+    { value: "mobility-volume", label: "Ticket Volumes - Mobility", element: mobilityVolumeChartRef.current },
+    { value: "mobility-first-touch", label: "Ticket Acknowledgement Time - Mobility", element: mobilityFirstTouchChartRef.current },
+    { value: "mobility-time-to-carrier", label: "Time to Carrier Ticket - Mobility", element: mobilityTimeToCarrierChartRef.current },
+    { value: "mobility-resolutions", label: "Ticket Resolutions - Mobility", element: mobilityResolutionChartRef.current },
+    { value: "chronic-circuits", label: "Top 10 Chronic Circuits", element: chronicCircuitsRef.current },
+    { value: "thank-you-slide", label: "Branded Thank You Slide", element: brandedThankYouSlideRef.current },
+  ];
   async function handleExportPowerPoint() {
     if (!parsed) return;
     setExportingPowerPoint(true);
@@ -3867,6 +4113,11 @@ export function NocMttrReportWidget() {
         filtersSummary: exportFilterSummary,
         thankYouLine: `Questions on ${exportCustomerName}'s MTTR trends or chronic circuits?`,
         charts: [
+          {
+            title: "Branded Title Slide",
+            subtitle: "vCom cover slide",
+            element: brandedCoverSlideRef.current,
+          },
           {
             title: "Ticket Volumes - Network",
             subtitle: "Top Issue Types · NOC only",
@@ -3912,6 +4163,11 @@ export function NocMttrReportWidget() {
             subtitle: "Current workbook and active trend filters",
             element: chronicCircuitsRef.current,
           },
+          {
+            title: "Branded Thank You Slide",
+            subtitle: "vCom closing slide",
+            element: brandedThankYouSlideRef.current,
+          },
         ],
       });
       setSaveNotice("PowerPoint exported successfully.");
@@ -3919,6 +4175,27 @@ export function NocMttrReportWidget() {
       setError(err instanceof Error ? err.message : "Failed to generate the PowerPoint export.");
     } finally {
       setExportingPowerPoint(false);
+    }
+  }
+
+  async function handleCopyPanel(title: string, element: HTMLDivElement | null) {
+    if (!element) return;
+    const captureTarget = (element.querySelector('[data-copy-root="true"]') as HTMLElement | null) ?? element;
+
+    setCopyingPanelTitle(title);
+    setError(null);
+    setSaveNotice(null);
+    try {
+      const result = await copyElementImageToClipboard(captureTarget, `${slugifyFilenamePart(title)}.png`);
+      setSaveNotice(
+        result.copied
+          ? `${title} copied to clipboard. Paste it into a PowerPoint slide.`
+          : `${title} downloaded as a PNG because clipboard image copy is not available in this browser.`,
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : `Failed to copy ${title}.`);
+    } finally {
+      setCopyingPanelTitle((current) => (current === title ? null : current));
     }
   }
   const monthDetailTickets = useMemo(() => {
@@ -4281,6 +4558,29 @@ export function NocMttrReportWidget() {
                       <Group gap="xs" align="center">
                         <Badge color="orange" variant="light">NOC only</Badge>
                         <Badge color="blue" variant="light">Mobility only</Badge>
+                        <Select
+                          data={copyPanelOptions.map(({ value, label }) => ({ value, label }))}
+                          value={selectedPanelToCopy}
+                          onChange={setSelectedPanelToCopy}
+                          placeholder="Choose panel"
+                          w={280}
+                          disabled={!parsed}
+                        />
+                        <Button
+                          variant="light"
+                          color="blue"
+                          leftSection={<IconCopy size={16} />}
+                          onClick={() => {
+                            const selectedPanel = copyPanelOptions.find((panel) => panel.value === selectedPanelToCopy);
+                            if (selectedPanel) {
+                              void handleCopyPanel(selectedPanel.label, selectedPanel.element);
+                            }
+                          }}
+                          loading={copyingPanelTitle != null}
+                          disabled={!parsed || !selectedPanelToCopy}
+                        >
+                          Copy Panel Image
+                        </Button>
                         <Button
                           color="orange"
                           leftSection={<IconPresentation size={16} />}
@@ -4298,6 +4598,10 @@ export function NocMttrReportWidget() {
                 </Card>
 
                 <Stack gap="xl" style={{ width: "100%" }}>
+                  <div ref={brandedCoverSlideRef} style={{ width: "100%" }}>
+                    <BrandedCoverSlidePanel customerName={exportCustomerName} />
+                  </div>
+
                   <div ref={networkVolumeChartRef} style={{ width: "100%" }}>
                     {networkTicketVolumeChartData.length > 0 ? (
                       <TicketVolumesChart
@@ -4473,116 +4777,208 @@ export function NocMttrReportWidget() {
 
                   <div
                     ref={chronicCircuitsRef}
+                    data-copy-root="true"
                     style={{
                       width: "100%",
                       maxWidth: "1360px",
                       margin: "0 auto",
+                      aspectRatio: "16 / 9",
+                      minHeight: "650px",
+                      boxSizing: "border-box",
+                      overflow: "hidden",
                       background: CHART_PANEL_BACKGROUND,
                       padding: "10px 14px 44px",
-                      minHeight: "650px",
                     }}
                   >
                     <div
                       style={{
                         width: "100%",
-                        aspectRatio: "16 / 9",
-                        minHeight: "650px",
+                        height: "100%",
                         display: "grid",
-                        gridTemplateRows: "88px minmax(0, 1fr) 48px",
+                        gridTemplateRows: "12px minmax(0, 1fr) 48px",
                       }}
                     >
                       <div />
                       <div style={{ minWidth: 0, minHeight: 0, padding: "0 18px" }}>
-                        <Title
-                          order={3}
-                          ta="center"
-                          c="black"
-                          style={{ marginBottom: "18px", fontSize: "34px", fontWeight: 800, letterSpacing: "-0.03em" }}
-                        >
-                          Top 10 Chronic Circuits
-                        </Title>
+                        <Stack gap={12}>
+                          <Stack gap={4} align="center">
+                            <Title
+                              order={3}
+                              ta="center"
+                              c="black"
+                              style={{ marginBottom: 0, fontSize: "34px", fontWeight: 800, letterSpacing: "-0.03em", lineHeight: 1.05 }}
+                            >
+                              Top 10 Chronic Circuits
+                            </Title>
+                          </Stack>
 
-                        {chronicCircuitTableData.monthLabels.length === 0 ? (
-                          <Alert color="gray" variant="light">No monthly chronic ticket data available.</Alert>
-                        ) : chronicCircuitTableData.rows.length === 0 ? (
-                          <Alert color="gray" variant="light">No chronic circuits found for the selected report.</Alert>
-                        ) : (
-                          <Table
-                            withTableBorder
-                            withColumnBorders
-                            highlightOnHover={false}
-                            fz="xs"
-                            c="black"
-                            style={{
-                              tableLayout: "fixed",
-                              width: "100%",
-                              background: "transparent",
-                              borderColor: "#000000",
-                            }}
-                          >
-                            <Table.Thead>
-                              <Table.Tr>
-                                <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Account</Table.Th>
-                                <Table.Th w="20%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Circuit ID</Table.Th>
-                                <Table.Th w="16%" px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>Carrier Name</Table.Th>
-                                {chronicCircuitTableData.monthLabels.map((monthLabel) => (
-                                  <Table.Th key={monthLabel} w="7%" px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>{monthLabel}</Table.Th>
+                          {chronicCircuitTableData.monthLabels.length === 0 ? (
+                            <Alert color="gray" variant="light">No monthly chronic ticket data available.</Alert>
+                          ) : chronicCircuitTableData.rows.length === 0 ? (
+                            <Alert color="gray" variant="light">No chronic circuits found for the selected report.</Alert>
+                          ) : (
+                            <Stack gap={12}>
+                              <SimpleGrid cols={4} spacing={10}>
+                                {[
+                                  { label: "Chronic circuits", value: chronicCircuitSummary.totalCircuits.toString(), accent: "#17324d" },
+                                  { label: `Flagged in ${chronicCircuitSummary.latestMonthLabel}`, value: chronicCircuitSummary.latestFlagged.toString(), accent: "#dc2626" },
+                                  { label: "Recurring circuits", value: chronicCircuitSummary.recurringCircuits.toString(), accent: "#7c3aed" },
+                                  { label: "Highest grand total", value: chronicCircuitSummary.highestGrandTotal ? `${chronicCircuitSummary.highestGrandTotal} · ${chronicCircuitSummary.topCircuitLabel}` : "—", accent: "#0f766e" },
+                                ].map((kpi) => (
+                                  <div
+                                    key={kpi.label}
+                                    style={{
+                                      border: "1px solid rgba(23, 50, 77, 0.16)",
+                                      borderRadius: "12px",
+                                      padding: "11px 13px",
+                                      background: "rgba(255,255,255,0.66)",
+                                      boxShadow: "0 6px 18px rgba(15, 23, 42, 0.07)",
+                                    }}
+                                  >
+                                    <Text size="10px" tt="uppercase" fw={800} c="#4b5563" style={{ letterSpacing: "0.14em", lineHeight: 1.1 }}>{kpi.label}</Text>
+                                    <Text mt={5} size="lg" fw={800} c={kpi.accent} style={{ lineHeight: 1.05 }}>{kpi.value}</Text>
+                                  </div>
                                 ))}
-                                <Table.Th w="9%" px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>Grand Total</Table.Th>
-                              </Table.Tr>
-                            </Table.Thead>
-                            <Table.Tbody>
-                              {chronicCircuitTableData.rows.map((row) => (
-                                <Table.Tr key={`${row.account}-${row.circuitId}-${row.carrier}`} style={{ background: "transparent" }}>
-                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
-                                    <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.account}</Text>
-                                  </Table.Td>
-                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
-                                    <Stack gap={4}>
-                                      <Text fw={600} size="xs" c="black" style={{ lineHeight: 1.2 }}>{row.circuitId}</Text>
-                                      {row.isLatestMonthPriority ? (
-                                        <Badge
-                                          size="xs"
-                                          variant="filled"
-                                          styles={{
-                                            root: {
-                                              alignSelf: "flex-start",
-                                              backgroundColor: "white",
-                                              color: "#dc2626",
-                                              border: "1px solid #fecaca",
-                                            },
-                                            label: {
-                                              fontSize: "9px",
-                                              lineHeight: 1,
-                                              padding: 0,
-                                              color: "#dc2626",
-                                            },
-                                          }}
+                              </SimpleGrid>
+
+                              <div
+                                style={{
+                                  borderRadius: "14px",
+                                  overflow: "hidden",
+                                  border: "1px solid rgba(23, 50, 77, 0.16)",
+                                  background: "rgba(255,255,255,0.68)",
+                                  boxShadow: "0 12px 28px rgba(15, 23, 42, 0.08)",
+                                }}
+                              >
+                                <Table
+                                  withTableBorder={false}
+                                  withColumnBorders={false}
+                                  highlightOnHover={false}
+                                  fz="xs"
+                                  c="black"
+                                  style={{
+                                    tableLayout: "fixed",
+                                    width: "100%",
+                                    background: "transparent",
+                                  }}
+                                >
+                                  <Table.Thead>
+                                    <Table.Tr style={{ background: "rgba(226, 232, 240, 0.72)" }}>
+                                      <Table.Th w="4%" px={6} py={9} c="#17324d">#</Table.Th>
+                                      <Table.Th w="16%" px={6} py={9} c="#17324d">Account</Table.Th>
+                                      <Table.Th w="16%" px={6} py={9} c="#17324d">Circuit ID</Table.Th>
+                                      <Table.Th w="14%" px={6} py={9} c="#17324d">Carrier</Table.Th>
+                                      <Table.Th w="22%" px={6} py={9} c="#17324d">Recent pattern</Table.Th>
+                                      <Table.Th w="7%" px={4} py={9} ta="center" c="#17324d">Latest</Table.Th>
+                                      <Table.Th w="7%" px={4} py={9} ta="center" c="#17324d">Total</Table.Th>
+                                      <Table.Th w="14%" px={6} py={9} c="#17324d">Status</Table.Th>
+                                    </Table.Tr>
+                                  </Table.Thead>
+                                  <Table.Tbody>
+                                    {chronicCircuitTableData.rows.map((row, index) => {
+                                      const status = row.isLatestMonthPriority
+                                        ? { label: "Latest ≥ 2", color: "#dc2626", background: "rgba(254, 226, 226, 0.9)" }
+                                        : row.recurringMonths >= 3
+                                          ? { label: "Recurring", color: "#7c3aed", background: "rgba(237, 233, 254, 0.9)" }
+                                          : { label: "Watchlist", color: "#0f766e", background: "rgba(204, 251, 241, 0.9)" };
+
+                                      return (
+                                        <Table.Tr
+                                          key={`${row.account}-${row.circuitId}-${row.carrier}`}
+                                          style={{ background: index % 2 === 0 ? "rgba(255,255,255,0.74)" : "rgba(248, 250, 252, 0.7)" }}
                                         >
-                                          Latest month ≥ 2
-                                        </Badge>
-                                      ) : null}
-                                    </Stack>
-                                  </Table.Td>
-                                  <Table.Td px={8} py={6} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
-                                    <Text size="xs" c="black" style={{ lineHeight: 1.25 }}>{row.carrier}</Text>
-                                  </Table.Td>
-                                  {chronicCircuitTableData.monthKeys.map((monthKey) => (
-                                    <Table.Td key={`${row.account}-${row.circuitId}-${row.carrier}-${monthKey}`} px={6} py={6} ta="center" c="black" style={{ background: "transparent", borderColor: "#000000" }}>
-                                      <Text size="xs" c="black">{row.monthlyCounts[monthKey] ?? 0}</Text>
-                                    </Table.Td>
-                                  ))}
-                                  <Table.Td px={6} py={6} ta="center" fw={700} c="black" style={{ background: "transparent", borderColor: "#000000" }}>
-                                    <Text size="xs" fw={700} c="black">{row.grandTotal}</Text>
-                                  </Table.Td>
-                                </Table.Tr>
-                              ))}
-                            </Table.Tbody>
-                          </Table>
-                        )}
+                                          <Table.Td px={8} py={8} c="#475569" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Text size="sm" fw={700} c="#475569">{index + 1}</Text>
+                                          </Table.Td>
+                                          <Table.Td px={8} py={8} c="black" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Text size="11px" c="black" style={{ lineHeight: 1.15 }}>{row.account}</Text>
+                                          </Table.Td>
+                                          <Table.Td px={8} py={8} c="black" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Group justify="space-between" align="center" gap={6} wrap="nowrap">
+                                              <Text fw={700} size="11px" c="black" style={{ lineHeight: 1.1 }}>{row.circuitId}</Text>
+                                              {row.isLatestMonthPriority ? (
+                                                <Text size="9px" fw={800} c="#dc2626" style={{ lineHeight: 1, whiteSpace: "nowrap", flexShrink: 0 }}>≥ 2</Text>
+                                              ) : null}
+                                            </Group>
+                                          </Table.Td>
+                                          <Table.Td px={8} py={8} c="black" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Text size="11px" c="#334155" style={{ lineHeight: 1.15 }}>{row.carrier}</Text>
+                                          </Table.Td>
+                                          <Table.Td px={8} py={8} style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Stack gap={5}>
+                                              <Group gap={5} wrap="nowrap">
+                                                {chronicCircuitTableData.monthKeys.map((monthKey, monthIndex) => {
+                                                  const count = row.monthlyCounts[monthKey] ?? 0;
+                                                  const background = count >= 2
+                                                    ? "#dc2626"
+                                                    : count === 1
+                                                      ? "#f59e0b"
+                                                      : "#e2e8f0";
+                                                  const color = count > 0 ? "#ffffff" : "#475569";
+                                                  return (
+                                                    <div
+                                                      key={`${row.account}-${row.circuitId}-${monthKey}`}
+                                                      title={`${chronicCircuitTableData.monthLabels[monthIndex]}: ${count}`}
+                                                      style={{
+                                                        minWidth: "22px",
+                                                        height: "22px",
+                                                        borderRadius: "6px",
+                                                        background,
+                                                        color,
+                                                        display: "flex",
+                                                        alignItems: "center",
+                                                        justifyContent: "center",
+                                                        fontSize: "10px",
+                                                        fontWeight: 800,
+                                                        boxShadow: count > 0 ? "inset 0 0 0 1px rgba(255,255,255,0.14)" : "inset 0 0 0 1px rgba(148,163,184,0.24)",
+                                                      }}
+                                                    >
+                                                      {count}
+                                                    </div>
+                                                  );
+                                                })}
+                                              </Group>
+                                              <Group gap={5} wrap="nowrap">
+                                                {chronicCircuitTableData.monthLabels.map((monthLabel) => (
+                                                  <Text key={`${row.circuitId}-${monthLabel}`} size="9px" c="#64748b" style={{ minWidth: "22px", textAlign: "center", lineHeight: 1 }}>
+                                                    {monthLabel.slice(0, 3)}
+                                                  </Text>
+                                                ))}
+                                              </Group>
+                                            </Stack>
+                                          </Table.Td>
+                                          <Table.Td px={6} py={8} ta="center" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Text size="md" fw={800} c={row.latestMonthCount >= 2 ? "#dc2626" : "#17324d"}>{row.latestMonthCount}</Text>
+                                          </Table.Td>
+                                          <Table.Td px={6} py={8} ta="center" style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Text size="md" fw={800} c="#17324d">{row.grandTotal}</Text>
+                                          </Table.Td>
+                                          <Table.Td px={8} py={8} style={{ borderTop: "1px solid rgba(148, 163, 184, 0.16)" }}>
+                                            <Stack gap={5}>
+                                              <Badge variant="light" color="gray" styles={{ root: { background: status.background, color: status.color, border: `1px solid ${status.color}22`, paddingInline: "7px", minHeight: "19px" }, label: { fontWeight: 800, fontSize: "10px" } }}>
+                                                {status.label}
+                                              </Badge>
+                                              <Text size="10px" c="#475569" style={{ lineHeight: 1.1 }}>
+                                                {row.recurringMonths} active month{row.recurringMonths === 1 ? "" : "s"} · peak {row.peakMonthlyCount}
+                                              </Text>
+                                            </Stack>
+                                          </Table.Td>
+                                        </Table.Tr>
+                                      );
+                                    })}
+                                  </Table.Tbody>
+                                </Table>
+                              </div>
+                            </Stack>
+                          )}
+                        </Stack>
                       </div>
                       <div />
                     </div>
+                  </div>
+
+                  <div ref={brandedThankYouSlideRef} style={{ width: "100%" }}>
+                    <BrandedThankYouSlidePanel />
                   </div>
                 </Stack>
               </Stack>

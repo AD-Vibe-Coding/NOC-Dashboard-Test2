@@ -186,7 +186,10 @@ export function VelocloudTroubleshooterWidget() {
     const next = [...messages, userMsg, assistantPlaceholder];
     setMessages(next);
 
-    const wire: Message[] = next.slice(0, -1).map((m) => ({ role: m.role, content: m.content }));
+    const wire = next
+      .slice(0, -1)
+      .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
+      .join("\n\n");
 
     let assembled = "";
     abortRef.current?.abort();
@@ -194,7 +197,8 @@ export function VelocloudTroubleshooterWidget() {
 
     await sendMessage(
       wire,
-      (delta) => {
+      { model: VELOCLOUD_AGENT_ID, previousResponseId: null },
+      (delta: string) => {
         assembled += delta;
         setMessages((prev) => {
           const updated = [...prev];
@@ -217,7 +221,6 @@ export function VelocloudTroubleshooterWidget() {
         });
       },
       abortRef.current.signal,
-      VELOCLOUD_AGENT_ID,
     );
 
     setTimeout(() => {

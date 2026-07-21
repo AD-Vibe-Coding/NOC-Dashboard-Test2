@@ -145,8 +145,12 @@
     }
   })();
 
-  var INSPECT_SCRIPT_VERSION = '2026-06-20.hmr-status-signal';
+  var INSPECT_SCRIPT_VERSION = '2026-07-09.deck-rich-editor-v23';
   var inspectEnabled = false;
+  var deckEditEnabled = false;
+  var deckEditingEl = null;
+  var deckEditingOriginal = '';
+  var deckEditingLocator = null;
   var highlightEl = null;
 
   function getElementClassName(el) {
@@ -269,7 +273,7 @@
       var idSel = '#' + cssEscape(el.id);
       if (isUniqueMatch(idSel, el)) return idSel;
     }
-    var STABLE_ATTRS = ['data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa', 'data-id'];
+    var STABLE_ATTRS = ['data-devs-edit', 'data-testid', 'data-test-id', 'data-test', 'data-cy', 'data-qa', 'data-id'];
     for (var i = 0; i < STABLE_ATTRS.length; i += 1) {
       var attr = STABLE_ATTRS[i];
       var val = el.getAttribute(attr);
@@ -939,6 +943,8 @@
   }
 
   function onClick(e) {
+    // Deck edit mode owns clicks (and contenteditable needs the caret).
+    if (deckEditEnabled) return;
     if (!inspectEnabled) return;
     var el = e.target;
     if (!el || el === document.body || el === document.documentElement) return;
@@ -967,6 +973,1362 @@
       }
     }, '*');
     captureElement(el, selectionToken);
+  }
+
+  // -------------------------------------------------------------
+  // Presentation deck editor (contenteditable + rich toolbar + drag).
+  // Parent enables via devs:enable-deck-edit.
+  // - Hover shows editable outlines + drag handle
+  // - Click focuses a block; floating toolbar: B / I / U / Link
+  // - Drag handle reorders among sibling blocks in the slide
+  // - Blur / Enter commits; Escape cancels
+  // -------------------------------------------------------------
+  var DECK_EDITABLE_TAGS = {
+    H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1,
+    P: 1, LI: 1, BLOCKQUOTE: 1, SPAN: 1, DIV: 1, A: 1, LABEL: 1
+  };
+  var deckToolbarEl = null;
+  var deckColorPanelEl = null;
+  var deckColorPanelOpen = false;
+  var deckCommitGeneration = 0;
+  var deckBlurTimer = null;
+  var deckDragCleanup = null;
+  var deckHintEl = null;
+  var deckStyleEl = null;
+  var deckDragEl = null;
+  var deckDragFrom = -1;
+  var deckPendingReorder = null;
+  var deckDragGhost = null;
+  var deckDragOffsetX = 0;
+  var deckDragOffsetY = 0;
+  var deckSuppressBlur = false;
+  var deckSavedSelectionRange = null;
+  // target:hex key — avoid double-wrap when native picker fires input then change
+  var deckLastCustomColorCommit = null;
+  var deckEditingOriginalHtml = '';
+  var deckEditingOriginalHtmlBackup = '';
+
+  function isDeckLeafEditable(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.getAttribute && el.getAttribute('data-devs-edit')) return true;
+    var tag = el.tagName;
+    if (!DECK_EDITABLE_TAGS[tag]) return false;
+    if (tag === 'DIV' || tag === 'SPAN') {
+      if (el.querySelector('h1,h2,h3,h4,h5,h6,p,li,blockquote,div')) return false;
+    }
+    // Allow inline rich children (bold/italic/links) but not nested blocks.
+    if (el.querySelector('h1,h2,h3,h4,h5,h6,p,li,blockquote,ul,ol,section,div')) return false;
+    var t = (el.textContent || '').trim();
+    return !!(t && t.length <= 2000);
+  }
+
+  function findDeckEditableTarget(el) {
+    var cur = el;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      if (isDeckLeafEditable(cur)) return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
+
+  function getRevealSlideIndices(el) {
+    try {
+      if (window.Reveal && typeof window.Reveal.getIndices === 'function') {
+        var idx = window.Reveal.getIndices(el);
+        if (idx && typeof idx.h === 'number') {
+          return { h: idx.h, v: typeof idx.v === 'number' ? idx.v : 0 };
+        }
+      }
+    } catch (_) {}
+    var slidesRoot = document.querySelector('.reveal .slides') || document.querySelector('.slides');
+    var section = el.closest ? el.closest('section') : null;
+    if (!slidesRoot || !section) return { h: 0, v: 0 };
+    var parentSection = section.parentElement && section.parentElement.closest
+      ? section.parentElement.closest('section')
+      : null;
+    if (parentSection && slidesRoot.contains(parentSection)) {
+      var horizontals = [];
+      for (var i = 0; i < slidesRoot.children.length; i += 1) {
+        if (slidesRoot.children[i].tagName === 'SECTION') horizontals.push(slidesRoot.children[i]);
+      }
+      var h = Math.max(0, horizontals.indexOf(parentSection));
+      var verticals = [];
+      for (var j = 0; j < parentSection.children.length; j += 1) {
+        if (parentSection.children[j].tagName === 'SECTION') verticals.push(parentSection.children[j]);
+      }
+      return { h: h, v: Math.max(0, verticals.indexOf(section)) };
+    }
+    var tops = [];
+    for (var k = 0; k < slidesRoot.children.length; k += 1) {
+      if (slidesRoot.children[k].tagName === 'SECTION') tops.push(slidesRoot.children[k]);
+    }
+    var top = section;
+    while (top.parentElement && top.parentElement !== slidesRoot && top.parentElement.tagName === 'SECTION') {
+      top = top.parentElement;
+    }
+    return { h: Math.max(0, tops.indexOf(top)), v: 0 };
+  }
+
+  function ensureDeckEditId(el) {
+    var indices = getRevealSlideIndices(el);
+    var tagName = el.tagName.toLowerCase();
+    var section = el.closest ? el.closest('section') : null;
+    var tagIndex = 0;
+    if (section) {
+      var nodes = section.querySelectorAll(tagName);
+      tagIndex = Math.max(0, Array.prototype.indexOf.call(nodes, el));
+    }
+    var existing = el.getAttribute('data-devs-edit');
+    if (existing) {
+      return {
+        editId: existing,
+        stamped: false,
+        slideH: indices.h,
+        slideV: indices.v,
+        tagName: tagName,
+        tagIndex: tagIndex
+      };
+    }
+    var editId = 's' + indices.h + '-' + indices.v + '-' + tagName + '-' + tagIndex;
+    if (document.querySelector('[data-devs-edit="' + editId + '"]')) {
+      editId = editId + '-' + Date.now().toString(36);
+    }
+    try { el.setAttribute('data-devs-edit', editId); } catch (_) {}
+    return {
+      editId: editId,
+      stamped: true,
+      slideH: indices.h,
+      slideV: indices.v,
+      tagName: tagName,
+      tagIndex: tagIndex
+    };
+  }
+
+  function siblingElementIndex(el) {
+    var parent = el.parentElement;
+    if (!parent) return -1;
+    var kids = [];
+    for (var i = 0; i < parent.children.length; i += 1) kids.push(parent.children[i]);
+    return kids.indexOf(el);
+  }
+
+  function normalizeDeckHtml(html) {
+    return String(html || '').replace(/s+/g, ' ').trim();
+  }
+
+  function ensureDeckEditorChrome() {
+    if (!document.body) return;
+    if (!deckStyleEl) {
+      deckStyleEl = document.createElement('style');
+      deckStyleEl.id = '__devs_deck_edit_style';
+      deckStyleEl.textContent = [
+        'body.__devs-deck-editing .reveal .slides section [data-devs-edit],',
+        'body.__devs-deck-editing .reveal .slides section h1,',
+        'body.__devs-deck-editing .reveal .slides section h2,',
+        'body.__devs-deck-editing .reveal .slides section h3,',
+        'body.__devs-deck-editing .reveal .slides section p,',
+        'body.__devs-deck-editing .reveal .slides section li,',
+        'body.__devs-deck-editing .reveal .slides section blockquote {',
+        '  outline: 1px dashed rgba(20,184,166,0.35);',
+        '  outline-offset: 4px;',
+        '  border-radius: 2px;',
+        '  cursor: text;',
+        '  transition: outline-color 120ms ease, box-shadow 120ms ease;',
+        '}',
+        'body.__devs-deck-editing .reveal .slides section [data-devs-edit]:hover,',
+        'body.__devs-deck-editing .__devs-deck-editable:hover {',
+        '  outline: 1.5px solid rgba(20,184,166,0.7);',
+        '}',
+        'body.__devs-deck-editing .__devs-deck-active {',
+        '  outline: 2px solid #14b8a6 !important;',
+        '  outline-offset: 3px !important;',
+        '  box-shadow: 0 0 0 4px rgba(20,184,166,0.15);',
+        '  cursor: text !important;',
+        '}',
+        'body.__devs-deck-editing .__devs-deck-dragging {',
+        '  opacity: 0.35;',
+        '  outline: 2px dashed rgba(20,184,166,0.55) !important;',
+        '  outline-offset: 2px !important;',
+        '  box-shadow: none !important;',
+        '  pointer-events: none !important;',
+        '}',
+        'body.__devs-deck-editing .__devs-deck-drop-before { box-shadow: inset 0 3px 0 #14b8a6; }',
+        'body.__devs-deck-editing .__devs-deck-drop-after { box-shadow: inset 0 -3px 0 #14b8a6; }',
+        'body.__devs-deck-editing.__devs-deck-reordering { cursor: grabbing !important; }',
+        'body.__devs-deck-editing.__devs-deck-reordering .__devs_deck_handle { opacity: 0; pointer-events: none; }',
+        '.__devs-deck-ghost {',
+        '  position: fixed; z-index: 2147483646; pointer-events: none; margin: 0;',
+        '  opacity: 0.92; transform: rotate(1.25deg) scale(1.02);',
+        '  box-shadow: 0 18px 40px rgba(15,23,42,0.28), 0 0 0 1px rgba(20,184,166,0.35);',
+        '  border-radius: 4px; background: rgba(255,255,255,0.96);',
+        '  max-width: min(92vw, 720px); overflow: hidden;',
+        '}',
+        'body.__devs-deck-editing .__devs-deck-flip {',
+        '  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);',
+        '  will-change: transform;',
+        '}',
+        '#__devs_deck_toolbar {',
+        '  position: fixed; z-index: 2147483647; display: none;',
+        '  align-items: center; gap: 4px; padding: 6px 8px;',
+        '  background: rgba(15,23,42,0.96); color: #f8fafc; border-radius: 12px;',
+        '  border: 1px solid rgba(148,163,184,0.22);',
+        '  backdrop-filter: blur(10px);',
+        '  box-shadow: 0 12px 40px rgba(2,6,23,0.45);',
+        '  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;',
+        '  font-size: 12px; line-height: 1; user-select: none;',
+        '}',
+        '#__devs_deck_toolbar button {',
+        '  appearance: none; border: 0; background: transparent; color: #e2e8f0;',
+        '  min-width: 28px; height: 28px; padding: 0 8px; border-radius: 8px; cursor: pointer;',
+        '  font-weight: 600; font-size: 12px; display: inline-flex; align-items: center; justify-content: center;',
+        '}',
+        '#__devs_deck_toolbar button:hover { background: rgba(148,163,184,0.16); color: #fff; }',
+        '#__devs_deck_toolbar button.__on:not(.__swatch) { background: rgba(20,184,166,0.28); color: #99f6e4; }',
+        '#__devs_deck_toolbar .__sep { width: 1px; height: 16px; background: rgba(148,163,184,0.28); margin: 0 2px; }',
+        '#__devs_deck_toolbar .__size {',
+        '  display: inline-flex; align-items: center; gap: 2px; padding: 2px;',
+        '  background: rgba(148,163,184,0.12); border-radius: 8px;',
+        '}',
+        '#__devs_deck_toolbar .__size button { min-width: 26px; height: 24px; padding: 0 6px; font-size: 11px; }',
+        '#__devs_deck_toolbar .__picker-btn {',
+        '  gap: 6px; padding: 0 10px; min-width: auto; font-weight: 600;',
+        '}',
+        '#__devs_deck_toolbar .__picker-btn .__preview {',
+        '  width: 14px; height: 14px; border-radius: 4px;',
+        '  border: 1px solid rgba(255,255,255,0.35); box-sizing: border-box; flex-shrink: 0;',
+        '}',
+        '#__devs_deck_toolbar .__picker-btn .__preview.__text-preview {',
+        '  display: inline-flex; align-items: center; justify-content: center;',
+        '  font-size: 10px; font-weight: 800; line-height: 1; background: #1e293b;',
+        '}',
+        '#__devs_deck_toolbar .__picker-btn .__preview.__hl-preview {',
+        '  width: 12px; height: 12px; border-radius: 3px;',
+        '}',
+        '#__devs_deck_toolbar .__picker-btn .__chev { opacity: 0.65; font-size: 9px; }',
+        '#__devs_deck_toolbar .__picker-btn.__open { background: rgba(148,163,184,0.22); }',
+        '#__devs_deck_toolbar .__link { padding: 0 10px; letter-spacing: 0.01em; }',
+        '#__devs_deck_color_panel {',
+        '  position: absolute; left: 0; top: calc(100% + 8px); z-index: 2;',
+        '  display: none; width: 228px; padding: 10px;',
+        '  background: rgba(15,23,42,0.98); color: #f8fafc; border-radius: 12px;',
+        '  border: 1px solid rgba(148,163,184,0.25);',
+        '  box-shadow: 0 16px 40px rgba(2,6,23,0.55);',
+        '}',
+        '#__devs_deck_color_panel.__open { display: block; }',
+        '#__devs_deck_color_panel.__above { top: auto; bottom: calc(100% + 8px); }',
+        '#__devs_deck_color_panel .__section + .__section { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(148,163,184,0.18); }',
+        '#__devs_deck_color_panel .__label {',
+        '  display: block; margin: 0 0 8px; font-size: 11px; font-weight: 600;',
+        '  color: #94a3b8; letter-spacing: 0.02em; text-transform: uppercase;',
+        '}',
+        '#__devs_deck_color_panel .__grid {',
+        '  display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px;',
+        '}',
+        '#__devs_deck_color_panel .__swatch {',
+        '  width: 100%; aspect-ratio: 1; min-width: 0; height: auto; padding: 0;',
+        '  border-radius: 8px; border: 1px solid rgba(255,255,255,0.2);',
+        '  box-sizing: border-box; cursor: pointer;',
+        '}',
+        '#__devs_deck_color_panel .__swatch:hover { transform: scale(1.06); }',
+        '#__devs_deck_color_panel .__swatch.__on {',
+        '  outline: 2px solid #99f6e4; outline-offset: 1px;',
+        '}',
+        '#__devs_deck_color_panel .__swatch.__text {',
+        '  font-size: 12px; font-weight: 800; background: #1e293b;',
+        '}',
+        '#__devs_deck_color_panel .__swatch.__clear {',
+        '  background: repeating-linear-gradient(135deg,#334155,#334155 4px,#1e293b 4px,#1e293b 8px);',
+        '  color: #e2e8f0; font-size: 11px; font-weight: 700;',
+        '}',
+        '#__devs_deck_color_panel .__custom-row {',
+        '  display: flex; align-items: center; gap: 8px; margin-top: 8px;',
+        '}',
+        '#__devs_deck_color_panel .__custom-row label {',
+        '  flex: 1; font-size: 11px; color: #cbd5e1; font-weight: 500;',
+        '}',
+        '#__devs_deck_color_panel input[type="color"] {',
+        '  appearance: none; -webkit-appearance: none; border: 0; padding: 0;',
+        '  width: 28px; height: 28px; border-radius: 8px; cursor: pointer;',
+        '  background: transparent; overflow: hidden;',
+        '  box-shadow: inset 0 0 0 1px rgba(148,163,184,0.35);',
+        '}',
+        '#__devs_deck_color_panel input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }',
+        '#__devs_deck_color_panel input[type="color"]::-webkit-color-swatch {',
+        '  border: 0; border-radius: 8px;',
+        '}',
+        '#__devs_deck_color_panel input[type="color"]::-moz-color-swatch {',
+        '  border: 0; border-radius: 8px;',
+        '}',
+        '#__devs_deck_hint {',
+        '  position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px;',
+        '  z-index: 2147483647; display: none; padding: 8px 14px; border-radius: 999px;',
+        '  background: rgba(15,23,42,0.92); color: #e2e8f0; font-size: 12px;',
+        '  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;',
+        '  box-shadow: 0 8px 24px rgba(15,23,42,0.3); pointer-events: none;',
+        '}',
+        '.__devs_deck_handle {',
+        '  position: fixed; width: 18px; height: 28px;',
+        '  border-radius: 6px; background: #0f172a; color: #94a3b8; cursor: grab;',
+        '  display: none; align-items: center; justify-content: center;',
+        '  font-size: 12px; line-height: 1; z-index: 2147483645; user-select: none;',
+        '  box-shadow: 0 4px 12px rgba(15,23,42,0.25);',
+        '}',
+        'body.__devs-deck-editing .__devs_deck_handle { display: flex; }',
+        '.__devs_deck_handle:active { cursor: grabbing; }'
+      ].join('\n');
+      document.documentElement.appendChild(deckStyleEl);
+    }
+    if (!deckToolbarEl) {
+      deckToolbarEl = document.createElement('div');
+      deckToolbarEl.id = '__devs_deck_toolbar';
+      deckToolbarEl.setAttribute('role', 'toolbar');
+      deckToolbarEl.setAttribute('aria-label', 'Text formatting');
+      deckToolbarEl.innerHTML = [
+        '<button type="button" data-cmd="bold" title="Bold (\u2318B)"><b>B</b></button>',
+        '<button type="button" data-cmd="italic" title="Italic (\u2318I)"><i>I</i></button>',
+        '<button type="button" data-cmd="underline" title="Underline (\u2318U)"><span style="text-decoration:underline">U</span></button>',
+        '<span class="__sep"></span>',
+        '<span class="__size" role="group" aria-label="Text size">',
+        '<button type="button" data-cmd="size-sm" title="Smaller text" style="font-size:10px">A</button>',
+        '<button type="button" data-cmd="size-md" title="Default text" style="font-size:12px">A</button>',
+        '<button type="button" data-cmd="size-lg" title="Larger text" style="font-size:15px">A</button>',
+        '</span>',
+        '<span class="__sep"></span>',
+        '<button type="button" class="__picker-btn" data-action="toggle-color-panel" title="Text color & highlight" aria-haspopup="true" aria-expanded="false">',
+        '<span class="__preview __text-preview" data-role="color-preview">A</span>',
+        '<span class="__preview __hl-preview" data-role="highlight-preview"></span>',
+        '<span>Color</span>',
+        '<span class="__chev">\u25BE</span>',
+        '</button>',
+        '<span class="__sep"></span>',
+        '<button type="button" class="__link" data-cmd="createLink" title="Add link">Link</button>',
+        '<button type="button" class="__link" data-cmd="unlink" title="Remove link">Unlink</button>',
+        '<div id="__devs_deck_color_panel" role="dialog" aria-label="Color and highlight">',
+        '<div class="__section">',
+        '<span class="__label">Text color</span>',
+        '<div class="__grid">',
+        '<button type="button" class="__swatch __clear" data-cmd="color:default" title="Default">\u00D7</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#ffffff" title="White" style="color:#ffffff">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#94a3b8" title="Slate" style="color:#94a3b8">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#ef4444" title="Red" style="color:#ef4444">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#f97316" title="Orange" style="color:#f97316">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#eab308" title="Amber" style="color:#eab308">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#22c55e" title="Green" style="color:#22c55e">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#14b8a6" title="Teal" style="color:#14b8a6">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#3b82f6" title="Blue" style="color:#3b82f6">A</button>',
+        '<button type="button" class="__swatch __text" data-cmd="color:#8b5cf6" title="Violet" style="color:#8b5cf6">A</button>',
+        '</div>',
+        '<div class="__custom-row">',
+        '<label for="__devs_deck_text_color">Custom</label>',
+        '<input type="color" id="__devs_deck_text_color" data-color-target="text" value="#3b82f6" title="Custom text color" />',
+        '</div>',
+        '</div>',
+        '<div class="__section">',
+        '<span class="__label">Highlight</span>',
+        '<div class="__grid">',
+        '<button type="button" class="__swatch __clear" data-cmd="highlight:none" title="No highlight">\u00D7</button>',
+        '<button type="button" class="__swatch" data-cmd="highlight:#fef08a" title="Yellow" style="background:#fef08a"></button>',
+        '<button type="button" class="__swatch" data-cmd="highlight:#bbf7d0" title="Green" style="background:#bbf7d0"></button>',
+        '<button type="button" class="__swatch" data-cmd="highlight:#bfdbfe" title="Blue" style="background:#bfdbfe"></button>',
+        '<button type="button" class="__swatch" data-cmd="highlight:#fbcfe8" title="Pink" style="background:#fbcfe8"></button>',
+        '<button type="button" class="__swatch" data-cmd="highlight:#fed7aa" title="Orange" style="background:#fed7aa"></button>',
+        '</div>',
+        '<div class="__custom-row">',
+        '<label for="__devs_deck_highlight_color">Custom</label>',
+        '<input type="color" id="__devs_deck_highlight_color" data-color-target="highlight" value="#fef08a" title="Custom highlight" />',
+        '</div>',
+        '</div>',
+        '</div>'
+      ].join('');
+      // Keep CSS position:fixed — do not set inline position (that hid the toolbar).
+      // Fixed already creates a containing block for the absolute color panel.
+      deckColorPanelEl = deckToolbarEl.querySelector('#__devs_deck_color_panel');
+      function isDeckColorPickerControl(el) {
+        // Clicks on label text hit a Text node — walk up to an Element first.
+        var node = el;
+        while (node && node.nodeType !== 1) node = node.parentNode;
+        if (!node || node.nodeType !== 1) return false;
+        if (node.tagName === 'INPUT' && node.type === 'color' && node.getAttribute('data-color-target')) {
+          return true;
+        }
+        var label = node.tagName === 'LABEL' ? node : (node.closest ? node.closest('label') : null);
+        if (!label) return false;
+        var forId = label.getAttribute('for');
+        if (!forId) return false;
+        var input = document.getElementById(forId);
+        return !!(input && input.tagName === 'INPUT' && input.type === 'color' && input.getAttribute('data-color-target'));
+      }
+      function snapshotDeckSelectionForColorPicker() {
+        try {
+          var sel = window.getSelection();
+          // Only replace a previously saved range when the current selection is
+          // still non-empty (still inside the editor). After the native picker
+          // steals focus, getSelection() is often empty — keep the mousedown snapshot.
+          if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+            deckSavedSelectionRange = sel.getRangeAt(0).cloneRange();
+          } else if (!deckSavedSelectionRange) {
+            deckSavedSelectionRange = null;
+          }
+        } catch (_) {
+          if (!deckSavedSelectionRange) deckSavedSelectionRange = null;
+        }
+        // New picker session — allow one commit for this selection.
+        deckLastCustomColorCommit = null;
+      }
+      deckToolbarEl.addEventListener('mousedown', function(e) {
+        // Allow native color inputs (and their labels) to open; still suppress
+        // blur for other controls. Snapshot selection before focus moves.
+        if (isDeckColorPickerControl(e.target)) {
+          snapshotDeckSelectionForColorPicker();
+        } else {
+          e.preventDefault();
+        }
+        deckSuppressBlur = true;
+      });
+      // Keyboard / non-mouse open paths never fire mousedown on the input first.
+      // Always run snapshot: non-empty selection refreshes the range + clears the
+      // prior commit key; empty selection (native picker stole focus) keeps the
+      // existing mousedown/prior range instead of wiping it.
+      deckToolbarEl.addEventListener('focusin', function(e) {
+        var input = e.target && e.target.closest
+          ? e.target.closest('input[type="color"][data-color-target]')
+          : null;
+        if (!input) return;
+        snapshotDeckSelectionForColorPicker();
+        deckSuppressBlur = true;
+      });
+      deckToolbarEl.addEventListener('focusout', function(e) {
+        var leaving = e.target && e.target.closest
+          ? e.target.closest('input[type="color"][data-color-target]')
+          : null;
+        if (!leaving) return;
+        var next = e.relatedTarget;
+        if (next && isDeckColorPickerControl(next)) return;
+        // Picker closed without change (Esc / click-away) — re-enable blur commits.
+        setTimeout(function() { deckSuppressBlur = false; }, 0);
+      });
+      function restoreDeckSavedSelection() {
+        if (!deckSavedSelectionRange) return false;
+        try {
+          if (deckEditingEl) deckEditingEl.focus();
+          var sel = window.getSelection();
+          if (!sel) return false;
+          sel.removeAllRanges();
+          sel.addRange(deckSavedSelectionRange);
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+      function previewCustomColorInput(input) {
+        if (!input || !deckToolbarEl) return;
+        var hex = String(input.value || '').toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+        var target = input.getAttribute('data-color-target');
+        if (target === 'highlight') {
+          var hlPreview = deckToolbarEl.querySelector('[data-role="highlight-preview"]');
+          if (hlPreview) {
+            hlPreview.style.background = hex;
+            hlPreview.style.borderStyle = 'solid';
+          }
+        } else {
+          var colorPreview = deckToolbarEl.querySelector('[data-role="color-preview"]');
+          if (colorPreview) colorPreview.style.color = hex;
+        }
+      }
+      function applyCustomColorInput(input) {
+        if (!input || !deckEditingEl) return;
+        var hex = String(input.value || '').toLowerCase();
+        if (!/^#[0-9a-f]{6}$/.test(hex)) return;
+        var target = input.getAttribute('data-color-target') || 'text';
+        var commitKey = target + ':' + hex;
+        // Native pickers fire input while dragging then change on close — only
+        // commit once so we don't nest identical <span style> wrappers.
+        if (deckLastCustomColorCommit === commitKey) return;
+        restoreDeckSavedSelection();
+        if (target === 'highlight') runDeckFormatCommand('highlight:' + hex);
+        else runDeckFormatCommand('color:' + hex);
+        deckLastCustomColorCommit = commitKey;
+        refreshDeckToolbarState();
+      }
+      deckToolbarEl.addEventListener('input', function(e) {
+        var input = e.target && e.target.closest ? e.target.closest('input[type="color"][data-color-target]') : null;
+        if (!input) return;
+        // Preview only — do not mutate the DOM until change.
+        previewCustomColorInput(input);
+      });
+      deckToolbarEl.addEventListener('change', function(e) {
+        var input = e.target && e.target.closest ? e.target.closest('input[type="color"][data-color-target]') : null;
+        if (!input) return;
+        applyCustomColorInput(input);
+        setTimeout(function() { deckSuppressBlur = false; }, 0);
+      });
+      deckToolbarEl.addEventListener('click', function(e) {
+        if (!deckEditingEl) return;
+        var toggle = e.target && e.target.closest ? e.target.closest('[data-action="toggle-color-panel"]') : null;
+        if (toggle) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleDeckColorPanel();
+          setTimeout(function() { deckSuppressBlur = false; }, 0);
+          return;
+        }
+        if (isDeckColorPickerControl(e.target)) return;
+        var btn = e.target && e.target.closest ? e.target.closest('button[data-cmd]') : null;
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        runDeckFormatCommand(btn.getAttribute('data-cmd'));
+        refreshDeckToolbarState();
+        setTimeout(function() { deckSuppressBlur = false; }, 0);
+      });
+      document.body.appendChild(deckToolbarEl);
+    }
+    if (!deckHintEl) {
+      deckHintEl = document.createElement('div');
+      deckHintEl.id = '__devs_deck_hint';
+      deckHintEl.textContent = 'Edit mode — click text to edit · drag ⋮⋮ to reorder · Esc cancels';
+      document.body.appendChild(deckHintEl);
+    }
+  }
+
+  function setDeckEditModeUi(on) {
+    ensureDeckEditorChrome();
+    try { document.body.classList.toggle('__devs-deck-editing', !!on); } catch (_) {}
+    if (deckHintEl) deckHintEl.style.display = on ? 'block' : 'none';
+    if (!on) {
+      hideDeckToolbar();
+      clearDeckDropIndicators();
+      // Commit in-progress typing (don't discard like Escape).
+      if (deckEditingEl) commitDeckEdit(deckEditingEl, false);
+      // Tear down an in-flight drag so mouseup can't post after disable.
+      if (typeof deckDragCleanup === 'function') {
+        try { deckDragCleanup(); } catch (_) {}
+        deckDragCleanup = null;
+      }
+      if (deckDragGhost && deckDragGhost.parentNode) {
+        try { deckDragGhost.parentNode.removeChild(deckDragGhost); } catch (_) {}
+      }
+      deckDragGhost = null;
+      try { document.body.classList.remove('__devs-deck-reordering'); } catch (_) {}
+      deckDragEl = null;
+      deckDragFrom = -1;
+      deckPendingReorder = null;
+      var handles = document.querySelectorAll('.__devs_deck_handle');
+      for (var i = 0; i < handles.length; i += 1) handles[i].style.display = 'none';
+    } else {
+      stampVisibleSlideEditables();
+    }
+  }
+
+  function stampVisibleSlideEditables() {
+    var section = document.querySelector('.reveal .slides section.present') ||
+      document.querySelector('.reveal .slides section');
+    if (!section) return;
+    var candidates = section.querySelectorAll('h1,h2,h3,h4,h5,h6,p,li,blockquote,[data-devs-edit]');
+    for (var i = 0; i < candidates.length; i += 1) {
+      var el = candidates[i];
+      if (!isDeckLeafEditable(el) && !el.getAttribute('data-devs-edit')) continue;
+      ensureDeckEditId(el);
+      el.classList.add('__devs-deck-editable');
+      attachDeckDragHandle(el);
+    }
+  }
+
+  function attachDeckDragHandle(el) {
+    if (!el || el.__devsDragHandle) {
+      if (el && typeof el.__devsPlaceHandle === 'function') el.__devsPlaceHandle();
+      return;
+    }
+    var handle = document.createElement('div');
+    handle.className = '__devs_deck_handle';
+    handle.textContent = '⋮⋮';
+    handle.title = 'Drag to reorder';
+    handle.setAttribute('contenteditable', 'false');
+    handle.addEventListener('mousedown', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      beginDeckDrag(el, e);
+    });
+    el.__devsDragHandle = handle;
+    function place() {
+      if (!deckEditEnabled || !el.isConnected) {
+        handle.style.display = 'none';
+        return;
+      }
+      var r = el.getBoundingClientRect();
+      handle.style.left = Math.max(4, r.left - 22) + 'px';
+      handle.style.top = (r.top + Math.max(0, (r.height - 28) / 2)) + 'px';
+      handle.style.display = 'flex';
+    }
+    el.__devsPlaceHandle = place;
+    document.body.appendChild(handle);
+    place();
+  }
+
+  function placeAllDeckHandles() {
+    var nodes = document.querySelectorAll('.__devs-deck-editable, [data-devs-edit]');
+    for (var i = 0; i < nodes.length; i += 1) {
+      if (typeof nodes[i].__devsPlaceHandle === 'function') nodes[i].__devsPlaceHandle();
+    }
+  }
+
+  function beginDeckDrag(el, startEv) {
+    if (!deckEditEnabled || !el || !el.parentElement) return;
+    // Drag handle mousedown blurs the active block — cancel any pending blur
+    // commit so we don't double-save (blur commit + reorder commit).
+    deckSuppressBlur = true;
+    if (deckBlurTimer) {
+      clearTimeout(deckBlurTimer);
+      deckBlurTimer = null;
+    }
+    if (deckEditingEl && deckEditingEl !== el) commitDeckEdit(deckEditingEl, false);
+    else if (deckEditingEl === el) commitDeckEdit(deckEditingEl, false);
+    if (typeof deckDragCleanup === 'function') {
+      try { deckDragCleanup(); } catch (_) {}
+      deckDragCleanup = null;
+    }
+    deckDragEl = el;
+    deckDragFrom = siblingElementIndex(el);
+    deckPendingReorder = null;
+    // Stamp + capture locator BEFORE live DOM moves so write-back injects the
+    // id using the pre-move tagIndex (unstamped siblings would otherwise get
+    // the wrong block after flipLiveMove).
+    var dragLocator = ensureDeckEditId(el);
+    var originalNext = el.nextElementSibling;
+    el.classList.add('__devs-deck-dragging');
+    try { document.body.classList.add('__devs-deck-reordering'); } catch (_) {}
+    hideDeckToolbar();
+
+    var startRect = el.getBoundingClientRect();
+    var pointerX = startEv && typeof startEv.clientX === 'number' ? startEv.clientX : startRect.left + startRect.width / 2;
+    var pointerY = startEv && typeof startEv.clientY === 'number' ? startEv.clientY : startRect.top + startRect.height / 2;
+    deckDragOffsetX = pointerX - startRect.left;
+    deckDragOffsetY = pointerY - startRect.top;
+
+    try {
+      deckDragGhost = el.cloneNode(true);
+      deckDragGhost.classList.add('__devs-deck-ghost');
+      deckDragGhost.classList.remove('__devs-deck-dragging', '__devs-deck-active', '__devs-deck-editable');
+      deckDragGhost.removeAttribute('contenteditable');
+      deckDragGhost.removeAttribute('data-devs-edit');
+      deckDragGhost.style.width = Math.max(40, startRect.width) + 'px';
+      deckDragGhost.style.left = (pointerX - deckDragOffsetX) + 'px';
+      deckDragGhost.style.top = (pointerY - deckDragOffsetY) + 'px';
+      document.body.appendChild(deckDragGhost);
+    } catch (_) {
+      deckDragGhost = null;
+    }
+
+    setTimeout(function() { deckSuppressBlur = false; }, 0);
+
+    function moveGhost(clientX, clientY) {
+      if (!deckDragGhost) return;
+      deckDragGhost.style.left = (clientX - deckDragOffsetX) + 'px';
+      deckDragGhost.style.top = (clientY - deckDragOffsetY) + 'px';
+    }
+
+    function clearFlipTransforms(parent) {
+      if (!parent) return;
+      var kids = parent.children;
+      for (var i = 0; i < kids.length; i += 1) {
+        kids[i].classList.remove('__devs-deck-flip');
+        kids[i].style.transform = '';
+        kids[i].style.transition = '';
+      }
+    }
+
+    function flipLiveMove(parent, moveEl, beforeNode) {
+      if (!parent || !moveEl) return;
+      var kids = Array.prototype.slice.call(parent.children);
+      var first = [];
+      for (var i = 0; i < kids.length; i += 1) {
+        first.push({ el: kids[i], rect: kids[i].getBoundingClientRect() });
+      }
+      if (beforeNode) parent.insertBefore(moveEl, beforeNode);
+      else parent.appendChild(moveEl);
+      for (var j = 0; j < first.length; j += 1) {
+        var item = first[j];
+        if (item.el === moveEl) continue;
+        var last = item.el.getBoundingClientRect();
+        var dy = item.rect.top - last.top;
+        var dx = item.rect.left - last.left;
+        if (!dx && !dy) continue;
+        item.el.style.transition = 'none';
+        item.el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+        void item.el.offsetWidth;
+        item.el.classList.add('__devs-deck-flip');
+        item.el.style.transition = '';
+        item.el.style.transform = '';
+      }
+      placeAllDeckHandles();
+    }
+
+    function liveReorderToward(clientX, clientY) {
+      if (!deckDragEl || !deckDragEl.parentElement) return;
+      var parent = deckDragEl.parentElement;
+      // Ghost / dragged node use pointer-events:none, so hit-testing sees siblings.
+      var over = document.elementFromPoint(clientX, clientY);
+      var target = findDeckEditableTarget(over);
+      if (!target || target === deckDragEl) return;
+      if (target.parentElement !== parent) return;
+      var rect = target.getBoundingClientRect();
+      var before = clientY < rect.top + rect.height / 2;
+      var kids = Array.prototype.slice.call(parent.children);
+      var from = kids.indexOf(deckDragEl);
+      var targetIdx = kids.indexOf(target);
+      if (from < 0 || targetIdx < 0) return;
+      var insertIdx = before ? targetIdx : targetIdx + 1;
+      var to = insertIdx > from ? insertIdx - 1 : insertIdx;
+      if (to === from) return;
+      var beforeNode = null;
+      if (to < kids.length) {
+        var refIdx = to < from ? to : to + 1;
+        beforeNode = kids[refIdx] || null;
+        if (beforeNode === deckDragEl) beforeNode = deckDragEl.nextElementSibling;
+      }
+      flipLiveMove(parent, deckDragEl, beforeNode);
+      deckPendingReorder = { from: deckDragFrom, to: to };
+    }
+
+    function teardownGhost() {
+      if (deckDragGhost && deckDragGhost.parentNode) {
+        try { deckDragGhost.parentNode.removeChild(deckDragGhost); } catch (_) {}
+      }
+      deckDragGhost = null;
+    }
+
+    function onMove(ev) {
+      if (!deckEditEnabled || !deckDragEl) return;
+      if (ev.cancelable) ev.preventDefault();
+      moveGhost(ev.clientX, ev.clientY);
+      liveReorderToward(ev.clientX, ev.clientY);
+    }
+
+    function finishDrag(commit) {
+      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener('mouseup', onUp, true);
+      deckDragCleanup = null;
+      clearDeckDropIndicators();
+      teardownGhost();
+      try { document.body.classList.remove('__devs-deck-reordering'); } catch (_) {}
+      var parent = deckDragEl ? deckDragEl.parentElement : null;
+      if (deckDragEl) {
+        deckDragEl.classList.remove('__devs-deck-dragging');
+        clearFlipTransforms(parent);
+      }
+      if (!commit || !deckEditEnabled || !deckDragEl || !parent) {
+        if (deckDragEl && parent) {
+          try {
+            if (originalNext && originalNext.parentElement === parent) {
+              parent.insertBefore(deckDragEl, originalNext);
+            } else {
+              parent.appendChild(deckDragEl);
+            }
+          } catch (_) {}
+        }
+        deckDragEl = null;
+        deckDragFrom = -1;
+        deckPendingReorder = null;
+        placeAllDeckHandles();
+        return;
+      }
+
+      var kids = Array.prototype.slice.call(parent.children);
+      var finalIdx = kids.indexOf(deckDragEl);
+      var from = deckDragFrom;
+      var to = finalIdx;
+      if (from >= 0 && to >= 0 && to !== from) {
+        // Reuse the pre-move locator — do not recompute tagIndex after live moves.
+        var locator = dragLocator || ensureDeckEditId(deckDragEl);
+        var txt = (deckDragEl.textContent || '').replace(/s+/g, ' ').trim();
+        var reorderHtml = deckDragEl.innerHTML;
+        // Snap siblings back to the pre-drag order before the parent remounts
+        // from saved Deck.tsx. Leaving the live flip DOM up lets HMR reconcile
+        // over a reordered tree during the async save and corrupt markup.
+        try {
+          if (originalNext && originalNext.parentElement === parent) {
+            parent.insertBefore(deckDragEl, originalNext);
+          } else {
+            parent.appendChild(deckDragEl);
+          }
+        } catch (_) {}
+        window.parent.postMessage({
+          type: 'devs:deck-edit-commit',
+          payload: {
+            oldText: txt,
+            newText: txt,
+            newHtml: reorderHtml,
+            editId: locator.editId,
+            slideH: locator.slideH,
+            slideV: locator.slideV,
+            tagName: locator.tagName,
+            tagIndex: locator.tagIndex,
+            reorder: { from: from, to: to }
+          }
+        }, '*');
+      }
+      deckDragEl = null;
+      deckDragFrom = -1;
+      deckPendingReorder = null;
+      placeAllDeckHandles();
+    }
+
+    function onUp() {
+      finishDrag(true);
+    }
+
+    document.addEventListener('mousemove', onMove, true);
+    document.addEventListener('mouseup', onUp, true);
+    deckDragCleanup = function() {
+      finishDrag(false);
+    };
+  }
+
+  function clearDeckDropIndicators() {
+    var nodes = document.querySelectorAll('.__devs-deck-drop-before, .__devs-deck-drop-after');
+    for (var i = 0; i < nodes.length; i += 1) {
+      nodes[i].classList.remove('__devs-deck-drop-before');
+      nodes[i].classList.remove('__devs-deck-drop-after');
+    }
+  }
+
+  function showDeckToolbar(el) {
+    if (!deckToolbarEl || !el) return;
+    var r = el.getBoundingClientRect();
+    deckToolbarEl.style.display = 'flex';
+    var tw = deckToolbarEl.offsetWidth || 180;
+    var left = Math.min(window.innerWidth - tw - 8, Math.max(8, r.left + r.width / 2 - tw / 2));
+    var top = r.top - 44;
+    if (top < 8) top = r.bottom + 8;
+    deckToolbarEl.style.left = left + 'px';
+    deckToolbarEl.style.top = top + 'px';
+    refreshDeckToolbarState();
+  }
+
+  function setDeckColorPanelOpen(open) {
+    deckColorPanelOpen = !!open;
+    if (deckColorPanelEl) {
+      deckColorPanelEl.classList.toggle('__open', deckColorPanelOpen);
+      // Flip above the toolbar when there isn't room below.
+      if (deckColorPanelOpen && deckToolbarEl) {
+        var rect = deckToolbarEl.getBoundingClientRect();
+        var placeAbove = rect.bottom + 280 > window.innerHeight && rect.top > 280;
+        deckColorPanelEl.classList.toggle('__above', !!placeAbove);
+      }
+    }
+    var toggle = deckToolbarEl && deckToolbarEl.querySelector('[data-action="toggle-color-panel"]');
+    if (toggle) {
+      toggle.classList.toggle('__open', deckColorPanelOpen);
+      toggle.setAttribute('aria-expanded', deckColorPanelOpen ? 'true' : 'false');
+    }
+  }
+
+  function toggleDeckColorPanel() {
+    setDeckColorPanelOpen(!deckColorPanelOpen);
+  }
+
+  function hideDeckToolbar() {
+    setDeckColorPanelOpen(false);
+    deckSavedSelectionRange = null;
+    deckLastCustomColorCommit = null;
+    deckSuppressBlur = false;
+    if (deckToolbarEl) deckToolbarEl.style.display = 'none';
+  }
+
+  function refreshDeckToolbarState() {
+    if (!deckToolbarEl) return;
+    var activeSize = detectDeckSelectionFontSize();
+    var activeColor = detectDeckSelectionStyle('color') || 'default';
+    var activeHighlight = detectDeckSelectionStyle('backgroundColor') || 'none';
+    var buttons = deckToolbarEl.querySelectorAll('button[data-cmd]');
+    for (var i = 0; i < buttons.length; i += 1) {
+      var cmd = buttons[i].getAttribute('data-cmd') || '';
+      var on = false;
+      try {
+        if (cmd === 'bold') on = !!findDeckAncestorTag(['STRONG', 'B']);
+        else if (cmd === 'italic') on = !!findDeckAncestorTag(['EM', 'I']);
+        else if (cmd === 'underline') on = !!findDeckAncestorTag(['U']);
+        else if (cmd === 'size-sm' || cmd === 'size-md' || cmd === 'size-lg') {
+          on = activeSize === cmd;
+        } else if (cmd.indexOf('color:') === 0) {
+          on = normalizeDeckColor(cmd.slice(6)) === normalizeDeckColor(activeColor) ||
+            (cmd === 'color:default' && (!activeColor || activeColor === 'default' || activeColor === 'inherit'));
+        } else if (cmd.indexOf('highlight:') === 0) {
+          var hv = cmd.slice(10);
+          on = (hv === 'none' && (!activeHighlight || activeHighlight === 'none' || activeHighlight === 'transparent')) ||
+            normalizeDeckColor(hv) === normalizeDeckColor(activeHighlight);
+        }
+      } catch (_) {}
+      buttons[i].classList.toggle('__on', !!on);
+    }
+    // Mirror current color/highlight on the compact Color button.
+    var colorPreview = deckToolbarEl.querySelector('[data-role="color-preview"]');
+    if (colorPreview) {
+      var previewColor = (activeColor && activeColor !== 'default' && activeColor !== 'inherit')
+        ? activeColor
+        : '#e2e8f0';
+      colorPreview.style.color = previewColor;
+    }
+    var hlPreview = deckToolbarEl.querySelector('[data-role="highlight-preview"]');
+    if (hlPreview) {
+      var previewHl = (activeHighlight && activeHighlight !== 'none' && activeHighlight !== 'transparent')
+        ? activeHighlight
+        : 'transparent';
+      hlPreview.style.background = previewHl;
+      hlPreview.style.borderStyle = previewHl === 'transparent' ? 'dashed' : 'solid';
+    }
+    var textColorInput = deckToolbarEl.querySelector('#__devs_deck_text_color');
+    if (textColorInput) {
+      var textHex = normalizeDeckColor(activeColor);
+      if (/^#[0-9a-f]{6}$/.test(textHex)) textColorInput.value = textHex;
+    }
+    var highlightColorInput = deckToolbarEl.querySelector('#__devs_deck_highlight_color');
+    if (highlightColorInput) {
+      var hlHex = normalizeDeckColor(activeHighlight);
+      if (/^#[0-9a-f]{6}$/.test(hlHex)) highlightColorInput.value = hlHex;
+    }
+  }
+
+  function deckSizeToCss(cmd) {
+    if (cmd === 'size-sm') return '0.85em';
+    if (cmd === 'size-lg') return '1.35em';
+    return '1em';
+  }
+
+  function normalizeDeckColor(value) {
+    if (!value) return '';
+    var v = String(value).trim().toLowerCase();
+    if (v === 'default' || v === 'none' || v === 'inherit' || v === 'transparent') return v;
+    var hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(v);
+    if (hex) {
+      if (hex[1].length === 3) {
+        return '#' + hex[1].split('').map(function(c) { return c + c; }).join('');
+      }
+      return '#' + hex[1];
+    }
+    var rgb = new RegExp('^rgba?\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)', 'i').exec(v);
+    if (rgb) {
+      return '#' + [rgb[1], rgb[2], rgb[3]].map(function(n) {
+        var h = Number(n).toString(16);
+        return h.length === 1 ? '0' + h : h;
+      }).join('');
+    }
+    return v;
+  }
+
+  function detectDeckSelectionFontSize() {
+    try {
+      var sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return 'size-md';
+      var node = sel.anchorNode;
+      var el = node && node.nodeType === 3 ? node.parentElement : node;
+      while (el && el !== deckEditingEl) {
+        if (el.nodeType === 1) {
+          var fs = (el.style && el.style.fontSize) || '';
+          if (fs === '0.85em' || fs === '85%') return 'size-sm';
+          if (fs === '1.35em' || fs === '135%') return 'size-lg';
+          if (fs === '1em' || fs === '100%') return 'size-md';
+        }
+        el = el.parentElement;
+      }
+    } catch (_) {}
+    return 'size-md';
+  }
+
+  function detectDeckSelectionStyle(prop) {
+    try {
+      var sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return '';
+      var node = sel.anchorNode;
+      var el = node && node.nodeType === 3 ? node.parentElement : node;
+      while (el && el !== deckEditingEl) {
+        if (el.nodeType === 1 && el.style) {
+          var raw = el.style[prop] || '';
+          if (raw) return normalizeDeckColor(raw);
+        }
+        el = el.parentElement;
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  function applyDeckInlineStyles(styles) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+    try {
+      var range = sel.getRangeAt(0);
+      var span = document.createElement('span');
+      var keys = Object.keys(styles);
+      for (var i = 0; i < keys.length; i += 1) {
+        var key = keys[i];
+        var val = styles[key];
+        if (val === '' || val === 'default' || val === 'none') continue;
+        span.style[key] = val;
+      }
+      if (!span.getAttribute('style')) return;
+      // extractContents + insertNode can leave the original text behind if the
+      // range is detached/stale. Prefer surroundContents for simple ranges;
+      // fall back to extract/insert only when surround fails (partial elements).
+      try {
+        range.surroundContents(span);
+      } catch (_) {
+        var extracted = range.extractContents();
+        if (!extracted || (!extracted.childNodes.length && !(extracted.textContent || '').length)) {
+          return;
+        }
+        span.appendChild(extracted);
+        range.insertNode(span);
+      }
+      sel.removeAllRanges();
+      var next = document.createRange();
+      next.selectNodeContents(span);
+      sel.addRange(next);
+    } catch (_) {}
+  }
+
+  function clearStyleInSubtree(root, cssProperty) {
+    if (!root) return;
+    // Snapshot children first — unwrap moves them to the parent, so we must
+    // clear nested styled spans before (or via the snapshot) unwrapping.
+    var children = [];
+    if (root.childNodes) {
+      for (var c = 0; c < root.childNodes.length; c += 1) children.push(root.childNodes[c]);
+    }
+    for (var i = 0; i < children.length; i += 1) {
+      clearStyleInSubtree(children[i], cssProperty);
+    }
+    if (root.nodeType === 1 && root.style && root.style[cssProperty]) {
+      root.style[cssProperty] = '';
+      var styleAttr = (root.getAttribute('style') || '').replace(/;/g, ' ').trim();
+      if (!styleAttr) root.removeAttribute('style');
+      if (root.tagName === 'SPAN' && root.attributes && root.attributes.length === 0) {
+        unwrapDeckElement(root);
+      }
+    }
+  }
+
+  function clearDeckInlineStyle(cssProperty) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed || !deckEditingEl) return;
+    try {
+      var range = sel.getRangeAt(0);
+      // extractContents splits partially-selected styled ancestors, so only the
+      // selected substring is cleared — text outside the selection keeps its style.
+      var fragment = range.extractContents();
+      clearStyleInSubtree(fragment, cssProperty);
+      var first = fragment.firstChild;
+      var last = fragment.lastChild;
+      range.insertNode(fragment);
+      if (first && last) {
+        sel.removeAllRanges();
+        var next = document.createRange();
+        next.setStartBefore(first);
+        next.setEndAfter(last);
+        sel.addRange(next);
+      }
+    } catch (_) {}
+  }
+
+  function findDeckAncestorTag(tagNames) {
+    try {
+      var sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return null;
+      var node = sel.anchorNode;
+      var el = node && node.nodeType === 3 ? node.parentElement : node;
+      while (el && el !== deckEditingEl) {
+        if (el.nodeType === 1 && tagNames.indexOf(el.tagName) !== -1) return el;
+        el = el.parentElement;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function unwrapDeckElement(el) {
+    if (!el || !el.parentNode) return;
+    var parent = el.parentNode;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  }
+
+  function wrapDeckSelection(tagName, attrs) {
+    var sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+    try {
+      var range = sel.getRangeAt(0);
+      var wrapper = document.createElement(tagName);
+      if (attrs) {
+        var keys = Object.keys(attrs);
+        for (var i = 0; i < keys.length; i += 1) wrapper.setAttribute(keys[i], attrs[keys[i]]);
+      }
+      try {
+        range.surroundContents(wrapper);
+      } catch (_) {
+        var extracted = range.extractContents();
+        if (!extracted || (!extracted.childNodes.length && !(extracted.textContent || '').length)) {
+          return null;
+        }
+        wrapper.appendChild(extracted);
+        range.insertNode(wrapper);
+      }
+      sel.removeAllRanges();
+      var next = document.createRange();
+      next.selectNodeContents(wrapper);
+      sel.addRange(next);
+      return wrapper;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function toggleDeckInlineTag(tagName, aliases) {
+    var existing = findDeckAncestorTag(aliases || [tagName.toUpperCase()]);
+    if (existing) {
+      unwrapDeckElement(existing);
+      return;
+    }
+    wrapDeckSelection(tagName);
+  }
+
+  function applyDeckLink() {
+    var url = window.prompt('Link URL', 'https://');
+    if (!url) return;
+    url = url.trim();
+    // Use RegExp ctor — a /...\/.../ literal inside this template string
+    // collapses \/ → / and breaks parse of the whole inspect script.
+    if (!new RegExp('^(https?:|mailto:|/|#)', 'i').test(url)) url = 'https://' + url;
+    var existing = findDeckAncestorTag(['A']);
+    if (existing) {
+      existing.setAttribute('href', url);
+      return;
+    }
+    wrapDeckSelection('a', { href: url });
+  }
+
+  function removeDeckLink() {
+    var existing = findDeckAncestorTag(['A']);
+    if (existing) unwrapDeckElement(existing);
+  }
+
+  function applyDeckFontSize(cmd) {
+    applyDeckInlineStyles({ fontSize: deckSizeToCss(cmd) });
+  }
+
+  function runDeckFormatCommand(cmd) {
+    if (!deckEditingEl) return;
+    try { deckEditingEl.focus(); } catch (_) {}
+    if (cmd === 'bold') {
+      toggleDeckInlineTag('strong', ['STRONG', 'B']);
+      return;
+    }
+    if (cmd === 'italic') {
+      toggleDeckInlineTag('em', ['EM', 'I']);
+      return;
+    }
+    if (cmd === 'underline') {
+      toggleDeckInlineTag('u', ['U']);
+      return;
+    }
+    if (cmd === 'createLink') {
+      applyDeckLink();
+      return;
+    }
+    if (cmd === 'unlink') {
+      removeDeckLink();
+      return;
+    }
+    if (cmd === 'size-sm' || cmd === 'size-md' || cmd === 'size-lg') {
+      applyDeckFontSize(cmd);
+      return;
+    }
+    if (cmd === 'color:default') {
+      clearDeckInlineStyle('color');
+      return;
+    }
+    if (cmd === 'highlight:none') {
+      clearDeckInlineStyle('backgroundColor');
+      return;
+    }
+    if (cmd && cmd.indexOf('color:') === 0) {
+      applyDeckInlineStyles({ color: cmd.slice(6) });
+      return;
+    }
+    if (cmd && cmd.indexOf('highlight:') === 0) {
+      applyDeckInlineStyles({ backgroundColor: cmd.slice(10) });
+      return;
+    }
+  }
+
+  function commitDeckEdit(el, cancelled) {
+    if (!el) return;
+    if (deckBlurTimer) {
+      clearTimeout(deckBlurTimer);
+      deckBlurTimer = null;
+    }
+    deckCommitGeneration += 1;
+    var oldText = deckEditingOriginal;
+    var oldHtml = deckEditingOriginalHtml;
+    var newText = (el.textContent || '').replace(/s+/g, ' ').trim();
+    var newHtml = el.innerHTML || '';
+    var locator = deckEditingLocator || ensureDeckEditId(el);
+    var htmlBackup = deckEditingOriginalHtmlBackup;
+    try {
+      el.removeAttribute('contenteditable');
+      el.classList.remove('__devs-deck-active');
+    } catch (_) {}
+    hideDeckToolbar();
+    deckEditingEl = null;
+    deckEditingOriginal = '';
+    deckEditingOriginalHtml = '';
+    deckEditingOriginalHtmlBackup = '';
+    deckEditingLocator = null;
+    if (cancelled) {
+      try {
+        if (typeof htmlBackup === 'string') el.innerHTML = htmlBackup;
+        else el.textContent = oldText;
+      } catch (_) {}
+      window.parent.postMessage({ type: 'devs:deck-edit-cancel' }, '*');
+      placeAllDeckHandles();
+      return;
+    }
+    var textSame = newText === oldText;
+    var htmlSame = normalizeDeckHtml(newHtml) === normalizeDeckHtml(oldHtml);
+    if (textSame && htmlSame) {
+      window.parent.postMessage({ type: 'devs:deck-edit-cancel' }, '*');
+      placeAllDeckHandles();
+      return;
+    }
+    // Keep the edited markup visible until the parent remounts from the saved
+    // Deck.tsx. Reverting here showed stale text during the async save and let
+    // a follow-up edit commit against the pre-edit baseline. Remount (not HMR)
+    // is what prevents contenteditable/React duplication.
+    window.parent.postMessage({
+      type: 'devs:deck-edit-commit',
+      payload: {
+        oldText: oldText,
+        newText: newText,
+        newHtml: newHtml,
+        editId: locator.editId || el.getAttribute('data-devs-edit') || '',
+        slideH: locator.slideH,
+        slideV: locator.slideV,
+        tagName: locator.tagName || el.tagName.toLowerCase(),
+        tagIndex: locator.tagIndex,
+        selector: getSelector(el)
+      }
+    }, '*');
+    placeAllDeckHandles();
+  }
+
+  function beginDeckEdit(el) {
+    if (!el || deckEditingEl === el) return;
+    if (deckEditingEl) commitDeckEdit(deckEditingEl, false);
+    deckEditingEl = el;
+    deckEditingOriginal = (el.textContent || '').replace(/s+/g, ' ').trim();
+    deckEditingOriginalHtml = el.innerHTML || '';
+    deckEditingOriginalHtmlBackup = el.innerHTML || '';
+    deckEditingLocator = ensureDeckEditId(el);
+    try {
+      el.setAttribute('contenteditable', 'true');
+      el.classList.add('__devs-deck-active');
+      el.focus();
+    } catch (_) {}
+    showDeckToolbar(el);
+    window.parent.postMessage({
+      type: 'devs:deck-edit-start',
+      payload: {
+        editId: deckEditingLocator.editId,
+        oldText: deckEditingOriginal,
+        tagName: deckEditingLocator.tagName,
+        slideH: deckEditingLocator.slideH,
+        slideV: deckEditingLocator.slideV,
+        tagIndex: deckEditingLocator.tagIndex
+      }
+    }, '*');
+  }
+
+  function onDeckClick(e) {
+    if (!deckEditEnabled) return;
+    if (inspectEnabled) return;
+    if (e.target && e.target.closest && e.target.closest('#__devs_deck_toolbar, .__devs_deck_handle')) return;
+    if (deckColorPanelOpen) setDeckColorPanelOpen(false);
+    var el = findDeckEditableTarget(e.target);
+    if (!el) {
+      if (deckEditingEl) commitDeckEdit(deckEditingEl, false);
+      return;
+    }
+    if (isInsideInlineMarker(el)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    beginDeckEdit(el);
+  }
+
+  function onDeckDblClick(e) {
+    if (!deckEditEnabled) return;
+    if (findDeckEditableTarget(e.target)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function onDeckKeyDown(e) {
+    if (!deckEditEnabled) return;
+    if (!deckEditingEl) return;
+    e.stopPropagation();
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (deckColorPanelOpen) {
+        setDeckColorPanelOpen(false);
+        return;
+      }
+      commitDeckEdit(deckEditingEl, true);
+      return;
+    }
+    var meta = e.metaKey || e.ctrlKey;
+    if (meta && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault(); runDeckFormatCommand('bold'); refreshDeckToolbarState(); return;
+    }
+    if (meta && (e.key === 'i' || e.key === 'I')) {
+      e.preventDefault(); runDeckFormatCommand('italic'); refreshDeckToolbarState(); return;
+    }
+    if (meta && (e.key === 'u' || e.key === 'U')) {
+      e.preventDefault(); runDeckFormatCommand('underline'); refreshDeckToolbarState(); return;
+    }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      var tag = deckEditingEl.tagName;
+      if (tag === 'H1' || tag === 'H2' || tag === 'H3' || tag === 'H4' || tag === 'P' || tag === 'LI') {
+        e.preventDefault();
+        commitDeckEdit(deckEditingEl, false);
+      }
+    }
+  }
+
+  function onDeckBlur(e) {
+    if (!deckEditingEl) return;
+    if (e.target !== deckEditingEl) return;
+    var gen = deckCommitGeneration;
+    if (deckBlurTimer) clearTimeout(deckBlurTimer);
+    deckBlurTimer = setTimeout(function() {
+      deckBlurTimer = null;
+      if (deckSuppressBlur) return;
+      // Another commit already ran (click-outside / Enter / disable).
+      if (gen !== deckCommitGeneration) return;
+      if (deckEditingEl && document.activeElement !== deckEditingEl) {
+        var ae = document.activeElement;
+        if (ae && deckToolbarEl && deckToolbarEl.contains(ae)) return;
+        commitDeckEdit(deckEditingEl, false);
+      }
+    }, 0);
+  }
+
+  function onDeckSelectionChange() {
+    if (!deckEditingEl) return;
+    refreshDeckToolbarState();
+  }
+
+  function onDeckScrollOrResize() {
+    if (!deckEditEnabled) return;
+    placeAllDeckHandles();
+    if (deckEditingEl) showDeckToolbar(deckEditingEl);
   }
 
   // -------------------------------------------------------------
@@ -1399,9 +2761,23 @@
     if (e.data.type === 'devs:enable-inspect') {
       inspectEnabled = true;
       document.body.style.cursor = 'crosshair';
+      // Inspect and deck-edit are mutually exclusive.
+      if (deckEditEnabled) {
+        deckEditEnabled = false;
+        setDeckEditModeUi(false);
+      }
     } else if (e.data.type === 'devs:disable-inspect') {
       inspectEnabled = false;
       document.body.style.cursor = '';
+    } else if (e.data.type === 'devs:enable-deck-edit') {
+      deckEditEnabled = true;
+      inspectEnabled = false;
+      document.body.style.cursor = '';
+      setDeckEditModeUi(true);
+      window.parent.postMessage({ type: 'devs:deck-edit-ready', version: INSPECT_SCRIPT_VERSION }, '*');
+    } else if (e.data.type === 'devs:disable-deck-edit') {
+      deckEditEnabled = false;
+      setDeckEditModeUi(false);
     } else if (e.data.type === 'devs:setup-touch' && !window.__devsTouchSetup) {
       window.__devsTouchSetup = true;
       document.addEventListener('touchstart', function(te) {
@@ -1692,6 +3068,27 @@
   document.addEventListener('mouseover', onHover, true);
   document.addEventListener('mouseout', onHoverOut, true);
   document.addEventListener('click', onClick, true);
+  document.addEventListener('click', onDeckClick, true);
+  document.addEventListener('dblclick', onDeckDblClick, true);
+  document.addEventListener('keydown', onDeckKeyDown, true);
+  document.addEventListener('focusout', onDeckBlur, true);
+  document.addEventListener('selectionchange', onDeckSelectionChange, true);
+  window.addEventListener('scroll', onDeckScrollOrResize, true);
+  window.addEventListener('resize', onDeckScrollOrResize, true);
+  // Reveal fires slidechanged on the .reveal root (and sometimes window).
+  document.addEventListener('slidechanged', function() {
+    if (deckEditEnabled) stampVisibleSlideEditables();
+  }, true);
+  try {
+    if (window.Reveal && typeof window.Reveal.on === 'function') {
+      window.Reveal.on('slidechanged', function() {
+        if (deckEditEnabled) stampVisibleSlideEditables();
+      });
+      window.Reveal.on('ready', function() {
+        if (deckEditEnabled) stampVisibleSlideEditables();
+      });
+    }
+  } catch (_) {}
 
   // Touch support for mobile inspect
   window.__devsTouchSetup = true;

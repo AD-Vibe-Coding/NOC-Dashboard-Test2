@@ -1,15 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { sendMessage } from "./client";
 
-/**
- * Hook for single-shot AI completions. Each `complete(prompt)` call:
- *   1. resets `result` to ""
- *   2. streams deltas — `result` updates in real time as text arrives
- *   3. sets isLoading=false on completion or error
- *
- * Use for "summarize this", "translate", "extract entities" features — i.e.
- * any prompt-response that isn't a multi-turn chat.
- */
 export function useCompletion(opts?: { model?: string }) {
   const [result, setResult] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -25,7 +16,8 @@ export function useCompletion(opts?: { model?: string }) {
       abortRef.current = new AbortController();
       let assembled = "";
       await sendMessage(
-        [{ role: "user", content: prompt }],
+        prompt,
+        { model: opts?.model, previousResponseId: null },
         (delta) => {
           assembled += delta;
           setResult(assembled);
@@ -36,7 +28,6 @@ export function useCompletion(opts?: { model?: string }) {
           setIsLoading(false);
         },
         abortRef.current.signal,
-        opts?.model,
       );
       return assembled;
     },

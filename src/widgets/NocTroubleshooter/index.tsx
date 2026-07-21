@@ -30,7 +30,7 @@ const STORAGE_KEY = "noc-troubleshooter:history:v1";
  * auto router. The other AI widgets continue to use `auto` via the
  * AI_AGENT_ID env var.
  */
-const NOC_AGENT_ID = "205f715c-17d4-4791-9206-caa431cc9a92";
+const NOC_AGENT_ID = "71c8ab8c-2bb5-4aaf-9aa9-60a2e8d515e1";
 
 const SYSTEM_PROMPT = `You are an experienced NOC (Network Operations Center) senior troubleshooter at vCom — An AppDirect Company. You help Tier 1, Tier 2, and Tier 3 NOC technicians diagnose and resolve customer-impacting issues on wholesale circuits, voice services, and managed networking.
 
