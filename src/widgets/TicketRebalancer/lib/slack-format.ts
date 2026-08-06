@@ -49,7 +49,7 @@ export function formatForSlack(result: RebalanceResult): string {
       l.name,
       l.tier ?? "—",
       l.available ? "✓" : "✗",
-      l.ticketCount.toString(),
+      l.pendingRfo > 0 ? `${l.ticketCount} (${l.pendingRfo} RFO)` : l.ticketCount.toString(),
       l.hotTickets > 0 ? `🔥${l.hotTickets}` : "0",
       l.pendingCustomer > 0 ? `👤${l.pendingCustomer}` : "0",
       l.dueToday > 0 ? `📅${l.dueToday}` : "0",

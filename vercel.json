@@ -1,12 +1,27 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/ai/chat.ts":              { "maxDuration": 60 },
+    "api/ai/chat.ts": { "maxDuration": 60 },
     "api/confluence/extract-images.ts": { "maxDuration": 60 },
-    "api/zoom/queue.ts":           { "maxDuration": 30 },
-    "api/access-control.ts":       { "maxDuration": 10 },
-    "api/auth/callback.ts":        { "maxDuration": 15 },
-    "api/auth/dev-login.ts":       { "maxDuration": 10 }
-  }
+    "api/zoom/queue.ts": { "maxDuration": 30 },
+    "api/access-control.ts": { "maxDuration": 10 },
+    "api/auth/callback.ts": { "maxDuration": 15 },
+    "api/auth/dev-login.ts": { "maxDuration": 10 },
+    "api/app-usage/sync-google-sheet.ts": { "maxDuration": 30 },
+    "api/app-usage/weekly-sync.ts": { "maxDuration": 30 },
+    "api/work-allotment/generate.ts": { "maxDuration": 30 },
+    "api/work-allotment/post.ts": { "maxDuration": 30 },
+    "api/work-allotment/cron.ts": { "maxDuration": 30 }
+  },
+  "crons": [
+    {
+      "path": "/api/app-usage/weekly-sync",
+      "schedule": "0 13 * * 1"
+    },
+    {
+      "path": "/api/work-allotment/cron",
+      "schedule": "*/5 * * * *"
+    }
+  ]
 }
 

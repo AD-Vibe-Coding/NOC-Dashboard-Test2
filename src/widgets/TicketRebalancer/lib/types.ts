@@ -65,8 +65,10 @@ export interface AgentLoad {
   // Count of tickets in stage "Pending Customer Response" — these are
   // waiting on the customer, so they're parked load (not actively worked).
   pendingCustomer: number;
+  // Count of tickets in stage "Pending RFO" owned by this agent.
+  pendingRfo: number;
   // Active P1 (Critical) and P2 (High) tickets owned by this agent. "Active"
-  // = anything not in "Pending Complete" (already filtered out upstream).
+  // = anything not in "Pending Complete" (filtered out in rebalance()).
   p1Count: number;
   p2Count: number;
   // Active P3 = priority Medium + stage Pending Carrier Action / Update.

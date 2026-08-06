@@ -41,16 +41,34 @@ import { detectShift, SHIFT_TRANSITIONS } from "./lib/shifts";
 import { formatForSlack } from "./lib/slack-format";
 import type { AvailabilityStatus, RebalanceResult, RosterEntry, ScoredTicket } from "./lib/types";
 
-function StatCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function StatCard({
+  label,
+  value,
+  hint,
+  secondary,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  /** Small-font callout rendered beside the main value (e.g. "3 Pending RFO"). */
+  secondary?: string;
+}) {
   return (
     <Card withBorder radius="md" p="md" h="100%">
       <Stack gap={4}>
         <Text size="xs" c="dimmed" tt="uppercase" fw={700} style={{ letterSpacing: "0.06em" }}>
           {label}
         </Text>
-        <Text fw={800} size="xl">
-          {value}
-        </Text>
+        <Group gap={8} align="baseline" wrap="nowrap">
+          <Text fw={800} size="xl">
+            {value}
+          </Text>
+          {secondary ? (
+            <Text size="xs" c="dimmed" fw={600}>
+              {secondary}
+            </Text>
+          ) : null}
+        </Group>
         {hint ? (
           <Text size="xs" c="dimmed">
             {hint}
@@ -149,6 +167,10 @@ export function TicketRebalancerWidget() {
   const availableRosterCount = roster?.filter((entry) => entry.available).length ?? 0;
   const weekOffCount = roster?.filter((entry) => entry.status === "WO").length ?? 0;
   const leaveCount = roster?.filter((entry) => ["PTO", "Sick Leave", "Sick Leave - Tentative", "Emergency Leave", "Holiday"].includes(entry.status)).length ?? 0;
+  // Ticket counts exclude stage "Pending Complete" — those are done work.
+  const activeTicketCount = tickets.filter((t) => t.stageNorm !== "Pending Complete").length;
+  const pendingCompleteCount = tickets.length - activeTicketCount;
+  const pendingRfoCount = tickets.filter((t) => t.stageNorm === "Pending RFO").length;
   const shiftOptions = SHIFT_TRANSITIONS.map((transition) => ({
     value: transition.id,
     label: transition.label,
@@ -420,7 +442,18 @@ export function TicketRebalancerWidget() {
 
         <SimpleGrid cols={{ base: 2, md: 4 }}>
           <StatCard label="Roster available" value={String(availableRosterCount)} hint={rosterSource ?? "No roster loaded yet"} />
-          <StatCard label="Tickets loaded" value={String(tickets.length)} hint={ticketFileName ?? "No ticket export loaded"} />
+          <StatCard
+            label="Tickets loaded"
+            value={String(activeTicketCount)}
+            secondary={pendingRfoCount > 0 ? `${pendingRfoCount} Pending RFO` : undefined}
+            hint={
+              ticketFileName
+                ? pendingCompleteCount > 0
+                  ? `${ticketFileName} · ${pendingCompleteCount} Pending Complete excluded`
+                  : ticketFileName
+                : "No ticket export loaded"
+            }
+          />
           <StatCard label="Mode" value={mode === "shift-handoff" ? "Shift handoff" : "Full rebalance"} hint={mode === "shift-handoff" ? shiftOptions.find((option) => option.value === shiftTransitionId)?.label : "All available agents considered"} />
           <StatCard label="Result" value={result ? `${result.movesSuggested.length} move(s)` : "—"} hint={result ? `${result.totalWeight.toFixed(2)} weighted load reviewed` : "Run analysis to generate moves"} />
         </SimpleGrid>
@@ -534,7 +567,18 @@ export function TicketRebalancerWidget() {
                           <Table.Td>{load.name}</Table.Td>
                           <Table.Td>{load.tier ?? "—"}</Table.Td>
                           <Table.Td>{load.available ? "Yes" : "No"}</Table.Td>
-                          <Table.Td>{load.ticketCount}</Table.Td>
+                          <Table.Td>
+                            <Group gap={6} align="baseline" wrap="nowrap">
+                              <Text span size="sm" fw={600}>
+                                {load.ticketCount}
+                              </Text>
+                              {load.pendingRfo > 0 ? (
+                                <Text span size="xs" c="dimmed" fw={500}>
+                                  {load.pendingRfo} RFO
+                                </Text>
+                              ) : null}
+                            </Group>
+                          </Table.Td>
                           <Table.Td>{load.hotTickets}</Table.Td>
                           <Table.Td>{load.pendingCustomer}</Table.Td>
                           <Table.Td>{load.dueToday}</Table.Td>

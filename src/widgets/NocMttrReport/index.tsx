@@ -164,6 +164,7 @@ type MonthDetailModalState = {
 type ReportedViaFilter = "both" | "noc" | "mobility";
 type MaintenanceFilter = "include" | "exclude";
 type ChannelFilter = "both" | "buyers_club" | "msp";
+type TimeGrouping = "monthly" | "quarterly";
 
 type OperationalFilters = {
   reportedVia: ReportedViaFilter;
@@ -613,6 +614,49 @@ function formatMonthColumnLabel(monthKey: string) {
   return `${date.toLocaleString(undefined, { month: "short" })} ${String(year).slice(-2)}`;
 }
 
+function toQuarterKey(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  const quarter = Math.floor(((month || 1) - 1) / 3) + 1;
+  return `${year}-Q${quarter}`;
+}
+
+function formatQuarterColumnLabel(quarterKey: string) {
+  const [yearPart, quarterPart] = quarterKey.split("-Q");
+  const year = Number(yearPart);
+  const quarter = Number(quarterPart);
+  return `Q${quarter} ${String(year).slice(-2)}`;
+}
+
+function formatPeriodColumnLabel(periodKey: string, timeGrouping: TimeGrouping) {
+  return timeGrouping === "quarterly" ? formatQuarterColumnLabel(periodKey) : formatMonthColumnLabel(periodKey);
+}
+
+function periodSort(a: string, b: string, timeGrouping: TimeGrouping) {
+  if (timeGrouping === "monthly") return monthSort(a, b);
+  const [aYearPart, aQuarterPart] = a.split("-Q");
+  const [bYearPart, bQuarterPart] = b.split("-Q");
+  const aYear = Number(aYearPart);
+  const bYear = Number(bYearPart);
+  const aQuarter = Number(aQuarterPart);
+  const bQuarter = Number(bQuarterPart);
+  if (aYear !== bYear) return aYear - bYear;
+  return aQuarter - bQuarter;
+}
+
+function toPeriodKey(monthKey: string, timeGrouping: TimeGrouping) {
+  return timeGrouping === "quarterly" ? toQuarterKey(monthKey) : monthKey;
+}
+
+function limitPeriodKeys(periodKeys: string[], timeGrouping: TimeGrouping) {
+  const maxPeriods = timeGrouping === "quarterly" ? 5 : 13;
+  return [...periodKeys].sort((a, b) => periodSort(a, b, timeGrouping)).slice(-maxPeriods);
+}
+
+function matchesPeriod(monthKey: string | null, periodKey: string, timeGrouping: TimeGrouping) {
+  if (!monthKey) return false;
+  return toPeriodKey(monthKey, timeGrouping) === periodKey;
+}
+
 function parseMetricNumber(value: unknown): number | null {
   if (value == null || value === "") return null;
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -718,6 +762,7 @@ function buildChronicCircuitTableData(
   parsed: ParsedWorkbook | null,
   selectedSheetName: string | null | undefined,
   filters: OperationalFilters,
+  timeGrouping: TimeGrouping = "monthly",
 ): ChronicCircuitTableData {
   if (!parsed) {
     return { monthKeys: [], monthLabels: [], rows: [] };
@@ -745,14 +790,17 @@ function buildChronicCircuitTableData(
     .map((row) => toMonthKey(row[monthColumn]))
     .filter((value): value is string => Boolean(value))))
     .sort(monthSort);
-  const monthKeys = availableMonthKeys.slice(-6);
-  const monthKeySet = new Set(monthKeys);
+  const allPeriodKeys = Array.from(new Set(availableMonthKeys.map((monthKey) => toPeriodKey(monthKey, timeGrouping))));
+  const periodKeys = timeGrouping === "monthly"
+    ? allPeriodKeys.sort((a, b) => periodSort(a, b, timeGrouping)).slice(-6)
+    : limitPeriodKeys(allPeriodKeys, timeGrouping);
+  const periodKeySet = new Set(periodKeys);
 
-  if (monthKeys.length === 0) {
+  if (periodKeys.length === 0) {
     return { monthKeys: [], monthLabels: [], rows: [] };
   }
 
-  const latestMonthKey = monthKeys[monthKeys.length - 1] ?? "";
+  const latestMonthKey = periodKeys[periodKeys.length - 1] ?? "";
   const byCombo = new Map<string, {
     account: string;
     circuitId: string;
@@ -765,8 +813,9 @@ function buildChronicCircuitTableData(
     const circuitId = normalizeHeaderValue(row[circuitIdColumn]);
     const carrier = normalizeHeaderValue(row[carrierColumn]) ?? "—";
     const monthKey = toMonthKey(row[monthColumn]);
+    const periodKey = monthKey ? toPeriodKey(monthKey, timeGrouping) : null;
 
-    if (!circuitId || !monthKey || !monthKeySet.has(monthKey)) continue;
+    if (!circuitId || !periodKey || !periodKeySet.has(periodKey)) continue;
 
     const compositeKey = `${account}__${circuitId}__${carrier}`;
     if (!byCombo.has(compositeKey)) {
@@ -774,21 +823,21 @@ function buildChronicCircuitTableData(
         account,
         circuitId,
         carrier,
-        monthlyCounts: Object.fromEntries(monthKeys.map((key) => [key, 0])),
+        monthlyCounts: Object.fromEntries(periodKeys.map((key) => [key, 0])),
       });
     }
 
     const entry = byCombo.get(compositeKey);
     if (!entry) continue;
-    entry.monthlyCounts[monthKey] = (entry.monthlyCounts[monthKey] ?? 0) + 1;
+    entry.monthlyCounts[periodKey] = (entry.monthlyCounts[periodKey] ?? 0) + 1;
   }
 
   const allRows = Array.from(byCombo.values())
     .map((entry) => {
-      const grandTotal = monthKeys.reduce((sum, monthKey) => sum + (entry.monthlyCounts[monthKey] ?? 0), 0);
+      const grandTotal = periodKeys.reduce((sum, periodKey) => sum + (entry.monthlyCounts[periodKey] ?? 0), 0);
       const latestMonthCount = entry.monthlyCounts[latestMonthKey] ?? 0;
-      const recurringMonths = monthKeys.reduce((sum, monthKey) => sum + ((entry.monthlyCounts[monthKey] ?? 0) > 0 ? 1 : 0), 0);
-      const peakMonthlyCount = Math.max(...monthKeys.map((monthKey) => entry.monthlyCounts[monthKey] ?? 0), 0);
+      const recurringMonths = periodKeys.reduce((sum, periodKey) => sum + ((entry.monthlyCounts[periodKey] ?? 0) > 0 ? 1 : 0), 0);
+      const peakMonthlyCount = Math.max(...periodKeys.map((periodKey) => entry.monthlyCounts[periodKey] ?? 0), 0);
       return {
         account: entry.account,
         circuitId: entry.circuitId,
@@ -833,8 +882,8 @@ function buildChronicCircuitTableData(
   ));
 
   return {
-    monthKeys,
-    monthLabels: monthKeys.map(formatMonthColumnLabel),
+    monthKeys: periodKeys,
+    monthLabels: periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping)),
     rows,
   };
 }
@@ -860,7 +909,7 @@ function getTopCarrierNames(sheet: ParsedWorkbook["sheets"][number] | null, limi
     .map(([carrier]) => carrier);
 }
 
-function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 2) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -868,35 +917,36 @@ function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][numb
   const reportedViaColumn = sheet.headers[21] ?? null;
   if (!ticketIdColumn || !monthSourceColumn) return null;
 
-  const totalByMonth = new Map<string, number>();
-  const networkByMonth = new Map<string, number>();
-  const mobilityByMonth = new Map<string, number>();
+  const totalByPeriod = new Map<string, number>();
+  const networkByPeriod = new Map<string, number>();
+  const mobilityByPeriod = new Map<string, number>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const monthKey = toMonthKey(row[monthSourceColumn]);
     if (!ticketId || !monthKey) continue;
 
-    totalByMonth.set(monthKey, (totalByMonth.get(monthKey) ?? 0) + 1);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    totalByPeriod.set(periodKey, (totalByPeriod.get(periodKey) ?? 0) + 1);
 
     const reportedVia = reportedViaColumn ? normalizeHeaderValue(row[reportedViaColumn]) : null;
     if (!reportedVia) continue;
 
     if (/^noc$/i.test(reportedVia)) {
-      networkByMonth.set(monthKey, (networkByMonth.get(monthKey) ?? 0) + 1);
+      networkByPeriod.set(periodKey, (networkByPeriod.get(periodKey) ?? 0) + 1);
     }
 
     if (/^mobility$/i.test(reportedVia)) {
-      mobilityByMonth.set(monthKey, (mobilityByMonth.get(monthKey) ?? 0) + 1);
+      mobilityByPeriod.set(periodKey, (mobilityByPeriod.get(periodKey) ?? 0) + 1);
     }
   }
 
-  const monthKeys = Array.from(totalByMonth.keys()).sort(monthSort);
-  if (monthKeys.length === 0) return null;
+  const periodKeys = limitPeriodKeys(Array.from(totalByPeriod.keys()), timeGrouping);
+  if (periodKeys.length === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
-  const monthKeyByDisplayColumn = Object.fromEntries(monthKeys.map((monthKey) => [formatMonthColumnLabel(monthKey), monthKey]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
+  const monthKeyByDisplayColumn = Object.fromEntries(periodKeys.map((periodKey) => [formatPeriodColumnLabel(periodKey, timeGrouping), periodKey]));
   const formatVolumeWithChange = (count: number, previousCount: number | null) => {
     if (previousCount == null) return `${count}||—`;
     if (previousCount === 0) {
@@ -910,29 +960,29 @@ function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][numb
   const rows = [
     {
       label: "Total Tickets",
-      values: Object.fromEntries(monthKeys.map((monthKey, index) => {
-        const count = totalByMonth.get(monthKey) ?? 0;
-        const previousMonthKey = index > 0 ? monthKeys[index - 1] : null;
-        const previousCount = previousMonthKey ? (totalByMonth.get(previousMonthKey) ?? 0) : null;
-        return [monthLabelMap.get(monthKey) ?? monthKey, formatVolumeWithChange(count, previousCount)];
+      values: Object.fromEntries(periodKeys.map((periodKey, index) => {
+        const count = totalByPeriod.get(periodKey) ?? 0;
+        const previousPeriodKey = index > 0 ? periodKeys[index - 1] : null;
+        const previousCount = previousPeriodKey ? (totalByPeriod.get(previousPeriodKey) ?? 0) : null;
+        return [periodLabelMap.get(periodKey) ?? periodKey, formatVolumeWithChange(count, previousCount)];
       })),
     },
     {
       label: "Network Tickets",
-      values: Object.fromEntries(monthKeys.map((monthKey, index) => {
-        const count = networkByMonth.get(monthKey) ?? 0;
-        const previousMonthKey = index > 0 ? monthKeys[index - 1] : null;
-        const previousCount = previousMonthKey ? (networkByMonth.get(previousMonthKey) ?? 0) : null;
-        return [monthLabelMap.get(monthKey) ?? monthKey, formatVolumeWithChange(count, previousCount)];
+      values: Object.fromEntries(periodKeys.map((periodKey, index) => {
+        const count = networkByPeriod.get(periodKey) ?? 0;
+        const previousPeriodKey = index > 0 ? periodKeys[index - 1] : null;
+        const previousCount = previousPeriodKey ? (networkByPeriod.get(previousPeriodKey) ?? 0) : null;
+        return [periodLabelMap.get(periodKey) ?? periodKey, formatVolumeWithChange(count, previousCount)];
       })),
     },
     {
       label: "Mobility Tickets",
-      values: Object.fromEntries(monthKeys.map((monthKey, index) => {
-        const count = mobilityByMonth.get(monthKey) ?? 0;
-        const previousMonthKey = index > 0 ? monthKeys[index - 1] : null;
-        const previousCount = previousMonthKey ? (mobilityByMonth.get(previousMonthKey) ?? 0) : null;
-        return [monthLabelMap.get(monthKey) ?? monthKey, formatVolumeWithChange(count, previousCount)];
+      values: Object.fromEntries(periodKeys.map((periodKey, index) => {
+        const count = mobilityByPeriod.get(periodKey) ?? 0;
+        const previousPeriodKey = index > 0 ? periodKeys[index - 1] : null;
+        const previousCount = previousPeriodKey ? (mobilityByPeriod.get(previousPeriodKey) ?? 0) : null;
+        return [periodLabelMap.get(periodKey) ?? periodKey, formatVolumeWithChange(count, previousCount)];
       })),
     },
   ];
@@ -948,7 +998,7 @@ function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][numb
   };
 }
 
-function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 34) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -957,34 +1007,35 @@ function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["she
   const bucketColumn = sheet.headers[33] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !bucketColumn) return null;
 
-  const totalByMonth = new Map<string, number>();
-  const bucket0to5ByMonth = new Map<string, number>();
-  const bucket5to10ByMonth = new Map<string, number>();
-  const bucket10to30ByMonth = new Map<string, number>();
-  const bucket30PlusByMonth = new Map<string, number>();
-  const ackTotalsByMonth = new Map<string, number>();
-  const ackCountsByMonth = new Map<string, number>();
+  const totalByPeriod = new Map<string, number>();
+  const bucket0to5ByPeriod = new Map<string, number>();
+  const bucket5to10ByPeriod = new Map<string, number>();
+  const bucket10to30ByPeriod = new Map<string, number>();
+  const bucket30PlusByPeriod = new Map<string, number>();
+  const ackTotalsByPeriod = new Map<string, number>();
+  const ackCountsByPeriod = new Map<string, number>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const monthKey = toMonthKey(row[monthSourceColumn]);
     if (!ticketId || !monthKey) continue;
 
-    totalByMonth.set(monthKey, (totalByMonth.get(monthKey) ?? 0) + 1);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    totalByPeriod.set(periodKey, (totalByPeriod.get(periodKey) ?? 0) + 1);
 
     const bucket = normalizeHeaderValue(row[bucketColumn])?.toLowerCase() ?? "";
     let isRecognizedBucket = false;
     if (/^0\s*-\s*5\s*min/.test(bucket)) {
-      bucket0to5ByMonth.set(monthKey, (bucket0to5ByMonth.get(monthKey) ?? 0) + 1);
+      bucket0to5ByPeriod.set(periodKey, (bucket0to5ByPeriod.get(periodKey) ?? 0) + 1);
       isRecognizedBucket = true;
     } else if (/^5\s*-\s*10\s*min/.test(bucket)) {
-      bucket5to10ByMonth.set(monthKey, (bucket5to10ByMonth.get(monthKey) ?? 0) + 1);
+      bucket5to10ByPeriod.set(periodKey, (bucket5to10ByPeriod.get(periodKey) ?? 0) + 1);
       isRecognizedBucket = true;
     } else if (/^10\s*-\s*30\s*min/.test(bucket)) {
-      bucket10to30ByMonth.set(monthKey, (bucket10to30ByMonth.get(monthKey) ?? 0) + 1);
+      bucket10to30ByPeriod.set(periodKey, (bucket10to30ByPeriod.get(periodKey) ?? 0) + 1);
       isRecognizedBucket = true;
     } else if (/30\+\s*min|30\s*plus\s*min/.test(bucket)) {
-      bucket30PlusByMonth.set(monthKey, (bucket30PlusByMonth.get(monthKey) ?? 0) + 1);
+      bucket30PlusByPeriod.set(periodKey, (bucket30PlusByPeriod.get(periodKey) ?? 0) + 1);
       isRecognizedBucket = true;
     }
 
@@ -992,66 +1043,66 @@ function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["she
       const rawAckValue = avgAckColumn ? row[avgAckColumn] : null;
       const ackValue = rawAckValue == null || String(rawAckValue).trim() === "" ? 0 : parseMetricNumber(rawAckValue);
       if (ackValue != null) {
-        ackTotalsByMonth.set(monthKey, (ackTotalsByMonth.get(monthKey) ?? 0) + ackValue);
-        ackCountsByMonth.set(monthKey, (ackCountsByMonth.get(monthKey) ?? 0) + 1);
+        ackTotalsByPeriod.set(periodKey, (ackTotalsByPeriod.get(periodKey) ?? 0) + ackValue);
+        ackCountsByPeriod.set(periodKey, (ackCountsByPeriod.get(periodKey) ?? 0) + 1);
       }
     }
   }
 
-  const monthKeys = Array.from(totalByMonth.keys()).sort(monthSort);
-  if (monthKeys.length === 0) return null;
+  const periodKeys = limitPeriodKeys(Array.from(totalByPeriod.keys()), timeGrouping);
+  if (periodKeys.length === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
   const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
   const formatAverage = (value: number | null) => (value == null ? "—" : value.toFixed(1));
 
   const rows = [
     {
       label: "0 - 5 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket0to5ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket0to5ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "5 - 10 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket5to10ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket5to10ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "10 - 30 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket10to30ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket10to30ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "30+ Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket30PlusByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket30PlusByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "% within 5 min",
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const bucket0to5 = bucket0to5ByMonth.get(monthKey) ?? 0;
-        const bucket5to10 = bucket5to10ByMonth.get(monthKey) ?? 0;
-        const bucket10to30 = bucket10to30ByMonth.get(monthKey) ?? 0;
-        const bucket30Plus = bucket30PlusByMonth.get(monthKey) ?? 0;
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const bucket0to5 = bucket0to5ByPeriod.get(periodKey) ?? 0;
+        const bucket5to10 = bucket5to10ByPeriod.get(periodKey) ?? 0;
+        const bucket10to30 = bucket10to30ByPeriod.get(periodKey) ?? 0;
+        const bucket30Plus = bucket30PlusByPeriod.get(periodKey) ?? 0;
         const totalBucketCount = bucket0to5 + bucket5to10 + bucket10to30 + bucket30Plus;
-        return [monthLabelMap.get(monthKey) ?? monthKey, totalBucketCount > 0 ? formatPercent(bucket0to5 / totalBucketCount) : "0%"];
+        return [periodLabelMap.get(periodKey) ?? periodKey, totalBucketCount > 0 ? formatPercent(bucket0to5 / totalBucketCount) : "0%"];
       })),
     },
     {
       label: "% within 10 min",
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const bucket0to5 = bucket0to5ByMonth.get(monthKey) ?? 0;
-        const bucket5to10 = bucket5to10ByMonth.get(monthKey) ?? 0;
-        const bucket10to30 = bucket10to30ByMonth.get(monthKey) ?? 0;
-        const bucket30Plus = bucket30PlusByMonth.get(monthKey) ?? 0;
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const bucket0to5 = bucket0to5ByPeriod.get(periodKey) ?? 0;
+        const bucket5to10 = bucket5to10ByPeriod.get(periodKey) ?? 0;
+        const bucket10to30 = bucket10to30ByPeriod.get(periodKey) ?? 0;
+        const bucket30Plus = bucket30PlusByPeriod.get(periodKey) ?? 0;
         const total = bucket0to5 + bucket5to10 + bucket10to30 + bucket30Plus;
         const within10 = bucket0to5 + bucket5to10;
-        return [monthLabelMap.get(monthKey) ?? monthKey, total > 0 ? formatPercent(within10 / total) : "0%"];
+        return [periodLabelMap.get(periodKey) ?? periodKey, total > 0 ? formatPercent(within10 / total) : "0%"];
       })),
     },
     {
       label: "Avg Ack Time",
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const total = ackTotalsByMonth.get(monthKey) ?? 0;
-        const count = ackCountsByMonth.get(monthKey) ?? 0;
-        return [monthLabelMap.get(monthKey) ?? monthKey, formatAverage(count > 0 ? total / count : null)];
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const total = ackTotalsByPeriod.get(periodKey) ?? 0;
+        const count = ackCountsByPeriod.get(periodKey) ?? 0;
+        return [periodLabelMap.get(periodKey) ?? periodKey, formatAverage(count > 0 ? total / count : null)];
       })),
     },
   ];
@@ -1066,7 +1117,7 @@ function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["she
   };
 }
 
-function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 35) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -1074,64 +1125,65 @@ function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets
   const bucketColumn = sheet.headers[34] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !bucketColumn) return null;
 
-  const under15ByMonth = new Map<string, number>();
-  const bucket15to25ByMonth = new Map<string, number>();
-  const bucket25to35ByMonth = new Map<string, number>();
-  const bucket35to60ByMonth = new Map<string, number>();
-  const bucket60PlusByMonth = new Map<string, number>();
+  const under15ByPeriod = new Map<string, number>();
+  const bucket15to25ByPeriod = new Map<string, number>();
+  const bucket25to35ByPeriod = new Map<string, number>();
+  const bucket35to60ByPeriod = new Map<string, number>();
+  const bucket60PlusByPeriod = new Map<string, number>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const monthKey = toMonthKey(row[monthSourceColumn]);
     if (!ticketId || !monthKey) continue;
 
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
     const bucket = normalizeHeaderValue(row[bucketColumn])?.toLowerCase() ?? "";
     if (/^under\s*15\s*min/.test(bucket)) {
-      under15ByMonth.set(monthKey, (under15ByMonth.get(monthKey) ?? 0) + 1);
+      under15ByPeriod.set(periodKey, (under15ByPeriod.get(periodKey) ?? 0) + 1);
     } else if (/^15\s*-\s*25\s*min/.test(bucket)) {
-      bucket15to25ByMonth.set(monthKey, (bucket15to25ByMonth.get(monthKey) ?? 0) + 1);
+      bucket15to25ByPeriod.set(periodKey, (bucket15to25ByPeriod.get(periodKey) ?? 0) + 1);
     } else if (/^25\s*-\s*35\s*min/.test(bucket)) {
-      bucket25to35ByMonth.set(monthKey, (bucket25to35ByMonth.get(monthKey) ?? 0) + 1);
+      bucket25to35ByPeriod.set(periodKey, (bucket25to35ByPeriod.get(periodKey) ?? 0) + 1);
     } else if (/^35\s*-\s*60\s*min/.test(bucket)) {
-      bucket35to60ByMonth.set(monthKey, (bucket35to60ByMonth.get(monthKey) ?? 0) + 1);
+      bucket35to60ByPeriod.set(periodKey, (bucket35to60ByPeriod.get(periodKey) ?? 0) + 1);
     } else if (/^60\+\s*min|^60\s*\+\s*min/.test(bucket)) {
-      bucket60PlusByMonth.set(monthKey, (bucket60PlusByMonth.get(monthKey) ?? 0) + 1);
+      bucket60PlusByPeriod.set(periodKey, (bucket60PlusByPeriod.get(periodKey) ?? 0) + 1);
     }
   }
 
-  const monthKeySet = new Set<string>([
-    ...under15ByMonth.keys(),
-    ...bucket15to25ByMonth.keys(),
-    ...bucket25to35ByMonth.keys(),
-    ...bucket35to60ByMonth.keys(),
-    ...bucket60PlusByMonth.keys(),
+  const periodKeySet = new Set<string>([
+    ...under15ByPeriod.keys(),
+    ...bucket15to25ByPeriod.keys(),
+    ...bucket25to35ByPeriod.keys(),
+    ...bucket35to60ByPeriod.keys(),
+    ...bucket60PlusByPeriod.keys(),
   ]);
-  const monthKeys = Array.from(monthKeySet).sort(monthSort);
-  if (monthKeys.length === 0) return null;
+  const periodKeys = limitPeriodKeys(Array.from(periodKeySet), timeGrouping);
+  if (periodKeys.length === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
 
   const rows = [
     {
       label: "Under 15 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(under15ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(under15ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "15 - 25 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket15to25ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket15to25ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "25 - 35 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket25to35ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket25to35ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "35 - 60 Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket35to60ByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket35to60ByPeriod.get(periodKey) ?? 0)])),
     },
     {
       label: "60+ Minutes",
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(bucket60PlusByMonth.get(monthKey) ?? 0)])),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(bucket60PlusByPeriod.get(periodKey) ?? 0)])),
     },
   ];
 
@@ -1145,7 +1197,7 @@ function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets
   };
 }
 
-function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 36) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -1154,8 +1206,7 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
   if (!ticketIdColumn || !monthSourceColumn || !resolutionColumn) return null;
 
   const countsByResolution = new Map<string, Map<string, number>>();
-  const monthKeySet = new Set<string>();
-  const totalByMonth = new Map<string, number>();
+  const totalByPeriod = new Map<string, number>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
@@ -1163,19 +1214,19 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
     const resolution = normalizeHeaderValue(row[resolutionColumn]) || "Others";
     if (!ticketId || !monthKey) continue;
 
-    monthKeySet.add(monthKey);
-    totalByMonth.set(monthKey, (totalByMonth.get(monthKey) ?? 0) + 1);
-    const monthCounts = countsByResolution.get(resolution) ?? new Map<string, number>();
-    monthCounts.set(monthKey, (monthCounts.get(monthKey) ?? 0) + 1);
-    countsByResolution.set(resolution, monthCounts);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    totalByPeriod.set(periodKey, (totalByPeriod.get(periodKey) ?? 0) + 1);
+    const periodCounts = countsByResolution.get(resolution) ?? new Map<string, number>();
+    periodCounts.set(periodKey, (periodCounts.get(periodKey) ?? 0) + 1);
+    countsByResolution.set(resolution, periodCounts);
   }
 
-  const monthKeys = Array.from(monthKeySet).sort(monthSort);
-  if (monthKeys.length === 0 || countsByResolution.size === 0) return null;
+  const periodKeys = limitPeriodKeys(Array.from(totalByPeriod.keys()), timeGrouping);
+  if (periodKeys.length === 0 || countsByResolution.size === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
-  const monthKeyByDisplayColumn = Object.fromEntries(monthKeys.map((monthKey) => [formatMonthColumnLabel(monthKey), monthKey]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
+  const monthKeyByDisplayColumn = Object.fromEntries(periodKeys.map((periodKey) => [formatPeriodColumnLabel(periodKey, timeGrouping), periodKey]));
   const formatCountWithPercent = (count: number, total: number) => {
     if (total <= 0) return `${count} (0%)`;
     const percent = Math.round((count / total) * 100);
@@ -1183,13 +1234,13 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
   };
 
   const rows = Array.from(countsByResolution.entries())
-    .map(([resolution, monthCounts]) => ({
+    .map(([resolution, periodCounts]) => ({
       label: resolution,
-      total: Array.from(monthCounts.values()).reduce((sum, count) => sum + count, 0),
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const count = monthCounts.get(monthKey) ?? 0;
-        const total = totalByMonth.get(monthKey) ?? 0;
-        return [monthLabelMap.get(monthKey) ?? monthKey, formatCountWithPercent(count, total)];
+      total: Array.from(periodKeys, (periodKey) => periodCounts.get(periodKey) ?? 0).reduce((sum, count) => sum + count, 0),
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const count = periodCounts.get(periodKey) ?? 0;
+        const total = totalByPeriod.get(periodKey) ?? 0;
+        return [periodLabelMap.get(periodKey) ?? periodKey, formatCountWithPercent(count, total)];
       })),
     }))
     .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
@@ -1206,7 +1257,7 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
   };
 }
 
-function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 38) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -1215,9 +1266,8 @@ function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][num
   if (!ticketIdColumn || !monthSourceColumn || !issueTypeColumn) return null;
 
   const countsByIssueType = new Map<string, Map<string, number>>();
-  const monthKeySet = new Set<string>();
-  const totalByMonth = new Map<string, number>();
-  const vcomByMonth = new Map<string, number>();
+  const totalByPeriod = new Map<string, number>();
+  const vcomByPeriod = new Map<string, number>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
@@ -1225,32 +1275,32 @@ function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][num
     const issueType = normalizeHeaderValue(row[issueTypeColumn]);
     if (!ticketId || !monthKey || !issueType) continue;
 
-    monthKeySet.add(monthKey);
-    totalByMonth.set(monthKey, (totalByMonth.get(monthKey) ?? 0) + 1);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    totalByPeriod.set(periodKey, (totalByPeriod.get(periodKey) ?? 0) + 1);
 
     const normalizedIssueType = issueType.trim().toLowerCase();
     if (normalizedIssueType === "mns / sd-wan alert" || normalizedIssueType === "maintenance notification") {
-      vcomByMonth.set(monthKey, (vcomByMonth.get(monthKey) ?? 0) + 1);
+      vcomByPeriod.set(periodKey, (vcomByPeriod.get(periodKey) ?? 0) + 1);
     }
 
-    const monthCounts = countsByIssueType.get(issueType) ?? new Map<string, number>();
-    monthCounts.set(monthKey, (monthCounts.get(monthKey) ?? 0) + 1);
-    countsByIssueType.set(issueType, monthCounts);
+    const periodCounts = countsByIssueType.get(issueType) ?? new Map<string, number>();
+    periodCounts.set(periodKey, (periodCounts.get(periodKey) ?? 0) + 1);
+    countsByIssueType.set(issueType, periodCounts);
   }
 
-  const monthKeys = Array.from(monthKeySet).sort(monthSort);
-  if (monthKeys.length === 0 || countsByIssueType.size === 0) return null;
+  const periodKeys = limitPeriodKeys(Array.from(totalByPeriod.keys()), timeGrouping);
+  if (periodKeys.length === 0 || countsByIssueType.size === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
-  const monthKeyByDisplayColumn = Object.fromEntries(monthKeys.map((monthKey) => [formatMonthColumnLabel(monthKey), monthKey]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
+  const monthKeyByDisplayColumn = Object.fromEntries(periodKeys.map((periodKey) => [formatPeriodColumnLabel(periodKey, timeGrouping), periodKey]));
   const formatPercent = (value: number) => `${Math.round(value * 100)}%`;
 
   const issueRows = Array.from(countsByIssueType.entries())
-    .map(([issueType, monthCounts]) => ({
+    .map(([issueType, periodCounts]) => ({
       label: issueType,
-      total: Array.from(monthCounts.values()).reduce((sum, count) => sum + count, 0),
-      values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(monthCounts.get(monthKey) ?? 0)])),
+      total: Array.from(periodKeys, (periodKey) => periodCounts.get(periodKey) ?? 0).reduce((sum, count) => sum + count, 0),
+      values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(periodCounts.get(periodKey) ?? 0)])),
     }))
     .sort((a, b) => b.total - a.total || a.label.localeCompare(b.label))
     .map(({ label, values }) => ({ label, values }));
@@ -1259,19 +1309,19 @@ function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][num
     ...issueRows,
     {
       label: "% opened by vCom Solutions",
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const total = totalByMonth.get(monthKey) ?? 0;
-        const vcom = vcomByMonth.get(monthKey) ?? 0;
-        return [monthLabelMap.get(monthKey) ?? monthKey, total > 0 ? formatPercent(vcom / total) : "0%"];
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const total = totalByPeriod.get(periodKey) ?? 0;
+        const vcom = vcomByPeriod.get(periodKey) ?? 0;
+        return [periodLabelMap.get(periodKey) ?? periodKey, total > 0 ? formatPercent(vcom / total) : "0%"];
       })),
     },
     {
       label: "% opened by customer",
-      values: Object.fromEntries(monthKeys.map((monthKey) => {
-        const total = totalByMonth.get(monthKey) ?? 0;
-        const vcom = vcomByMonth.get(monthKey) ?? 0;
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const total = totalByPeriod.get(periodKey) ?? 0;
+        const vcom = vcomByPeriod.get(periodKey) ?? 0;
         const customerRaised = Math.max(total - vcom, 0);
-        return [monthLabelMap.get(monthKey) ?? monthKey, total > 0 ? formatPercent(customerRaised / total) : "0%"];
+        return [periodLabelMap.get(periodKey) ?? periodKey, total > 0 ? formatPercent(customerRaised / total) : "0%"];
       })),
     },
   ];
@@ -1287,7 +1337,7 @@ function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][num
   };
 }
 
-function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 6) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -1296,7 +1346,6 @@ function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][numbe
   if (!ticketIdColumn || !monthSourceColumn || !carrierColumn) return null;
 
   const countsByCarrier = new Map<string, Map<string, number>>();
-  const monthKeySet = new Set<string>();
   const topCarrierNames = new Set(getTopCarrierNames(sheet, 15));
   if (topCarrierNames.size === 0) return null;
 
@@ -1306,25 +1355,29 @@ function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][numbe
     const carrier = normalizeHeaderValue(row[carrierColumn]);
     if (!ticketId || !monthKey || !carrier || !topCarrierNames.has(carrier)) continue;
 
-    monthKeySet.add(monthKey);
-    const monthCounts = countsByCarrier.get(carrier) ?? new Map<string, number>();
-    monthCounts.set(monthKey, (monthCounts.get(monthKey) ?? 0) + 1);
-    countsByCarrier.set(carrier, monthCounts);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    const periodCounts = countsByCarrier.get(carrier) ?? new Map<string, number>();
+    periodCounts.set(periodKey, (periodCounts.get(periodKey) ?? 0) + 1);
+    countsByCarrier.set(carrier, periodCounts);
   }
 
-  const monthKeys = Array.from(monthKeySet).sort(monthSort);
-  if (monthKeys.length === 0 || countsByCarrier.size === 0) return null;
+  const periodKeySet = new Set<string>();
+  for (const counts of countsByCarrier.values()) {
+    for (const periodKey of counts.keys()) periodKeySet.add(periodKey);
+  }
+  const periodKeys = limitPeriodKeys(Array.from(periodKeySet), timeGrouping);
+  if (periodKeys.length === 0 || countsByCarrier.size === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
 
   const rows = getTopCarrierNames(sheet, 15)
     .filter((carrier) => countsByCarrier.has(carrier))
     .map((carrier) => {
-      const monthCounts = countsByCarrier.get(carrier) ?? new Map<string, number>();
+      const periodCounts = countsByCarrier.get(carrier) ?? new Map<string, number>();
       return {
         label: carrier,
-        values: Object.fromEntries(monthKeys.map((monthKey) => [monthLabelMap.get(monthKey) ?? monthKey, String(monthCounts.get(monthKey) ?? 0)])),
+        values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(periodCounts.get(periodKey) ?? 0)])),
       };
     });
 
@@ -1338,7 +1391,7 @@ function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][numbe
   };
 }
 
-function buildCalculatedAvgMttrSection(sheet: ParsedWorkbook["sheets"][number] | null): WorkbookTrendSection | null {
+function buildCalculatedAvgMttrSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
   if (!sheet || sheet.headers.length < 16) return null;
 
   const ticketIdColumn = sheet.headers[0] ?? null;
@@ -1352,7 +1405,6 @@ function buildCalculatedAvgMttrSection(sheet: ParsedWorkbook["sheets"][number] |
 
   const topCarrierSet = new Set(topCarrierNames);
   const mttrByCarrier = new Map<string, Map<string, { total: number; count: number }>>();
-  const monthKeySet = new Set<string>();
 
   for (const row of sheet.rows) {
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
@@ -1361,29 +1413,33 @@ function buildCalculatedAvgMttrSection(sheet: ParsedWorkbook["sheets"][number] |
     const mttrValue = parseMetricNumber(row[mttrColumn]);
     if (!ticketId || !monthKey || !carrier || !topCarrierSet.has(carrier) || mttrValue == null) continue;
 
-    monthKeySet.add(monthKey);
-    const carrierMonths = mttrByCarrier.get(carrier) ?? new Map<string, { total: number; count: number }>();
-    const existing = carrierMonths.get(monthKey) ?? { total: 0, count: 0 };
-    carrierMonths.set(monthKey, { total: existing.total + mttrValue, count: existing.count + 1 });
-    mttrByCarrier.set(carrier, carrierMonths);
+    const periodKey = toPeriodKey(monthKey, timeGrouping);
+    const carrierPeriods = mttrByCarrier.get(carrier) ?? new Map<string, { total: number; count: number }>();
+    const existing = carrierPeriods.get(periodKey) ?? { total: 0, count: 0 };
+    carrierPeriods.set(periodKey, { total: existing.total + mttrValue, count: existing.count + 1 });
+    mttrByCarrier.set(carrier, carrierPeriods);
   }
 
-  const monthKeys = Array.from(monthKeySet).sort(monthSort);
-  if (monthKeys.length === 0 || mttrByCarrier.size === 0) return null;
+  const periodKeySet = new Set<string>();
+  for (const periods of mttrByCarrier.values()) {
+    for (const periodKey of periods.keys()) periodKeySet.add(periodKey);
+  }
+  const periodKeys = limitPeriodKeys(Array.from(periodKeySet), timeGrouping);
+  if (periodKeys.length === 0 || mttrByCarrier.size === 0) return null;
 
-  const displayColumns = monthKeys.map(formatMonthColumnLabel);
-  const monthLabelMap = new Map(monthKeys.map((monthKey) => [monthKey, formatMonthColumnLabel(monthKey)]));
+  const displayColumns = periodKeys.map((periodKey) => formatPeriodColumnLabel(periodKey, timeGrouping));
+  const periodLabelMap = new Map(periodKeys.map((periodKey) => [periodKey, formatPeriodColumnLabel(periodKey, timeGrouping)]));
 
   const rows = topCarrierNames
     .filter((carrier) => mttrByCarrier.has(carrier))
     .map((carrier) => {
-      const carrierMonths = mttrByCarrier.get(carrier) ?? new Map<string, { total: number; count: number }>();
+      const carrierPeriods = mttrByCarrier.get(carrier) ?? new Map<string, { total: number; count: number }>();
       return {
         label: carrier,
-        values: Object.fromEntries(monthKeys.map((monthKey) => {
-          const stats = carrierMonths.get(monthKey);
+        values: Object.fromEntries(periodKeys.map((periodKey) => {
+          const stats = carrierPeriods.get(periodKey);
           const average = stats && stats.count > 0 ? stats.total / stats.count : null;
-          return [monthLabelMap.get(monthKey) ?? monthKey, average == null ? "—" : average.toFixed(2)];
+          return [periodLabelMap.get(periodKey) ?? periodKey, average == null ? "—" : average.toFixed(2)];
         })),
       };
     });
@@ -1405,12 +1461,13 @@ function getCalculatedSheetCandidates(parsed: ParsedWorkbook, selectedSheetName?
 
 function pickCalculatedSection(
   sheets: ParsedWorkbook["sheets"],
-  builder: (sheet: ParsedWorkbook["sheets"][number] | null) => WorkbookTrendSection | null,
+  builder: (sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping) => WorkbookTrendSection | null,
   filters: OperationalFilters,
+  timeGrouping: TimeGrouping,
 ): WorkbookTrendSection | null {
   for (const sheet of sheets) {
     const filteredSheet = filterSheetRowsByOperationalFilters(sheet, filters);
-    const section = builder(filteredSheet);
+    const section = builder(filteredSheet, timeGrouping);
     if (section) return section;
   }
   return null;
@@ -1428,8 +1485,9 @@ function getTopMttrTicketsForMonth(
   monthKey: string,
   filters: OperationalFilters,
   sectionTitle: string,
-  limit = 10,
+  limit = 5,
   minimumMttrHours = 8,
+  timeGrouping: TimeGrouping = "monthly",
 ): ExtendedMttrTicket[] {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
   if (!sheet || sheet.headers.length < 38) return [];
@@ -1442,21 +1500,38 @@ function getTopMttrTicketsForMonth(
   const issueTypeColumn = sheet.headers[37] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !carrierColumn || !mttrColumn) return [];
 
-  return sheet.rows
-    .filter((row) => rowMatchesOperationalFilters(row, sheet, filters))
-    .flatMap((row) => {
-      const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
-      const rowMonthKey = toMonthKey(row[monthSourceColumn]);
-      const carrier = normalizeHeaderValue(row[carrierColumn]);
-      const resolution = resolutionColumn ? normalizeHeaderValue(row[resolutionColumn]) : null;
-      const issueType = issueTypeColumn ? normalizeHeaderValue(row[issueTypeColumn]) : null;
-      const mttr = parseMetricNumber(row[mttrColumn]);
-      if (!ticketId || rowMonthKey !== monthKey || !carrier || mttr == null) return [];
-      if (mttr <= minimumMttrHours) return [];
-      if (sectionTitle === "Ticket Volume" && !resolution) return [];
-      if (sectionTitle === "Top Issue Types" && !issueType) return [];
-      return [{ ticketId, carrier, resolution: resolution ?? undefined, issueType: issueType ?? undefined, mttr }];
-    })
+  const bestByTicketId = new Map<string, ExtendedMttrTicket>();
+
+  for (const row of sheet.rows) {
+    if (!rowMatchesOperationalFilters(row, sheet, filters)) continue;
+
+    const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
+    const rowMonthKey = toMonthKey(row[monthSourceColumn]);
+    const carrier = normalizeHeaderValue(row[carrierColumn]);
+    const resolution = resolutionColumn ? normalizeHeaderValue(row[resolutionColumn]) : null;
+    const issueType = issueTypeColumn ? normalizeHeaderValue(row[issueTypeColumn]) : null;
+    const mttr = parseMetricNumber(row[mttrColumn]);
+
+    if (!ticketId || !matchesPeriod(rowMonthKey, monthKey, timeGrouping) || !carrier || mttr == null) continue;
+    if (mttr <= minimumMttrHours) continue;
+    if (sectionTitle === "Ticket Volume" && !resolution) continue;
+    if (sectionTitle === "Top Issue Types" && !issueType) continue;
+
+    const candidate: ExtendedMttrTicket = {
+      ticketId,
+      carrier,
+      resolution: resolution ?? undefined,
+      issueType: issueType ?? undefined,
+      mttr,
+    };
+
+    const existing = bestByTicketId.get(ticketId);
+    if (!existing || candidate.mttr > existing.mttr) {
+      bestByTicketId.set(ticketId, candidate);
+    }
+  }
+
+  return Array.from(bestByTicketId.values())
     .sort((a, b) => b.mttr - a.mttr || a.ticketId.localeCompare(b.ticketId))
     .slice(0, limit);
 }
@@ -1467,6 +1542,7 @@ function getMttrTicketCountForMonth(
   monthKey: string,
   filters: OperationalFilters,
   minimumMttrHours = 8,
+  timeGrouping: TimeGrouping = "monthly",
 ): number {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
   if (!sheet || sheet.headers.length < 16) return 0;
@@ -1484,7 +1560,7 @@ function getMttrTicketCountForMonth(
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const rowMonthKey = toMonthKey(row[monthSourceColumn]);
     const mttr = parseMetricNumber(row[mttrColumn]);
-    if (!ticketId || rowMonthKey !== monthKey || mttr == null || mttr <= minimumMttrHours) continue;
+    if (!ticketId || !matchesPeriod(rowMonthKey, monthKey, timeGrouping) || mttr == null || mttr <= minimumMttrHours) continue;
 
     count += 1;
   }
@@ -1497,6 +1573,7 @@ function getIssueTypeOpenPercentagesForMonth(
   sheetName: string,
   monthKey: string,
   filters: OperationalFilters,
+  timeGrouping: TimeGrouping = "monthly",
 ): IssueTypeOpenPercentages {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
   if (!sheet) {
@@ -1539,7 +1616,7 @@ function getIssueTypeOpenPercentagesForMonth(
 
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const rowMonthKey = toMonthKey(row[monthSourceColumn]);
-    if (!ticketId || rowMonthKey !== monthKey) continue;
+    if (!ticketId || !matchesPeriod(rowMonthKey, monthKey, timeGrouping)) continue;
 
     if (isMobility) {
       const openedBy = normalizeHeaderValue(row[mobilityOpenedByColumn ?? ""]);
@@ -1584,6 +1661,7 @@ function getResolutionBucketPercentagesForMonth(
   sheetName: string,
   monthKey: string,
   filters: OperationalFilters,
+  timeGrouping: TimeGrouping = "monthly",
 ): ResolutionBucketPercentages {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
   if (!sheet || sheet.headers.length < 36) {
@@ -1619,7 +1697,7 @@ function getResolutionBucketPercentagesForMonth(
     const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
     const rowMonthKey = toMonthKey(row[monthSourceColumn]);
     const resolution = normalizeHeaderValue(row[resolutionColumn]);
-    if (!ticketId || rowMonthKey !== monthKey) continue;
+    if (!ticketId || !matchesPeriod(rowMonthKey, monthKey, timeGrouping)) continue;
 
     total += 1;
     const normalizedResolution = normalizeResolutionBucket(resolution || "others");
@@ -1653,6 +1731,7 @@ function getResolutionSummaryRowsForMonth(
   sheetName: string,
   monthKey: string,
   filters: OperationalFilters,
+  timeGrouping: TimeGrouping = "monthly",
 ): ResolutionSummaryRow[] {
   if (filters.reportedVia === "mobility") {
     const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
@@ -1689,7 +1768,7 @@ function getResolutionSummaryRowsForMonth(
       const ticketId = normalizeHeaderValue(row[ticketIdColumn]);
       const rowMonthKey = toMonthKey(row[monthSourceColumn]);
       const resolution = normalizeHeaderValue(row[resolutionColumn]);
-      if (!ticketId || rowMonthKey !== monthKey) continue;
+      if (!ticketId || !matchesPeriod(rowMonthKey, monthKey, timeGrouping)) continue;
 
       total += 1;
       const normalizedResolution = normalizeResolutionBucket(resolution || "others");
@@ -1731,7 +1810,7 @@ function getResolutionSummaryRowsForMonth(
     ];
   }
 
-  const percentages = getResolutionBucketPercentagesForMonth(parsed, sheetName, monthKey, filters);
+  const percentages = getResolutionBucketPercentagesForMonth(parsed, sheetName, monthKey, filters, timeGrouping);
   return [
     { label: "Carrier Network Issue", value: percentages.carrierNetworkIssuePercent },
     { label: "Customer CPE / Power / Maintenance", value: percentages.customerIssuePercent },
@@ -3475,6 +3554,7 @@ function buildWorkbookTrendSections(
   parsed: ParsedWorkbook | null,
   selectedSheetName?: string | null,
   filters: OperationalFilters = { reportedVia: "both", maintenance: "include", channel: "both", customers: [] },
+  timeGrouping: TimeGrouping = "monthly",
 ): WorkbookTrendSection[] {
   if (!parsed) return [];
 
@@ -3539,13 +3619,13 @@ function buildWorkbookTrendSections(
 
   const calculatedSheetCandidates = getCalculatedSheetCandidates(parsed, selectedSheetName);
   const calculatedSections = [
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTicketVolumeSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedFirstTouchDistributionSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTimeToCarrierTicketSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTopIssueTypesSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTicketResolutionsSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTopCarriersSection, filters),
-    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedAvgMttrSection, filters),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTicketVolumeSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedFirstTouchDistributionSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTimeToCarrierTicketSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTopIssueTypesSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTicketResolutionsSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedTopCarriersSection, filters, timeGrouping),
+    pickCalculatedSection(calculatedSheetCandidates, buildCalculatedAvgMttrSection, filters, timeGrouping),
   ].filter((section): section is WorkbookTrendSection => Boolean(section));
 
   const calculatedTitles = new Set(calculatedSections.map((section) => section.title));
@@ -3589,6 +3669,7 @@ export function NocMttrReportWidget() {
   const [reportedViaFilter, setReportedViaFilter] = useState<ReportedViaFilter>("both");
   const [maintenanceFilter, setMaintenanceFilter] = useState<MaintenanceFilter>("include");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("both");
+  const [timeGrouping, setTimeGrouping] = useState<TimeGrouping>("monthly");
   const [monthDetailModal, setMonthDetailModal] = useState<MonthDetailModalState | null>(null);
   const [exportingPowerPoint, setExportingPowerPoint] = useState(false);
   const [copyingPanelTitle, setCopyingPanelTitle] = useState<string | null>(null);
@@ -3803,12 +3884,14 @@ export function NocMttrReportWidget() {
     setReportedViaFilter("both");
     setMaintenanceFilter("include");
     setChannelFilter("both");
+    setTimeGrouping("monthly");
   }
 
   const hasActiveFilters = selectedCustomers.length > 0
     || reportedViaFilter !== "both"
     || maintenanceFilter !== "include"
-    || channelFilter !== "both";
+    || channelFilter !== "both"
+    || timeGrouping !== "monthly";
 
   const customerOptions = useMemo(() => {
     const customerColumnName = getLockedTrendCustomerColumn(activeSheet, customerColumn);
@@ -3828,16 +3911,16 @@ export function NocMttrReportWidget() {
     [reportedViaFilter, maintenanceFilter, channelFilter, selectedCustomers],
   );
   const workbookTrendSections = useMemo(
-    () => buildWorkbookTrendSections(parsed, sheetName, operationalFilters),
-    [parsed, sheetName, operationalFilters],
+    () => buildWorkbookTrendSections(parsed, sheetName, operationalFilters, timeGrouping),
+    [parsed, sheetName, operationalFilters, timeGrouping],
   );
   const networkChartFilters = useMemo<OperationalFilters>(
     () => ({ ...operationalFilters, reportedVia: "noc" }),
     [operationalFilters],
   );
   const networkChartSections = useMemo(
-    () => buildWorkbookTrendSections(parsed, sheetName, networkChartFilters),
-    [parsed, sheetName, networkChartFilters],
+    () => buildWorkbookTrendSections(parsed, sheetName, networkChartFilters, timeGrouping),
+    [parsed, sheetName, networkChartFilters, timeGrouping],
   );
   const networkTopIssueTypesSection = useMemo(
     () => networkChartSections.find((entry) => entry.title === "Top Issue Types") ?? null,
@@ -3856,8 +3939,8 @@ export function NocMttrReportWidget() {
     [operationalFilters],
   );
   const mobilityChartSections = useMemo(
-    () => buildWorkbookTrendSections(parsed, sheetName, mobilityChartFilters),
-    [parsed, sheetName, mobilityChartFilters],
+    () => buildWorkbookTrendSections(parsed, sheetName, mobilityChartFilters, timeGrouping),
+    [parsed, sheetName, mobilityChartFilters, timeGrouping],
   );
   const mobilityTopIssueTypesSection = useMemo(
     () => mobilityChartSections.find((entry) => entry.title === "Top Issue Types") ?? null,
@@ -3931,6 +4014,7 @@ export function NocMttrReportWidget() {
       networkTopIssueTypesSection.sheetName,
       monthKey,
       networkChartFilters,
+      timeGrouping,
     );
     const over8HourTicketCount = getMttrTicketCountForMonth(
       parsed,
@@ -3938,6 +4022,7 @@ export function NocMttrReportWidget() {
       monthKey,
       networkChartFilters,
       8,
+      timeGrouping,
     );
 
     return {
@@ -3959,8 +4044,9 @@ export function NocMttrReportWidget() {
       "Ticket Volume",
       5,
       8,
+      timeGrouping,
     );
-  }, [networkTopIssueTypesSection, networkTicketVolumeChartSummary, parsed, networkChartFilters]);
+  }, [networkTopIssueTypesSection, networkTicketVolumeChartSummary, parsed, networkChartFilters, timeGrouping]);
   const networkResolutionChartSummaryMonthLabel = useMemo(() => {
     if (!networkResolutionSection || networkResolutionChartData.length === 0) return null;
     return networkResolutionChartData[networkResolutionChartData.length - 1]?.monthLabel ?? null;
@@ -3977,8 +4063,9 @@ export function NocMttrReportWidget() {
       networkResolutionSection.sheetName,
       monthKey,
       networkChartFilters,
+      timeGrouping,
     );
-  }, [networkResolutionSection, networkResolutionChartData, parsed, networkChartFilters]);
+  }, [networkResolutionSection, networkResolutionChartData, parsed, networkChartFilters, timeGrouping]);
   const mobilityResolutionChartSummaryMonthLabel = useMemo(() => {
     if (!mobilityResolutionSection || mobilityResolutionChartData.length === 0) return null;
     return mobilityResolutionChartData[mobilityResolutionChartData.length - 1]?.monthLabel ?? null;
@@ -3995,8 +4082,9 @@ export function NocMttrReportWidget() {
       mobilityResolutionSection.sheetName,
       monthKey,
       mobilityChartFilters,
+      timeGrouping,
     );
-  }, [mobilityResolutionSection, mobilityResolutionChartData, parsed, mobilityChartFilters]);
+  }, [mobilityResolutionSection, mobilityResolutionChartData, parsed, mobilityChartFilters, timeGrouping]);
   const mobilityTicketVolumeChartSummary = useMemo<TicketVolumeChartSummary | null>(() => {
     if (!mobilityTopIssueTypesSection || mobilityTicketVolumeChartData.length === 0) return null;
 
@@ -4009,6 +4097,7 @@ export function NocMttrReportWidget() {
       mobilityTopIssueTypesSection.sheetName,
       monthKey,
       mobilityChartFilters,
+      timeGrouping,
     );
     const over8HourTicketCount = getMttrTicketCountForMonth(
       parsed,
@@ -4016,6 +4105,7 @@ export function NocMttrReportWidget() {
       monthKey,
       mobilityChartFilters,
       8,
+      timeGrouping,
     );
 
     return {
@@ -4037,11 +4127,12 @@ export function NocMttrReportWidget() {
       "Ticket Volume",
       5,
       8,
+      timeGrouping,
     );
-  }, [mobilityTopIssueTypesSection, mobilityTicketVolumeChartSummary, parsed, mobilityChartFilters]);
+  }, [mobilityTopIssueTypesSection, mobilityTicketVolumeChartSummary, parsed, mobilityChartFilters, timeGrouping]);
   const chronicCircuitTableData = useMemo(
-    () => buildChronicCircuitTableData(parsed, sheetName, operationalFilters),
-    [parsed, sheetName, operationalFilters],
+    () => buildChronicCircuitTableData(parsed, sheetName, operationalFilters, timeGrouping),
+    [parsed, sheetName, operationalFilters, timeGrouping],
   );
   const chronicCircuitSummary = useMemo(() => {
     const totalCircuits = chronicCircuitTableData.rows.length;
@@ -4053,9 +4144,10 @@ export function NocMttrReportWidget() {
       return map;
     }, new Map<string, number>()).entries()).sort((a, b) => b[1] - a[1])[0] ?? null;
     const latestMonthLabel = chronicCircuitTableData.monthLabels[chronicCircuitTableData.monthLabels.length - 1] ?? "latest month";
+    const periodUnit = timeGrouping === "quarterly" ? "quarters" : "months";
     const insight = totalCircuits === 0
       ? "No circuits currently meet the chronic threshold for the selected filters."
-      : `${totalCircuits} circuits met chronic criteria across the last ${chronicCircuitTableData.monthLabels.length} months; ${latestFlagged} were flagged in ${latestMonthLabel}${topCarrierEntry ? `, with ${topCarrierEntry[0]} carrying the highest ticket concentration` : ""}.`;
+      : `${totalCircuits} circuits met chronic criteria across the last ${chronicCircuitTableData.monthLabels.length} ${periodUnit}; ${latestFlagged} were flagged in ${latestMonthLabel}${topCarrierEntry ? `, with ${topCarrierEntry[0]} carrying the highest ticket concentration` : ""}.`;
 
     return {
       totalCircuits,
@@ -4810,6 +4902,9 @@ export function NocMttrReportWidget() {
                             >
                               Top 10 Chronic Circuits
                             </Title>
+                            <Text size="sm" c="#475569" ta="center">
+                              Showing {timeGrouping === "monthly" ? "the last 6 months" : "the last 5 quarters"} for chronic circuit activity.
+                            </Text>
                           </Stack>
 
                           {chronicCircuitTableData.monthLabels.length === 0 ? (
@@ -5012,7 +5107,7 @@ export function NocMttrReportWidget() {
                         </ThemeIcon>
                       </Group>
                     </Group>
-                    <SimpleGrid cols={{ base: 1, md: 2, xl: 4 }}>
+                    <SimpleGrid cols={{ base: 1, md: 2, xl: 5 }}>
                       <MultiSelect
                         label="Customer"
                         placeholder="Start typing a customer name"
@@ -5053,6 +5148,15 @@ export function NocMttrReportWidget() {
                         data={[
                           { value: "include", label: "Include maintenance" },
                           { value: "exclude", label: "Exclude maintenance" },
+                        ]}
+                      />
+                      <Select
+                        label="Period"
+                        value={timeGrouping}
+                        onChange={(value) => setTimeGrouping((value as TimeGrouping) ?? "monthly")}
+                        data={[
+                          { value: "monthly", label: "Monthly · reports 13 months, chronic 6" },
+                          { value: "quarterly", label: "Quarterly · last 5 quarters" },
                         ]}
                       />
                     </SimpleGrid>

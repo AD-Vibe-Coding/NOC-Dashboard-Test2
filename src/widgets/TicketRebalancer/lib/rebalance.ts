@@ -33,6 +33,18 @@ function seedConfiguredTeamRoster(rosterByNorm: Map<string, RosterEntry>) {
   }
 }
 
+// "Pending Complete" tickets are essentially done — they must not count
+// toward per-agent ticket counts, weighted load, or rebalance moves.
+function isPendingComplete(t: ScoredTicket): boolean {
+  return t.stageNorm === "Pending Complete";
+}
+
+// Active tickets = everything except Pending Complete. Used for ticketCount
+// and totalTickets so the dashboard reflects real open work only.
+function isCountedTicket(t: ScoredTicket): boolean {
+  return !isPendingComplete(t);
+}
+
 // "Hot" = stage "Pending Carrier Action / Update" AND priority Critical or High.
 // These are the highest-weight (3.0 – 5.0) tickets actively waiting on
 // carriers; surfacing them per-agent helps the NOC lead see WHO is sitting
@@ -177,6 +189,10 @@ function isPendingCustomer(t: ScoredTicket): boolean {
   return t.stageNorm === "Pending Customer Response";
 }
 
+function isPendingRfo(t: ScoredTicket): boolean {
+  return t.stageNorm === "Pending RFO";
+}
+
 // Ticket age (in days) parsed from iPath's `age` column. Accepts numbers
 // and numeric strings; returns NaN when missing/unparseable so callers can
 // short-circuit safely.
@@ -309,17 +325,25 @@ export function rebalance(
   dateContext?: Date,
 ): RebalanceResult {
   const opts = { ...DEFAULT_OPTIONS, ...options };
-  const warnings: string[] = [...dueDateDiagnostic(scored, dateContext)];
+  // Drop Pending Complete before any load / count math — they are done work.
+  const activeScored = scored.filter(isCountedTicket);
+  const pendingCompleteCount = scored.length - activeScored.length;
+  const warnings: string[] = [...dueDateDiagnostic(activeScored, dateContext)];
+  if (pendingCompleteCount > 0) {
+    warnings.push(
+      `${pendingCompleteCount} ticket(s) in stage "Pending Complete" were excluded from ticket counts and load math.`,
+    );
+  }
 
   // Index roster by normalized name.
   const rosterByNorm = new Map<string, RosterEntry>();
   for (const r of roster) rosterByNorm.set(normalizeName(r.name), r);
   seedConfiguredTeamRoster(rosterByNorm);
 
-  // Bucket tickets by owner.
+  // Bucket tickets by owner (Pending Complete already excluded above).
   const ticketsByOwner = new Map<string, ScoredTicket[]>();
   const unassignedOrUnknownOwner: ScoredTicket[] = [];
-  for (const t of scored) {
+  for (const t of activeScored) {
     const owner = t.owner;
     if (!owner) {
       unassignedOrUnknownOwner.push(t);
@@ -359,6 +383,7 @@ export function rebalance(
       delta: 0,
       hotTickets: tix.filter(isHotTicket).length,
       pendingCustomer: tix.filter(isPendingCustomer).length,
+      pendingRfo: tix.filter(isPendingRfo).length,
       p1Count: tix.filter(isActiveP1).length,
       p2Count: tix.filter(isActiveP2).length,
       p3Count: tix.filter(isActiveP3).length,
@@ -529,6 +554,7 @@ export function rebalance(
         delta: r.available ? weight - meanLoad : 0,
         hotTickets: tix.filter(isHotTicket).length,
         pendingCustomer: tix.filter(isPendingCustomer).length,
+      pendingRfo: tix.filter(isPendingRfo).length,
       p1Count: tix.filter(isActiveP1).length,
       p2Count: tix.filter(isActiveP2).length,
       p3Count: tix.filter(isActiveP3).length,
@@ -540,8 +566,8 @@ export function rebalance(
 
   return {
     date,
-    totalTickets: scored.length,
-    totalWeight: scored.reduce((s, t) => s + t.weight, 0),
+    totalTickets: activeScored.length,
+    totalWeight: activeScored.reduce((s, t) => s + t.weight, 0),
     availableAgents: availableLoads.length,
     meanLoad,
     band: opts.band,
@@ -585,17 +611,25 @@ export function rebalanceShiftHandoff(
   if (!transition) {
     throw new Error(`Unknown shift transition: ${transitionId}`);
   }
-  const warnings: string[] = [...dueDateDiagnostic(scored, dateContext)];
+  // Drop Pending Complete before any load / count math — they are done work.
+  const activeScored = scored.filter(isCountedTicket);
+  const pendingCompleteCount = scored.length - activeScored.length;
+  const warnings: string[] = [...dueDateDiagnostic(activeScored, dateContext)];
+  if (pendingCompleteCount > 0) {
+    warnings.push(
+      `${pendingCompleteCount} ticket(s) in stage "Pending Complete" were excluded from ticket counts and load math.`,
+    );
+  }
 
   // Eligible tickets: hot SLA only.
-  const eligible = scored.filter(isHotSlaTicket);
+  const eligible = activeScored.filter(isHotSlaTicket);
 
   // Diagnostic: count of scored tickets that DIDN'T qualify as hot SLA, so
   // the user sees why nothing is moving when their export looks "active".
-  const hotButNotSla = scored.filter(
+  const hotButNotSla = activeScored.filter(
     (t) => isHotTicket(t) && t.sla !== "SLA",
   ).length;
-  const slaButNotHot = scored.filter(
+  const slaButNotHot = activeScored.filter(
     (t) => t.sla === "SLA" && !isHotTicket(t),
   ).length;
 
@@ -639,14 +673,14 @@ export function rebalanceShiftHandoff(
   for (const r of sourceAgents) rosterByNorm.set(normalizeName(r.name), r);
   seedConfiguredTeamRoster(rosterByNorm);
 
-  // Bucket ALL tickets by owner (not just eligible). The per-agent table
-  // displays full workload context — total tickets + total weight + hot
-  // count — so a NOC lead can see who's actually busy, not just who's
-  // sitting on hot-SLA tickets. The movable pool is filtered to eligible
-  // tickets separately below.
+  // Bucket ALL active tickets by owner (not just eligible). The per-agent
+  // table displays full workload context — total tickets + total weight +
+  // hot count — so a NOC lead can see who's actually busy, not just who's
+  // sitting on hot-SLA tickets. Pending Complete is already excluded above.
+  // The movable pool is filtered to eligible tickets separately below.
   const ticketsByOwner = new Map<string, ScoredTicket[]>();
   const unassignedOrUnknownOwner: ScoredTicket[] = [];
-  for (const t of scored) {
+  for (const t of activeScored) {
     if (!t.owner || isManager(t.owner)) {
       unassignedOrUnknownOwner.push(t);
       continue;
@@ -734,6 +768,7 @@ export function rebalanceShiftHandoff(
       delta: 0,
       hotTickets: tix.filter(isHotTicket).length,
       pendingCustomer: tix.filter(isPendingCustomer).length,
+      pendingRfo: tix.filter(isPendingRfo).length,
       p1Count: tix.filter(isActiveP1).length,
       p2Count: tix.filter(isActiveP2).length,
       p3Count: tix.filter(isActiveP3).length,

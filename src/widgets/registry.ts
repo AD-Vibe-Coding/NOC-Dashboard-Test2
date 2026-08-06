@@ -60,6 +60,10 @@ import {
   AppUsageTile,
 } from "./AppUsage";
 import {
+  WorkAllotmentGeneratorWidget,
+  WorkAllotmentGeneratorTile,
+} from "./WorkAllotmentGenerator";
+import {
   ZoomCallMetricsWidget,
   ZoomCallMetricsTile,
 } from "./ZoomCallMetrics";
@@ -275,6 +279,17 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: AppUsageTile,
     Full: AppUsageWidget,
+  },
+  {
+    id: "work-allotment-generator",
+    title: "Work Allotment Generator",
+    description: "Generate and post the exact NOC shift allotment message due at runtime",
+    icon: IconClipboardList,
+    iconColor: "indigo",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: WorkAllotmentGeneratorTile,
+    Full: WorkAllotmentGeneratorWidget,
   },
   {
     id: "performance-discussions",

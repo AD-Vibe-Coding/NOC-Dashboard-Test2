@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import {
   Alert,
   Badge,
@@ -26,6 +27,7 @@ import {
   IconUsers,
 } from "@tabler/icons-react";
 import { db } from "../../db";
+import { downloadBlob } from "../../lib/download";
 import { useIdentity } from "../../lib/identity";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
@@ -475,6 +477,7 @@ function createDiscussionSummary(review: SelfReviewDraft, managerSummary: string
 }
 
 const QUESTION_NOTES_MARKER = "<!-- QUESTION_NOTES_JSON:";
+const MANAGER_AUTOSAVE_PREFIX = "performance-discussions-manager-autosave-v1";
 
 function buildQuestionPromptMap() {
   const map: Record<string, string> = {};
@@ -487,6 +490,137 @@ function buildQuestionPromptMap() {
 }
 
 const QUESTION_PROMPT_BY_ID = buildQuestionPromptMap();
+
+function toPdfSafeText(text: string) {
+  return text
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2013\u2014]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u2264/g, "<=")
+    .replace(/\u2265/g, ">=")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function wrapPdfText(text: string, maxChars = 92) {
+  const normalized = toPdfSafeText(text);
+  if (!normalized) return [""];
+
+  const words = normalized.split(" ");
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const next = current ? `${current} ${word}` : word;
+    if (next.length <= maxChars) {
+      current = next;
+    } else {
+      if (current) lines.push(current);
+      current = word;
+    }
+  }
+
+  if (current) lines.push(current);
+  return lines;
+}
+
+async function generateHalfYearlyQuestionsPdf() {
+  const pdf = await PDFDocument.create();
+  const pageSize: [number, number] = [612, 792];
+  const marginX = 48;
+  const marginTop = 56;
+  const marginBottom = 52;
+  const titleFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const bodyFont = await pdf.embedFont(StandardFonts.Helvetica);
+  const boldFont = await pdf.embedFont(StandardFonts.HelveticaBold);
+
+  let page = pdf.addPage(pageSize);
+  let y = pageSize[1] - marginTop;
+
+  const ensureSpace = (needed = 20) => {
+    if (y - needed < marginBottom) {
+      page = pdf.addPage(pageSize);
+      y = pageSize[1] - marginTop;
+    }
+  };
+
+  const drawLines = (lines: string[], options?: { size?: number; color?: ReturnType<typeof rgb>; indent?: number; gap?: number; font?: typeof bodyFont }) => {
+    const size = options?.size ?? 11;
+    const color = options?.color ?? rgb(0.17, 0.24, 0.34);
+    const indent = options?.indent ?? 0;
+    const gap = options?.gap ?? 4;
+    const font = options?.font ?? bodyFont;
+
+    for (const line of lines) {
+      ensureSpace(size + gap + 2);
+      page.drawText(line, {
+        x: marginX + indent,
+        y,
+        size,
+        font,
+        color,
+      });
+      y -= size + gap;
+    }
+  };
+
+  page.drawText("Half-Yearly Discussion Questions", {
+    x: marginX,
+    y,
+    size: 22,
+    font: titleFont,
+    color: rgb(0.09, 0.2, 0.3),
+  });
+  y -= 30;
+
+  drawLines(wrapPdfText("Question bank for team half-yearly discussions. This export includes prompts only and does not include any employee answers."), {
+    size: 11,
+    color: rgb(0.33, 0.39, 0.46),
+    gap: 5,
+  });
+  y -= 8;
+
+  for (const section of AGENDA_SECTIONS) {
+    ensureSpace(72);
+    page.drawText(section.title, {
+      x: marginX,
+      y,
+      size: 14,
+      font: boldFont,
+      color: rgb(0.12, 0.21, 0.34),
+    });
+    y -= 20;
+
+    drawLines(wrapPdfText(`Suggested time: ${section.duration}`), {
+      size: 10,
+      color: rgb(0.43, 0.49, 0.56),
+      font: boldFont,
+    });
+    drawLines(wrapPdfText(`Goal: ${section.goal}`), {
+      size: 10,
+      color: rgb(0.35, 0.41, 0.48),
+      gap: 5,
+    });
+    y -= 4;
+
+    section.prompts.forEach((prompt, index) => {
+      const bulletLines = wrapPdfText(`${index + 1}. ${prompt}`, 84);
+      drawLines(bulletLines, {
+        size: 11,
+        indent: 12,
+        gap: 4,
+        color: rgb(0.17, 0.24, 0.34),
+      });
+    });
+
+    y -= 10;
+  }
+
+  const pdfBytes = await pdf.save();
+  downloadBlob(new Blob([pdfBytes], { type: "application/pdf" }), "half-yearly-discussion-questions.pdf");
+}
 
 function parseSavedManagerNotes(rawValue: string | null | undefined) {
   const raw = rawValue ?? "";
@@ -544,6 +678,62 @@ function buildSavedManagerNotes(managerNotes: string, aiTalkingPoints: string, q
   ].filter(Boolean).join("\n\n") || null;
 }
 
+type ManagerAutosaveDraft = {
+  managerNotes: string;
+  questionNotes: QuestionNoteMap;
+  managerSummary: string;
+  strengths: string;
+  growthAreas: string;
+  status: string;
+  scheduledDate: string;
+  discussionDate: string;
+  updatedAt: string;
+};
+
+function managerAutosaveKey(managerName: string, employeeName: string, cycleLabel: string) {
+  return `${MANAGER_AUTOSAVE_PREFIX}:${managerName}::${employeeName}::${cycleLabel}`;
+}
+
+function readManagerAutosave(key: string): ManagerAutosaveDraft | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<ManagerAutosaveDraft>;
+    return {
+      managerNotes: typeof parsed.managerNotes === "string" ? parsed.managerNotes : "",
+      questionNotes: parsed.questionNotes && typeof parsed.questionNotes === "object" ? parsed.questionNotes as QuestionNoteMap : {},
+      managerSummary: typeof parsed.managerSummary === "string" ? parsed.managerSummary : "",
+      strengths: typeof parsed.strengths === "string" ? parsed.strengths : "",
+      growthAreas: typeof parsed.growthAreas === "string" ? parsed.growthAreas : "",
+      status: typeof parsed.status === "string" ? parsed.status : "draft",
+      scheduledDate: typeof parsed.scheduledDate === "string" ? parsed.scheduledDate : "",
+      discussionDate: typeof parsed.discussionDate === "string" ? parsed.discussionDate : "",
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeManagerAutosave(key: string, draft: ManagerAutosaveDraft) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, JSON.stringify(draft));
+  } catch {
+    // ignore storage write failures
+  }
+}
+
+function clearManagerAutosave(key: string | null) {
+  if (!key || typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // ignore storage removal failures
+  }
+}
+
 function reviewFromSubmission(submission: SubmissionRow | null | undefined): SelfReviewDraft {
   if (!submission) return { ...EMPTY_REVIEW, openingNotes: [...EMPTY_REVIEW.openingNotes], businessImpactNotes: [...EMPTY_REVIEW.businessImpactNotes], behaviorsNotes: [...EMPTY_REVIEW.behaviorsNotes], feedbackNotes: [...EMPTY_REVIEW.feedbackNotes], engagementNotes: [...EMPTY_REVIEW.engagementNotes], developmentNotes: [...EMPTY_REVIEW.developmentNotes], secondHalfPriorities: [...EMPTY_REVIEW.secondHalfPriorities], closingSummary: [...EMPTY_REVIEW.closingSummary] };
   return {
@@ -558,6 +748,39 @@ function reviewFromSubmission(submission: SubmissionRow | null | undefined): Sel
     overallSummary: submission.overall_summary ?? "",
     employeeCommitments: submission.employee_commitments ?? "",
   };
+}
+
+function normalizeSubmissionKeyPart(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function submissionSortValue(submission: SubmissionRow) {
+  const value = submission.updated_at ?? submission.submitted_at ?? submission.created_at ?? "";
+  return value instanceof Date ? value.toISOString() : String(value);
+}
+
+function choosePreferredSubmission(rows: SubmissionRow[]) {
+  return [...rows].sort((a, b) => {
+    const aSubmitted = a.submission_status === "submitted" ? 1 : 0;
+    const bSubmitted = b.submission_status === "submitted" ? 1 : 0;
+    if (aSubmitted !== bSubmitted) return bSubmitted - aSubmitted;
+    return submissionSortValue(b).localeCompare(submissionSortValue(a)) || b.id - a.id;
+  })[0] ?? null;
+}
+
+function dedupeSubmissions(rows: SubmissionRow[]) {
+  const grouped = new Map<string, SubmissionRow[]>();
+  for (const row of rows) {
+    const key = `${normalizeSubmissionKeyPart(row.employee_name)}::${normalizeSubmissionKeyPart(row.cycle_label)}`;
+    const bucket = grouped.get(key) ?? [];
+    bucket.push(row);
+    grouped.set(key, bucket);
+  }
+
+  return Array.from(grouped.values())
+    .map((group) => choosePreferredSubmission(group))
+    .filter((row): row is SubmissionRow => Boolean(row))
+    .sort((a, b) => submissionSortValue(b).localeCompare(submissionSortValue(a)) || b.id - a.id);
 }
 
 function MetricStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
@@ -745,13 +968,15 @@ function ReadOnlyReviewAgenda({
   onAddHighlight,
   onClearHighlights,
   onQuestionNoteChange,
+  managerMode = true,
 }: {
   review: SelfReviewDraft;
-  highlightedAnswers: HighlightMap;
-  questionNotes: QuestionNoteMap;
-  onAddHighlight: (answerId: string) => void;
-  onClearHighlights: (answerId: string) => void;
-  onQuestionNoteChange: (answerId: string, value: string) => void;
+  highlightedAnswers?: HighlightMap;
+  questionNotes?: QuestionNoteMap;
+  onAddHighlight?: (answerId: string) => void;
+  onClearHighlights?: (answerId: string) => void;
+  onQuestionNoteChange?: (answerId: string, value: string) => void;
+  managerMode?: boolean;
 }) {
   return (
     <Card withBorder radius="md" p="md">
@@ -774,32 +999,34 @@ function ReadOnlyReviewAgenda({
                 {section.prompts.map((prompt, index) => {
                   const answerId = `${section.key}-${index}`;
                   const answer = review[section.key][index]?.trim() || "—";
-                  const answerHighlights = highlightedAnswers[answerId] ?? [];
+                  const answerHighlights = highlightedAnswers?.[answerId] ?? [];
                   const hasHighlights = answerHighlights.length > 0;
                   return (
                     <Box key={prompt}>
                       <Group justify="space-between" align="center" mb={4}>
                         <Text size="sm" fw={600}>{prompt}</Text>
-                        <Group gap="xs">
-                          <Button
-                            size="compact-xs"
-                            variant="light"
-                            color="yellow"
-                            onClick={() => onAddHighlight(answerId)}
-                          >
-                            Highlight selection
-                          </Button>
-                          {hasHighlights && (
+                        {managerMode && (
+                          <Group gap="xs">
                             <Button
                               size="compact-xs"
-                              variant="subtle"
-                              color="gray"
-                              onClick={() => onClearHighlights(answerId)}
+                              variant="light"
+                              color="yellow"
+                              onClick={() => onAddHighlight?.(answerId)}
                             >
-                              Clear
+                              Highlight selection
                             </Button>
-                          )}
-                        </Group>
+                            {hasHighlights && (
+                              <Button
+                                size="compact-xs"
+                                variant="subtle"
+                                color="gray"
+                                onClick={() => onClearHighlights?.(answerId)}
+                              >
+                                Clear
+                              </Button>
+                            )}
+                          </Group>
+                        )}
                       </Group>
                       <Card
                         withBorder
@@ -812,27 +1039,29 @@ function ReadOnlyReviewAgenda({
                       >
                         <AnswerText text={answer} highlights={answerHighlights} answerId={answerId} />
                       </Card>
-                      <Textarea
-                        label="Manager note"
-                        placeholder="Add a quick note for this answer"
-                        minRows={2}
-                        autosize
-                        value={questionNotes[answerId] ?? ""}
-                        onChange={(event) => onQuestionNoteChange(answerId, event.currentTarget.value)}
-                        mt="xs"
-                        c="violet.9"
-                        styles={{
-                          input: {
-                            color: "var(--mantine-color-violet-9)",
-                            background: "color-mix(in srgb, var(--mantine-color-violet-1) 72%, var(--mantine-color-body))",
-                            borderColor: "var(--mantine-color-violet-3)",
-                          },
-                          label: {
-                            color: "var(--mantine-color-violet-7)",
-                            fontWeight: 700,
-                          },
-                        }}
-                      />
+                      {managerMode && (
+                        <Textarea
+                          label="Manager note"
+                          placeholder="Add a quick note for this answer"
+                          minRows={2}
+                          autosize
+                          value={questionNotes?.[answerId] ?? ""}
+                          onChange={(event) => onQuestionNoteChange?.(answerId, event.currentTarget.value)}
+                          mt="xs"
+                          c="violet.9"
+                          styles={{
+                            input: {
+                              color: "var(--mantine-color-violet-9)",
+                              background: "color-mix(in srgb, var(--mantine-color-violet-1) 72%, var(--mantine-color-body))",
+                              borderColor: "var(--mantine-color-violet-3)",
+                            },
+                            label: {
+                              color: "var(--mantine-color-violet-7)",
+                              fontWeight: 700,
+                            },
+                          }}
+                        />
+                      )}
                     </Box>
                   );
                 })}
@@ -983,10 +1212,12 @@ export function PerformanceDiscussionsWidget() {
   const safeMetrics = Array.isArray(metrics) ? metrics : [];
   const safeDiscussions = Array.isArray(discussions) ? discussions : [];
   const safeSubmissions = Array.isArray(submissions) ? submissions : [];
+  const dedupedSubmissions = useMemo(() => dedupeSubmissions(safeSubmissions), [safeSubmissions]);
 
   const scopedEmployeeName = isManager ? employeeName : employeeNameFromIdentity || null;
   const canSubmitReview = isReviewComplete(employeeReview);
   const totalTeamSteps = AGENDA_SECTIONS.length + 2;
+  const employeeReviewReadOnlyStep = totalTeamSteps;
   const activeTeamSection = teamReviewStep > 0 && teamReviewStep <= AGENDA_SECTIONS.length
     ? AGENDA_SECTIONS[teamReviewStep - 1]
     : null;
@@ -1005,9 +1236,16 @@ export function PerformanceDiscussionsWidget() {
   );
 
   const scopedSubmission = useMemo(() => {
-    if (isManager) return safeSubmissions.find((submission) => submission.id === activeSubmissionId) ?? null;
-    return safeSubmissions.find((submission) => submission.employee_name === employeeNameFromIdentity && submission.cycle_label === cycleLabel) ?? null;
-  }, [activeSubmissionId, cycleLabel, employeeNameFromIdentity, isManager, submissions]);
+    if (isManager) return dedupedSubmissions.find((submission) => submission.id === activeSubmissionId) ?? null;
+
+    const matchingRows = safeSubmissions.filter((submission) => (
+      normalizeSubmissionKeyPart(submission.employee_name) === normalizeSubmissionKeyPart(employeeNameFromIdentity)
+      && normalizeSubmissionKeyPart(submission.cycle_label) === normalizeSubmissionKeyPart(cycleLabel)
+    ));
+    return choosePreferredSubmission(matchingRows);
+  }, [activeSubmissionId, cycleLabel, dedupedSubmissions, employeeNameFromIdentity, isManager, safeSubmissions]);
+
+  const hasExistingDraft = !isManager && submissionStatus === "draft" && Boolean(scopedSubmission);
 
   const sharedManagerDiscussion = useMemo(() => {
     if (!isManager || !scopedEmployeeName) return null;
@@ -1015,6 +1253,11 @@ export function PerformanceDiscussionsWidget() {
       discussion.employee_name === scopedEmployeeName && discussion.cycle_label === cycleLabel
     )) ?? null;
   }, [cycleLabel, isManager, safeDiscussions, scopedEmployeeName]);
+
+  const managerAutosaveStorageKey = useMemo(() => {
+    if (!isManager || !managerName || !scopedEmployeeName || !cycleLabel) return null;
+    return managerAutosaveKey(managerName, scopedEmployeeName, cycleLabel);
+  }, [cycleLabel, isManager, managerName, scopedEmployeeName]);
 
   async function load() {
     if (!identity) return;
@@ -1073,15 +1316,19 @@ export function PerformanceDiscussionsWidget() {
     }
 
     const parsedManagerNotes = parseSavedManagerNotes(sharedManagerDiscussion?.manager_notes);
-    setManagerSummary(sharedManagerDiscussion?.overall_summary ?? "");
-    setStrengths(sharedManagerDiscussion?.strengths ?? "");
-    setGrowthAreas(sharedManagerDiscussion?.growth_areas ?? "");
-    setManagerNotes(parsedManagerNotes.managerNotes);
-    setQuestionNotes(parsedManagerNotes.questionNotes);
-    setStatus(sharedManagerDiscussion?.status ?? "draft");
-    setScheduledDate(sharedManagerDiscussion?.scheduled_date ?? "");
-    setDiscussionDate(sharedManagerDiscussion?.discussion_date ?? "");
-  }, [isManager, scopedSubmission, sharedManagerDiscussion, totalTeamSteps]);
+    const autosavedDraft = managerAutosaveStorageKey
+      ? readManagerAutosave(managerAutosaveStorageKey)
+      : null;
+
+    setManagerSummary(autosavedDraft?.managerSummary ?? sharedManagerDiscussion?.overall_summary ?? "");
+    setStrengths(autosavedDraft?.strengths ?? sharedManagerDiscussion?.strengths ?? "");
+    setGrowthAreas(autosavedDraft?.growthAreas ?? sharedManagerDiscussion?.growth_areas ?? "");
+    setManagerNotes(autosavedDraft?.managerNotes ?? parsedManagerNotes.managerNotes);
+    setQuestionNotes(autosavedDraft?.questionNotes ?? parsedManagerNotes.questionNotes);
+    setStatus(autosavedDraft?.status ?? sharedManagerDiscussion?.status ?? "draft");
+    setScheduledDate(autosavedDraft?.scheduledDate ?? sharedManagerDiscussion?.scheduled_date ?? "");
+    setDiscussionDate(autosavedDraft?.discussionDate ?? sharedManagerDiscussion?.discussion_date ?? "");
+  }, [isManager, managerAutosaveStorageKey, scopedSubmission, sharedManagerDiscussion, totalTeamSteps]);
 
   function updateReviewAnswer(sectionKey: ReviewSectionKey, index: number, value: string) {
     setEmployeeReview((prev) => ({
@@ -1139,6 +1386,33 @@ export function PerformanceDiscussionsWidget() {
     });
   }
 
+  useEffect(() => {
+    if (!isManager || !managerAutosaveStorageKey || !scopedSubmission) return;
+    writeManagerAutosave(managerAutosaveStorageKey, {
+      managerNotes,
+      questionNotes,
+      managerSummary,
+      strengths,
+      growthAreas,
+      status: status ?? "draft",
+      scheduledDate,
+      discussionDate,
+      updatedAt: new Date().toISOString(),
+    });
+  }, [
+    discussionDate,
+    growthAreas,
+    isManager,
+    managerAutosaveStorageKey,
+    managerNotes,
+    managerSummary,
+    questionNotes,
+    scheduledDate,
+    scopedSubmission,
+    status,
+    strengths,
+  ]);
+
   async function saveSubmission(nextStatus: "draft" | "submitted") {
     if (!employeeNameFromIdentity) {
       setError("Missing employee identity.");
@@ -1172,8 +1446,13 @@ export function PerformanceDiscussionsWidget() {
         updated_at: new Date().toISOString(),
       };
 
-      if (scopedSubmission?.id) {
-        await db.performance_discussion_submissions.updateById(scopedSubmission.id, payload);
+      const existingSubmission = choosePreferredSubmission(safeSubmissions.filter((submission) => (
+        normalizeSubmissionKeyPart(submission.employee_name) === normalizeSubmissionKeyPart(employeeNameFromIdentity)
+        && normalizeSubmissionKeyPart(submission.cycle_label) === normalizeSubmissionKeyPart(cycleLabel)
+      )));
+
+      if (existingSubmission?.id) {
+        await db.performance_discussion_submissions.updateById(existingSubmission.id, payload);
       } else {
         await db.performance_discussion_submissions.insert(payload);
       }
@@ -1243,6 +1522,7 @@ export function PerformanceDiscussionsWidget() {
         metrics_snapshot_json: JSON.stringify(snapshot),
         updated_at: new Date().toISOString(),
       });
+      clearManagerAutosave(managerAutosaveStorageKey);
       setManagerSummary("");
       setStrengths("");
       setGrowthAreas("");
@@ -1311,16 +1591,18 @@ export function PerformanceDiscussionsWidget() {
               <Card withBorder radius="md" p="md">
                 <Stack gap="md">
                   <Box>
-                    <Text fw={700}>Start when you're ready</Text>
+                    <Text fw={700}>{hasExistingDraft ? "Your draft is ready to continue" : "Start when you're ready"}</Text>
                     <Text size="sm" c="dimmed">
-                      You will answer one section at a time. You can go back anytime, and you can save a draft before submitting.
+                      {hasExistingDraft
+                        ? "You already have a saved draft for this cycle. Open it to continue editing your responses before submitting."
+                        : "You will answer one section at a time. You can go back anytime, and you can save a draft before submitting."}
                     </Text>
                   </Box>
                   <Group justify="space-between" align="center">
                     <Text size="sm" c="dimmed">8 guided sections</Text>
                     <Group>
                       <Button variant="light" color="gray" onClick={() => void saveSubmission("draft")} loading={saving}>Save draft</Button>
-                      <Button color="red" onClick={() => setTeamReviewStep(1)}>Start self-review</Button>
+                      <Button color="red" onClick={() => setTeamReviewStep(1)}>{hasExistingDraft ? "Open draft" : "Start self-review"}</Button>
                     </Group>
                   </Group>
                 </Stack>
@@ -1400,15 +1682,60 @@ export function PerformanceDiscussionsWidget() {
                 <Text size="sm" c="dimmed">
                   We will review and discuss this in the upcoming half yearly performance review meeting.
                 </Text>
+                <Group>
+                  <Button variant="light" color="violet" onClick={() => setTeamReviewStep(employeeReviewReadOnlyStep)}>
+                    View submitted responses
+                  </Button>
+                  <Button leftSection={<IconUserEdit size={16} />} variant="light" color="gray" onClick={() => void enableSubmissionEditing()} loading={saving}>
+                    Edit submission
+                  </Button>
+                </Group>
               </Stack>
             </Card>
+          )}
+
+          {teamReviewStep === employeeReviewReadOnlyStep && submissionStatus === "submitted" && (
+            <>
+              <Card withBorder radius="md" p="md">
+                <Group justify="space-between" align="center">
+                  <Box>
+                    <Text fw={700}>Your submitted responses</Text>
+                    <Text size="sm" c="dimmed">This is a read-only view of the answers you submitted for the half-year review.</Text>
+                  </Box>
+                  <Group>
+                    <Button variant="light" color="gray" onClick={() => setTeamReviewStep(totalTeamSteps - 1)}>
+                      Back
+                    </Button>
+                    <Button leftSection={<IconUserEdit size={16} />} variant="light" color="gray" onClick={() => void enableSubmissionEditing()} loading={saving}>
+                      Edit submission
+                    </Button>
+                  </Group>
+                </Group>
+              </Card>
+
+              <ReadOnlyReviewAgenda review={employeeReview} managerMode={false} />
+
+              <Card withBorder radius="md" p="md">
+                <Stack gap="sm">
+                  <Text fw={700}>Your final notes</Text>
+                  <Box>
+                    <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb={4}>Overall summary</Text>
+                    <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>{employeeReview.overallSummary || "—"}</Text>
+                  </Box>
+                  <Box>
+                    <Text size="xs" fw={700} tt="uppercase" c="dimmed" mb={4}>Commitments / follow-ups</Text>
+                    <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>{employeeReview.employeeCommitments || "—"}</Text>
+                  </Box>
+                </Stack>
+              </Card>
+            </>
           )}
         </Stack>
       </WidgetFrame>
     );
   }
 
-  const submittedResponses = safeSubmissions.filter((submission) => submission.submission_status === "submitted");
+  const submittedResponses = dedupedSubmissions.filter((submission) => submission.submission_status === "submitted");
 
   return (
     <WidgetFrame
@@ -1422,6 +1749,12 @@ export function PerformanceDiscussionsWidget() {
       headerActions={<Badge variant="light" color="red">Managers only</Badge>}
     >
       <Stack gap="lg">
+        <Group justify="space-between" align="center">
+          <Text size="sm" c="dimmed">Export the question bank as a PDF without any employee answers.</Text>
+          <Button variant="light" color="red" leftSection={<IconClipboardText size={16} />} onClick={() => void generateHalfYearlyQuestionsPdf()}>
+            Download questions PDF
+          </Button>
+        </Group>
         {(error || aiError) && <Alert color="red">{error || aiError}</Alert>}
 
         {!scopedSubmission ? (

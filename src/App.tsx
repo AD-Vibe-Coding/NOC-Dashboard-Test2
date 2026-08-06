@@ -716,7 +716,7 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
       { id: "enhancement-tracker", emoji: "💡", label: "Enhancement Tracker", desc: "Ideas, approvals, and status", color: "yellow" },
-      { id: "building-apps-agents", emoji: "🧩", label: "Building Apps / Agents", desc: "Decision-ready intake wizard", color: "blue" },
+      { id: "work-allotment-generator", emoji: "📋", label: "Work Allotment Generator", desc: "Generate NOC shift assignments", color: "indigo" },
     ],
   },
   {
@@ -728,6 +728,7 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "data-health",              emoji: "🗄️", label: "Data Health",              desc: "App data table counts",                color: "orange" },
       { id: "ticket-audit",             emoji: "🔍", label: "Ticket Audit",             desc: "AI-powered QA audits",                 color: "pink" },
       { id: "performance-discussions",  emoji: "🗓️", label: "Half-Yearly Discussions", desc: "Manager performance discussion records", color: "red" },
+      { id: "building-apps-agents",     emoji: "🧩", label: "Building Apps / Agents",    desc: "Decision-ready intake wizard",        color: "blue" },
     ],
   },
   {

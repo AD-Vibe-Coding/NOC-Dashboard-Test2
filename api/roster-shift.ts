@@ -693,7 +693,55 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 let _cache: { data: ShiftResult; at: number; month: string; targetDate: string } | null = null;
 const CACHE_TTL = 5 * 60_000;
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// ── Shared reader + handler ──────────────────────────────────────────────────
+
+/**
+ * Shared daily roster reader used by Team Availability, Ticket Rebalancer, and
+ * Work Allotment Generator. It preserves the working credential and published
+ * CSV fallback used by the existing /api/roster-shift endpoint.
+ */
+export async function readRosterDailyEntries(requestedDate = ""): Promise<ShiftResult> {
+  const targetDay = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? dayMetaFromIso(requestedDate) : todayPST();
+  const tabName = currentMonthTabName();
+
+  if (_cache && _cache.month === tabName && _cache.targetDate === targetDay.isoDate && Date.now() - _cache.at < CACHE_TTL) {
+    return _cache.data;
+  }
+
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim();
+  const csvUrl = process.env.ROSTER_PUBLISHED_CSV_URL?.trim();
+
+  if (email && privateKey) {
+    const token = await getAccessToken();
+    const rows = await fetchRows(token, tabName);
+    const detected = detectShift(rows, tabName);
+    const data: ShiftResult = {
+      ...detected,
+      dailyEntries: buildDailyEntries(rows, targetDay),
+      targetDate: targetDay.isoDate,
+      fetchedAt: new Date().toISOString(),
+    };
+    _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
+    return data;
+  }
+
+  if (csvUrl) {
+    const { rows, sheetTitle } = await fetchPublishedCsvRows(csvUrl);
+    const detected = detectShift(rows, sheetTitle);
+    const data: ShiftResult = {
+      ...detected,
+      dailyEntries: buildDailyEntries(rows, targetDay),
+      targetDate: targetDay.isoDate,
+      strategy: `${detected.strategy}-published-csv`,
+      fetchedAt: new Date().toISOString(),
+    };
+    _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
+    return data;
+  }
+
+  throw new Error("Roster reader is not configured. Set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, or ROSTER_PUBLISHED_CSV_URL.");
+}
 
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   res.setHeader("Content-Type", "application/json");
@@ -701,80 +749,22 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   const requestUrl = new URL(req.url ?? "/api/roster-shift", "http://localhost");
   const requestedDate = requestUrl.searchParams.get("date")?.trim() ?? "";
-  const targetDay = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? dayMetaFromIso(requestedDate) : todayPST();
-  const tabName = currentMonthTabName(); // e.g. "Jun'26"
-
-  // Invalidate cache if the month changed or TTL expired
-  if (_cache && _cache.month === tabName && _cache.targetDate === targetDay.isoDate && Date.now() - _cache.at < CACHE_TTL) {
-    return res.end(JSON.stringify(_cache.data));
-  }
-
-  const email      = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
-  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim();
-  const csvUrl     = process.env.ROSTER_PUBLISHED_CSV_URL?.trim();
 
   try {
-    // ── Path 1: Service account (preferred) ──────────────────────────────
-    // Uses the tab name directly — no GID needed, auto-follows monthly tabs.
-    if (email && privateKey) {
-      const token    = await getAccessToken();
-      const rows     = await fetchRows(token, tabName);
-      const detected = detectShift(rows, tabName);
-      const data: ShiftResult = {
-        ...detected,
-        dailyEntries: buildDailyEntries(rows, targetDay),
-        targetDate: targetDay.isoDate,
-        fetchedAt: new Date().toISOString(),
-      };
-      _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
-      return res.end(JSON.stringify(data));
-    }
-
-    // ── Path 2: Published CSV override ───────────────────────────────────
-    // Only used when the user sets ROSTER_PUBLISHED_CSV_URL explicitly.
-    // Note: the built-in published URL only covers the originally-published tab.
-    // This path is kept for compatibility but won't auto-follow monthly tabs
-    // unless ROSTER_PUBLISHED_CSV_URL is also updated each month.
-    if (csvUrl) {
-      const { rows, sheetTitle } = await fetchPublishedCsvRows(csvUrl);
-      const detected = detectShift(rows, sheetTitle);
-      const data: ShiftResult = {
-        ...detected,
-        dailyEntries: buildDailyEntries(rows, targetDay),
-        targetDate: targetDay.isoDate,
-        strategy: `${detected.strategy}-published-csv`,
-        fetchedAt: new Date().toISOString(),
-      };
-      _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
-      return res.end(JSON.stringify(data));
-    }
-
-    // ── Path 3: Unconfigured ─────────────────────────────────────────────
-    const fallback: ShiftResult = {
-      inShiftNow: [],
-      allNames:   [],
-      dailyEntries: [],
-      strategy:   "unconfigured",
-      sheetTitle: "(not configured)",
-      targetDate: targetDay.isoDate,
-      fetchedAt:  new Date().toISOString(),
-      rowCount:   0,
-      error: "Set GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY to enable roster shift detection.",
-    };
-    return res.end(JSON.stringify(fallback));
-
+    const data = await readRosterDailyEntries(requestedDate);
+    return res.end(JSON.stringify(data));
   } catch (err: any) {
     const data: ShiftResult = {
       inShiftNow: [],
-      allNames:   [],
+      allNames: [],
       dailyEntries: [],
-      strategy:   "error",
-      sheetTitle: tabName,
-      targetDate: targetDay.isoDate,
-      fetchedAt:  new Date().toISOString(),
-      rowCount:   0,
+      strategy: "error",
+      sheetTitle: currentMonthTabName(),
+      targetDate: requestedDate || todayPST().isoDate,
+      fetchedAt: new Date().toISOString(),
+      rowCount: 0,
       error: String(err?.message ?? err),
     };
-    res.end(JSON.stringify(data));
+    return res.end(JSON.stringify(data));
   }
 }

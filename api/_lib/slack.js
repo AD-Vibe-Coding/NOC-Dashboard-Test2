@@ -9,10 +9,10 @@ export async function postSlackMessage(text, opts = {}) {
   const token = process.env.SLACK_BOT_TOKEN ?? "";
   if (!token || !token.startsWith("xoxb-")) {
     console.log(`[slack] (no token) would post: "${text.slice(0, 80)}"`);
-    return { posted: false, ts: null };
+    return { posted: false, ts: null, demo: true };
   }
   const payload = {
-    channel: CHANNEL_ID,
+    channel: opts.channel || CHANNEL_ID,
     text,
     ...(opts.thread_ts ? { thread_ts: opts.thread_ts } : {}),
     ...(opts.username ? { username: opts.username } : {}),

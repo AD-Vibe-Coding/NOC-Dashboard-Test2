@@ -13,6 +13,7 @@ import {
   Avatar,
   Badge,
   Box,
+  Button,
   Card,
   Group,
   Progress,
@@ -60,6 +61,36 @@ interface UsageData {
   users: UserStat[];
   top_widgets: { widget_id: string; widget_title: string; count: number }[];
   daily_active: { date: string; count: number }[];
+}
+
+interface AppUsageSheetConfigResponse {
+  ok: boolean;
+  config: {
+    spreadsheetId: string;
+    tabName: string;
+    schedule: string;
+    source: string;
+    exactColumns: string[];
+  };
+  next_manual_sync_window: {
+    weekStart: string;
+    weekEnd: string;
+  };
+}
+
+interface AppUsageSheetSyncResponse {
+  ok: boolean;
+  result: {
+    spreadsheetId: string;
+    tabName: string;
+    weekStart: string;
+    weekEnd: string;
+    totalWidgetEvents: number;
+    preparedRows: number;
+    appendedRows: number;
+    skippedExistingRows: number;
+    unmappedUsers: string[];
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -130,6 +161,9 @@ export function AppUsageWidget() {
   const [error, setError] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [syncingSheet, setSyncingSheet] = useState(false);
+  const [sheetConfig, setSheetConfig] = useState<AppUsageSheetConfigResponse | null>(null);
+  const [sheetSyncNotice, setSheetSyncNotice] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
   const [sort, setSort] = useState<"week" | "today" | "days" | "name">("week");
@@ -154,14 +188,43 @@ export function AppUsageWidget() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/app-usage");
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error ?? `HTTP ${r.status}`);
-      setData(j as UsageData);
+      const [usageResponse, configResponse] = await Promise.all([
+        fetch("/api/app-usage"),
+        fetch("/api/app-usage/sync-google-sheet"),
+      ]);
+
+      const usageJson = await usageResponse.json();
+      if (!usageResponse.ok) throw new Error(usageJson.error ?? `HTTP ${usageResponse.status}`);
+      setData(usageJson as UsageData);
+
+      const configJson = await configResponse.json();
+      if (!configResponse.ok) throw new Error(configJson.error ?? `HTTP ${configResponse.status}`);
+      setSheetConfig(configJson as AppUsageSheetConfigResponse);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function syncLastWeekToSheet() {
+    setSyncingSheet(true);
+    setSheetSyncNotice(null);
+    setError(null);
+    try {
+      const response = await fetch("/api/app-usage/sync-google-sheet", { method: "POST" });
+      const json = await response.json();
+      if (!response.ok) throw new Error(json.error ?? `HTTP ${response.status}`);
+      const payload = json as AppUsageSheetSyncResponse;
+      const unmappedHint = payload.result.unmappedUsers.length > 0
+        ? ` Unmapped users: ${payload.result.unmappedUsers.join(", ")}.`
+        : "";
+      setSheetSyncNotice(`Synced ${payload.result.appendedRows} new rows for ${payload.result.weekStart} to ${payload.result.weekEnd}. ${payload.result.skippedExistingRows} rows were already present.${unmappedHint}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to sync App Usage to Google Sheet.");
+    } finally {
+      setSyncingSheet(false);
     }
   }
 
@@ -206,6 +269,48 @@ export function AppUsageWidget() {
         {error && (
           <Card withBorder radius="md" p="md" style={{ borderColor: "var(--mantine-color-red-6)" }}>
             <Text c="red" size="sm">{error}</Text>
+          </Card>
+        )}
+
+        {sheetSyncNotice && (
+          <Card withBorder radius="md" p="md" style={{ borderColor: "var(--mantine-color-teal-6)" }}>
+            <Text c="teal" size="sm">{sheetSyncNotice}</Text>
+          </Card>
+        )}
+
+        {sheetConfig && (
+          <Card withBorder radius="md" p="md">
+            <Stack gap="sm">
+              <Group justify="space-between" align="flex-start">
+                <Box>
+                  <Text fw={700}>Weekly Google Sheet sync</Text>
+                  <Text size="sm" c="dimmed">
+                    Auto-appends widget-open usage rows to the <strong>{sheetConfig.config.tabName}</strong> tab every Monday.
+                  </Text>
+                </Box>
+                <Badge color="teal" variant="light">{sheetConfig.config.schedule}</Badge>
+              </Group>
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                <Card withBorder radius="md" p="sm">
+                  <Text size="xs" tt="uppercase" fw={700} c="dimmed">Sheet target</Text>
+                  <Text size="sm" mt={4}>{sheetConfig.config.tabName}</Text>
+                  <Text size="xs" c="dimmed" mt={2}>{sheetConfig.config.spreadsheetId}</Text>
+                </Card>
+                <Card withBorder radius="md" p="sm">
+                  <Text size="xs" tt="uppercase" fw={700} c="dimmed">Next manual sync window</Text>
+                  <Text size="sm" mt={4}>{sheetConfig.next_manual_sync_window.weekStart} → {sheetConfig.next_manual_sync_window.weekEnd}</Text>
+                  <Text size="xs" c="dimmed" mt={2}>{sheetConfig.config.source}</Text>
+                </Card>
+              </SimpleGrid>
+              <Group justify="space-between" align="center">
+                <Text size="xs" c="dimmed">
+                  Columns: {sheetConfig.config.exactColumns.join(", ")}
+                </Text>
+                <Button color="teal" variant="light" onClick={syncLastWeekToSheet} loading={syncingSheet}>
+                  Sync last week now
+                </Button>
+              </Group>
+            </Stack>
           </Card>
         )}
 
