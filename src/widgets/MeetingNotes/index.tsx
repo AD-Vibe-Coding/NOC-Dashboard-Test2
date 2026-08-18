@@ -52,7 +52,7 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
-import { LOCKED_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
+import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
 import { useIdentity } from "../../lib/identity";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { getDefaultAgentId } from "../../lib/devs-ai/agents";
@@ -155,7 +155,7 @@ const NOTEBOOK_OPTIONS = [
   { value: "other", label: "Other notebook" },
 ];
 
-const MEMBER_OPTIONS = LOCKED_TEAM_NAMES.map(n => ({ value: n, label: n }));
+const MEMBER_OPTIONS = PERSON_TEAM_NAMES.map(n => ({ value: n, label: n }));
 
 const TASK_STATUS_OPTIONS = [
   { value: "open", label: "Not started" },
@@ -881,7 +881,7 @@ export function MeetingNotesWidget() {
       }
     };
 
-    LOCKED_TEAM_NAMES.forEach((name) => ensureSection("individual", name));
+    PERSON_TEAM_NAMES.forEach((name) => ensureSection("individual", name));
     DEFAULT_MANAGEMENT_SECTIONS.forEach((name) => ensureSection("management", name));
     ensureSection("other", DEFAULT_OTHER_SECTION);
     preferences
@@ -1035,7 +1035,7 @@ export function MeetingNotesWidget() {
     setEditingNoteId(null);
     setParentNoteId(null);
     setNotebookMode(mode);
-    setSelectedEmployee(mode === "individual" ? LOCKED_TEAM_NAMES[0] ?? null : null);
+    setSelectedEmployee(mode === "individual" ? PERSON_TEAM_NAMES[0] ?? null : null);
     setManagementSection(DEFAULT_MANAGEMENT_SECTIONS[0]);
     setMeetingDate("");
     setSourceType("manual");
@@ -3050,7 +3050,7 @@ Tasks:\n${taskLines}`;
                   const pctDone = total > 0 ? Math.round((done / total) * 100) : 0;
 
                   // ── Scorecard data ──────────────────────────────────────
-                  const peopleNames = LOCKED_TEAM_NAMES.filter(name => defaultRoleFor(name) !== "manager");
+                  const peopleNames = PERSON_TEAM_NAMES.filter(name => defaultRoleFor(name) !== "manager");
                   const scorecardRows = peopleNames.map(person => {
                     const personNotes = managerOwnedNotes.filter(n => n.section_name === person || n.employee_name === person);
                     const personTasks = managerTaskRows.filter(t => (t.owner_name ?? t.employee_name) === person);
@@ -3120,7 +3120,7 @@ Tasks:\n${taskLines}`;
                                   <Select
                                     size="sm"
                                     placeholder="Reassign to…"
-                                    data={Array.from(new Set(managerTaskRows.map(t => storedOwner(t)).filter(n => n && LOCKED_TEAM_NAMES.includes(n)))).sort().map(n => ({ value: n, label: n }))}
+                                    data={Array.from(new Set(managerTaskRows.map(t => storedOwner(t)).filter(n => n && PERSON_TEAM_NAMES.includes(n)))).sort().map(n => ({ value: n, label: n }))}
                                     value={bulkAssignOwner}
                                     onChange={v => {
                                       if (!v) return;
@@ -3547,7 +3547,7 @@ Tasks:\n${taskLines}`;
                                 </Stack>
                               </Group>
                               <Group gap="sm" wrap="wrap">
-                                {LOCKED_TEAM_NAMES.filter(n => defaultRoleFor(n) !== "manager").map(name => (
+                                {PERSON_TEAM_NAMES.filter(n => defaultRoleFor(n) !== "manager").map(name => (
                                   <Button key={name} size="xs" variant={prepPerson === name ? "filled" : "light"} color="grape" onClick={() => void generatePrep(name)} loading={prepLoading && prepPerson === name}>
                                     {name.split(" ")[0]}
                                   </Button>
@@ -4347,7 +4347,7 @@ Tasks:\n${taskLines}`;
             {notebookMode === "individual" ? (
               <Select
                 label="Start from an existing employee section"
-                data={LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
+                data={PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
                 value={selectedEmployee}
                 onChange={(value) => {
                   setSelectedEmployee(value);

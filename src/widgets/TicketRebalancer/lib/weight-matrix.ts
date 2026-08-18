@@ -76,20 +76,28 @@ export function classifyPriority(priorityRaw: string): PriorityBand {
   return "Medium/Low";
 }
 
-// Stage normalizer — case-insensitive, fuzzy on spaces and slashes.
+// Stage normalizer — case-insensitive, fuzzy on spaces/slashes, and tolerant
+// of iPath variants so downstream load math can reliably exclude done work.
 export function classifyStage(stageRaw: string): Stage | "Unknown" {
-  const norm = (stageRaw ?? "")
-    .toString()
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+  const raw = (stageRaw ?? "").toString().trim().toLowerCase();
+  const norm = raw.replace(/\s+/g, " ");
+
+  // iPath exports sometimes append suffixes or punctuation to this stage
+  // (for example "Pending Complete - waiting closeout"). Treat any
+  // recognizable Pending Complete variant as done work.
+  if (/pending\s*complete/.test(raw.replace(/[^a-z]+/g, " "))) {
+    return "Pending Complete";
+  }
+
   for (const s of STAGES) {
     if (s.toLowerCase() === norm) return s;
   }
-  // Common variant: "On Hold" vs "On hold"
+  // Common variants: spacing/casing differences like "On Hold" vs "On hold"
+  // or slashless forms.
   for (const s of STAGES) {
-    if (s.toLowerCase().replace(/\s+/g, "") === norm.replace(/\s+/g, ""))
+    if (s.toLowerCase().replace(/\s+/g, "") === norm.replace(/\s+/g, "")) {
       return s;
+    }
   }
   return "Unknown";
 }

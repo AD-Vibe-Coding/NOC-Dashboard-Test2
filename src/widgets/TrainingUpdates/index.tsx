@@ -32,7 +32,7 @@ import {
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
-import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 import { ROLE_BY_NAME } from "../../lib/roles";
 
 export { TrainingUpdatesTile } from "./Tile";
@@ -253,7 +253,7 @@ export function TrainingUpdatesWidget() {
   }, []);
 
   const teamMembers = useMemo(
-    () => LOCKED_TEAM_NAMES.filter((n) => n !== "Team" && n !== "NOC Seniors").filter((n) => ROLE_BY_NAME[n] !== "manager"),
+    () => PERSON_TEAM_NAMES.filter((n) => ROLE_BY_NAME[n] !== "manager"),
     [],
   );
 

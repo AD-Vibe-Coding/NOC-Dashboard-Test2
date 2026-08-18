@@ -719,3 +719,20 @@ export const noc_mttr_reports = pgTable("noc_mttr_reports", {
   row_count: integer("row_count").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+// =============================================================================
+// Manager Feedback — manager-view store for peer feedback tied to ticket work
+// =============================================================================
+
+export const manager_feedback = pgTable("manager_feedback", {
+  id: serial("id").primaryKey(),
+  feedback_from: text("feedback_from").notNull(),
+  feedback_for: text("feedback_for").notNull(),
+  ticket_number: text("ticket_number"),
+  comment: text("comment").notNull(),
+  submitted_by: text("submitted_by").notNull(),
+  approval_status: text("approval_status").notNull(), // pending | approved
+  approved_by: text("approved_by"),
+  approved_at: text("approved_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});

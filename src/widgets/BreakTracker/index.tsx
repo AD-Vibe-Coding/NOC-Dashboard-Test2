@@ -41,7 +41,7 @@ import {
   formatTime,
 } from "../../lib/format";
 import { WidgetFrame } from "../WidgetFrame";
-import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 import { useBreakData } from "./data";
 
 export { BreakTrackerTile } from "./Tile";
@@ -397,7 +397,7 @@ export function BreakTrackerWidget() {
                   <Text size="xs" fw={500} c="dimmed" mb={4}>Posting as</Text>
                   {viewerIsManager ? (
                     <Select
-                      data={LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
+                      data={PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
                       value={selectedName ?? identity?.name ?? null}
                       onChange={(v) => setSelectedName(v)}
                       searchable

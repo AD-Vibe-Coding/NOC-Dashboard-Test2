@@ -715,6 +715,7 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "ticket-rebalancer",   emoji: "🔀", label: "Ticket Rebalancer", desc: "Balance team ticket load",     color: "grape" },
       { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
+      { id: "team-feedback",       emoji: "🗣️", label: "Team Feedback",    desc: "Store peer feedback on ticket work", color: "violet" },
       { id: "enhancement-tracker", emoji: "💡", label: "Enhancement Tracker", desc: "Ideas, approvals, and status", color: "yellow" },
       { id: "work-allotment-generator", emoji: "📋", label: "Work Allotment Generator", desc: "Generate NOC shift assignments", color: "indigo" },
     ],

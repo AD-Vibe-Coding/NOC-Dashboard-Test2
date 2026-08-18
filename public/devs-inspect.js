@@ -145,7 +145,7 @@
     }
   })();
 
-  var INSPECT_SCRIPT_VERSION = '2026-07-09.deck-rich-editor-v23';
+  var INSPECT_SCRIPT_VERSION = '2026-08-14.preview-location-v5';
   var inspectEnabled = false;
   var deckEditEnabled = false;
   var deckEditingEl = null;
@@ -658,6 +658,32 @@
     return { top: r.top, left: r.left, width: r.width, height: r.height };
   }
 
+  // The preview iframe is cross-origin from AppBuilder, so the parent
+  // cannot read location. Report path+search+hash so the address bar
+  // can stay in sync with in-app (History API) navigation.
+  var lastReportedPath = null;
+  var suppressNavReportUntil = 0;
+  function currentLocationPath() {
+    return window.location.pathname + window.location.search + window.location.hash;
+  }
+  function reportLocation() {
+    try {
+      if (window.parent === window) return;
+      var path = currentLocationPath();
+      lastReportedPath = path;
+      window.parent.postMessage({
+        type: 'devs:location',
+        path: path
+      }, '*');
+    } catch (_) { /* ignore */ }
+  }
+  function reportLocationIfChanged() {
+    try {
+      if (currentLocationPath() === lastReportedPath) return;
+      reportLocation();
+    } catch (_) { /* ignore */ }
+  }
+
   function getSnippet(el) {
     var clone = el.cloneNode(true);
     // Truncate deep children
@@ -973,6 +999,58 @@
       }
     }, '*');
     captureElement(el, selectionToken);
+  }
+
+  function onPreviewNavClick(e) {
+    if (deckEditEnabled || inspectEnabled) return;
+    if (Date.now() < suppressNavReportUntil) {
+      setTimeout(reportLocationIfChanged, 0);
+      return;
+    }
+    var el = e.target;
+    if (el && el.nodeType === 3) el = el.parentElement;
+    if (!el || typeof el.closest !== 'function') return;
+    if (el.closest('input,textarea,select,option,[contenteditable="true"]')) return;
+    if (isInsideInlineMarker(el)) return;
+
+    var href = null;
+    var labels = [];
+    var seen = {};
+    var node = el;
+    for (var depth = 0; depth < 8 && node && node !== document.body && node !== document.documentElement; depth++) {
+      if (!href && node.getAttribute) {
+        var h = node.getAttribute('href') || node.getAttribute('data-href');
+        if (h) href = h;
+      }
+      if (node.getAttribute) {
+        var aria = node.getAttribute('aria-label') || node.getAttribute('title');
+        if (aria) {
+          aria = String(aria).replace(/s+/g, ' ').trim();
+          if (aria && aria.length <= 48 && !seen[aria.toLowerCase()]) {
+            seen[aria.toLowerCase()] = true;
+            labels.push(aria);
+          }
+        }
+      }
+      var text = (node.textContent || '').replace(/s+/g, ' ').trim();
+      if (text && text.length > 0 && text.length <= 48 && !seen[text.toLowerCase()]) {
+        seen[text.toLowerCase()] = true;
+        labels.push(text);
+      }
+      node = node.parentElement;
+    }
+    if (!href && labels.length === 0) return;
+    try {
+      window.parent.postMessage({
+        type: 'devs:preview-click',
+        href: href,
+        label: labels[0] || '',
+        labels: labels
+      }, '*');
+    } catch (_) { /* ignore */ }
+    setTimeout(reportLocationIfChanged, 0);
+    setTimeout(reportLocationIfChanged, 50);
+    setTimeout(reportLocationIfChanged, 250);
   }
 
   // -------------------------------------------------------------
@@ -2803,6 +2881,12 @@
       }, { capture: true, passive: false });
     } else if (e.data.type === 'devs:ping') {
       window.parent.postMessage({ type: 'devs:pong', version: INSPECT_SCRIPT_VERSION }, '*');
+    } else if (e.data.type === 'devs:get-location') {
+      reportLocation();
+    } else if (e.data.type === 'devs:browse-back') {
+      history.back();
+    } else if (e.data.type === 'devs:browse-forward') {
+      history.forward();
     } else if (e.data.type === 'devs:set-inline-markers') {
       // Parent → iframe: replace the in-document marker set. Specs
       // are { threadId, selector, kind: 'open'|'resolved', initials,
@@ -2887,11 +2971,14 @@
         });
       })();
     } else if (e.data.type === 'devs:browse-navigate') {
-      // Agent-driven navigation of the LIVE preview. Prefer the History API so
-      // SPA routers react without a full reload (which would tear down this
-      // script and orphan the pending promise). Reply after a short settle.
+      // Agent-driven and path-bar navigation of the LIVE preview. Prefer the
+      // History API so SPA routers react without a full reload (which would
+      // tear down this script and orphan the pending promise). Reply after a
+      // short settle. Do NOT click in-page controls here — fuzzy name matching
+      // was clicking the wrong element and breaking the preview.
       var navId = e.data.commandId;
       var path = typeof e.data.path === 'string' ? e.data.path : '/';
+      suppressNavReportUntil = Date.now() + 800;
       try {
         var navUrl = new URL(path, window.location.href);
         if (navUrl.origin === window.location.origin) {
@@ -3068,6 +3155,7 @@
   document.addEventListener('mouseover', onHover, true);
   document.addEventListener('mouseout', onHoverOut, true);
   document.addEventListener('click', onClick, true);
+  document.addEventListener('click', onPreviewNavClick, true);
   document.addEventListener('click', onDeckClick, true);
   document.addEventListener('dblclick', onDeckDblClick, true);
   document.addEventListener('keydown', onDeckKeyDown, true);
@@ -3207,4 +3295,37 @@
       return response;
     });
   };
+
+  // Keep the parent's address bar current across SPA navigations.
+  // Only wrap instance methods bound to history. Assigning onto
+  // History.prototype breaks some routers with an Illegal invocation.
+  if (window.__devsLocationHooked !== INSPECT_SCRIPT_VERSION) {
+    window.__devsLocationHooked = INSPECT_SCRIPT_VERSION;
+    var _origPushState = history.pushState.bind(history);
+    var _origReplaceState = history.replaceState.bind(history);
+    history.pushState = function() {
+      var ret = _origPushState.apply(history, arguments);
+      reportLocationIfChanged();
+      return ret;
+    };
+    history.replaceState = function() {
+      var ret = _origReplaceState.apply(history, arguments);
+      reportLocationIfChanged();
+      return ret;
+    };
+    window.addEventListener('popstate', reportLocationIfChanged);
+    window.addEventListener('hashchange', reportLocationIfChanged);
+    try {
+      if (window.navigation && typeof window.navigation.addEventListener === 'function') {
+        window.navigation.addEventListener('navigate', function() {
+          setTimeout(reportLocationIfChanged, 0);
+        });
+      }
+    } catch (_) {}
+    if (window.__devsLocationPoll) {
+      try { clearInterval(window.__devsLocationPoll); } catch (_) {}
+    }
+    window.__devsLocationPoll = setInterval(reportLocationIfChanged, 400);
+  }
+  reportLocation();
 })();

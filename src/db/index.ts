@@ -139,6 +139,7 @@ type MeetingReminderJobRow = typeof schema.meeting_reminder_jobs.$inferSelect;
 type NotificationTargetRow = typeof schema.notification_targets.$inferSelect;
 type ReminderPolicyRow = typeof schema.reminder_policies.$inferSelect;
 type NocMttrReportRow = typeof schema.noc_mttr_reports.$inferSelect;
+type ManagerFeedbackRow = typeof schema.manager_feedback.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
@@ -178,4 +179,5 @@ export const db = {
   notification_targets: tableClient<NotificationTargetRow>("notification_targets"),
   reminder_policies: tableClient<ReminderPolicyRow>("reminder_policies"),
   noc_mttr_reports: tableClient<NocMttrReportRow>("noc_mttr_reports"),
+  manager_feedback: tableClient<ManagerFeedbackRow>("manager_feedback"),
 };

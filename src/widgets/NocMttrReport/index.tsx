@@ -505,6 +505,99 @@ function parseSavedWorkbook(value: string): ParsedWorkbook | null {
   }
 }
 
+function normalizeTicketKeyValue(value: unknown) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+function dedupeMergedSheetRows(rows: Record<string, unknown>[], headers: string[]) {
+  const ticketIdHeader = headers.find((header) => normalizeHeaderValue(header)?.toLowerCase() === "trouble_id") ?? null;
+  if (!ticketIdHeader) return rows;
+
+  const seenTicketIds = new Set<string>();
+  const dedupedRows: Record<string, unknown>[] = [];
+
+  for (const row of rows) {
+    const ticketId = normalizeTicketKeyValue(row[ticketIdHeader]);
+    if (!ticketId) {
+      dedupedRows.push(row);
+      continue;
+    }
+    if (seenTicketIds.has(ticketId)) continue;
+    seenTicketIds.add(ticketId);
+    dedupedRows.push(row);
+  }
+
+  return dedupedRows;
+}
+
+function mergeSheetRowsByHeaders(
+  baseRows: Record<string, unknown>[],
+  baseHeaders: string[],
+  incomingRows: Record<string, unknown>[],
+  incomingHeaders: string[],
+  mergedHeaders: string[],
+) {
+  const remapRows = (rows: Record<string, unknown>[], sourceHeaders: string[]) => rows.map((row) => {
+    const nextRow: Record<string, unknown> = {};
+    mergedHeaders.forEach((header) => {
+      nextRow[header] = sourceHeaders.includes(header) ? (row[header] ?? null) : null;
+    });
+    return nextRow;
+  });
+
+  return dedupeMergedSheetRows([...remapRows(baseRows, baseHeaders), ...remapRows(incomingRows, incomingHeaders)], mergedHeaders);
+}
+
+function mergeParsedWorkbooks(existing: ParsedWorkbook | null, incoming: ParsedWorkbook): ParsedWorkbook {
+  if (!existing) return incoming;
+
+  const sheetMap = new Map<string, ParsedWorkbook["sheets"][number]>();
+  existing.sheets.forEach((sheet) => {
+    sheetMap.set(normalizeSheetName(sheet.name), { ...sheet, headers: [...sheet.headers], rows: [...sheet.rows] });
+  });
+
+  incoming.sheets.forEach((sheet) => {
+    const key = normalizeSheetName(sheet.name);
+    const current = sheetMap.get(key);
+    if (!current) {
+      sheetMap.set(key, { ...sheet, headers: [...sheet.headers], rows: [...sheet.rows] });
+      return;
+    }
+
+    const mergedHeaders = Array.from(new Set([...current.headers, ...sheet.headers]));
+    const mergedRows = mergeSheetRowsByHeaders(current.rows, current.headers, sheet.rows, sheet.headers, mergedHeaders);
+
+    sheetMap.set(key, {
+      ...current,
+      name: current.name || sheet.name,
+      headers: mergedHeaders,
+      rows: mergedRows,
+      totalRows: mergedRows.length,
+      truncated: current.truncated || sheet.truncated,
+      detectedCustomerColumn: current.detectedCustomerColumn ?? sheet.detectedCustomerColumn ?? detectHeader(mergedHeaders, CUSTOMER_COLUMN_PATTERNS),
+      detectedMonthColumn: current.detectedMonthColumn ?? sheet.detectedMonthColumn ?? detectHeader(mergedHeaders, MONTH_COLUMN_PATTERNS),
+      detectedMttrColumn: current.detectedMttrColumn ?? sheet.detectedMttrColumn ?? detectHeader(mergedHeaders, MTTR_COLUMN_PATTERNS),
+    });
+  });
+
+  const mergedSheets = [
+    ...existing.sheets.map((sheet) => sheetMap.get(normalizeSheetName(sheet.name)) ?? sheet),
+    ...incoming.sheets
+      .filter((sheet) => !existing.sheets.some((existingSheet) => normalizeSheetName(existingSheet.name) === normalizeSheetName(sheet.name)))
+      .map((sheet) => sheetMap.get(normalizeSheetName(sheet.name)) ?? sheet),
+  ];
+
+  const notices = [existing.truncationNotice, incoming.truncationNotice].filter((value): value is string => Boolean(value));
+
+  return {
+    fileName: `${existing.fileName} + ${incoming.fileName}`,
+    fileSizeBytes: (existing.fileSizeBytes ?? 0) + (incoming.fileSizeBytes ?? 0),
+    truncated: existing.truncated || incoming.truncated,
+    truncationNotice: notices.length > 0 ? Array.from(new Set(notices)).join(" ") : null,
+    sheets: mergedSheets,
+  };
+}
+
 function buildRows(parsed: ParsedWorkbook | null, sheetName: string | null, customerColumn: string | null, monthColumn: string | null, mttrColumn: string | null): MttrRow[] {
   if (!parsed || !sheetName || !customerColumn || !monthColumn || !mttrColumn) return [];
   const sheet = parsed.sheets.find((entry) => entry.name === sheetName);
@@ -1168,6 +1261,19 @@ function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets
     {
       label: "Under 15 Minutes",
       values: Object.fromEntries(periodKeys.map((periodKey) => [periodLabelMap.get(periodKey) ?? periodKey, String(under15ByPeriod.get(periodKey) ?? 0)])),
+    },
+    {
+      label: "% Under 15 Minutes",
+      values: Object.fromEntries(periodKeys.map((periodKey) => {
+        const under15 = under15ByPeriod.get(periodKey) ?? 0;
+        const total = under15
+          + (bucket15to25ByPeriod.get(periodKey) ?? 0)
+          + (bucket25to35ByPeriod.get(periodKey) ?? 0)
+          + (bucket35to60ByPeriod.get(periodKey) ?? 0)
+          + (bucket60PlusByPeriod.get(periodKey) ?? 0);
+        const percent = total > 0 ? Math.round((under15 / total) * 100) : 0;
+        return [periodLabelMap.get(periodKey) ?? periodKey, `${percent}%`];
+      })),
     },
     {
       label: "15 - 25 Minutes",
@@ -3750,15 +3856,17 @@ export function NocMttrReportWidget() {
 
     setLoading(true);
     try {
-      const nextParsed = await parseWorkbook(nextFile);
-      const preferredTrendSheet = findPreferredSheet(nextParsed, PREFERRED_TREND_SHEET_NAME) ?? nextParsed.sheets[0] ?? null;
+      const uploadedParsed = await parseWorkbook(nextFile);
+      const mergedParsed = mergeParsedWorkbooks(parsed, uploadedParsed);
+      const preferredTrendSheet = findPreferredSheet(mergedParsed, PREFERRED_TREND_SHEET_NAME) ?? mergedParsed.sheets[0] ?? null;
       const nextSheetName = preferredTrendSheet?.name ?? null;
       const nextCustomerColumn = getLockedTrendCustomerColumn(preferredTrendSheet, preferredTrendSheet?.detectedCustomerColumn ?? preferredTrendSheet?.headers[0] ?? null);
       const nextMonthColumn = preferredTrendSheet?.detectedMonthColumn ?? preferredTrendSheet?.headers[1] ?? null;
       const nextMttrColumn = preferredTrendSheet?.detectedMttrColumn ?? preferredTrendSheet?.headers[2] ?? null;
-      const nextRows = buildRows(nextParsed, nextSheetName, nextCustomerColumn, nextMonthColumn, nextMttrColumn);
+      const nextRows = buildRows(mergedParsed, nextSheetName, nextCustomerColumn, nextMonthColumn, nextMttrColumn);
+      const isAppendingToExisting = Boolean(parsed);
 
-      setParsed(nextParsed);
+      setParsed(mergedParsed);
       setActiveReportId(null);
       setSheetName(nextSheetName);
       setCustomerColumn(nextCustomerColumn);
@@ -3766,30 +3874,35 @@ export function NocMttrReportWidget() {
       setMttrColumn(nextMttrColumn);
 
       if (!preferredTrendSheet || preferredTrendSheet.rows.length === 0) setError("The uploaded MTTR workbook did not contain any readable rows.");
-      if (nextParsed.truncationNotice) setSaveNotice(nextParsed.truncationNotice);
+      if (mergedParsed.truncationNotice) setSaveNotice(mergedParsed.truncationNotice);
 
       setSavingReport(true);
       const inserted = await db.noc_mttr_reports.insert({
-        file_name: nextFile.name,
-        file_size_bytes: nextFile.size,
+        file_name: isAppendingToExisting ? `${mergedParsed.fileName}` : nextFile.name,
+        file_size_bytes: mergedParsed.fileSizeBytes ?? nextFile.size,
         uploaded_by: identity?.name ?? "Unknown",
         selected_sheet_name: nextSheetName,
         selected_customer_column: nextCustomerColumn,
         selected_month_column: nextMonthColumn,
         selected_mttr_column: nextMttrColumn,
-        parsed_json: JSON.stringify(nextParsed),
+        parsed_json: JSON.stringify(mergedParsed),
         row_count: nextRows.length,
       });
 
       const saved = inserted[0] ?? null;
       if (saved) {
         setActiveReportId(saved.id);
-        setSaveNotice(nextParsed.truncationNotice ? `Saved MTTR report ${nextFile.name} to the database. ${nextParsed.truncationNotice}` : `Saved MTTR report ${nextFile.name} to the database.`);
+        setSaveNotice(
+          mergedParsed.truncationNotice
+            ? `${isAppendingToExisting ? `Added ${nextFile.name} to the existing MTTR dataset` : `Saved MTTR report ${nextFile.name} to the database`}. ${mergedParsed.truncationNotice}`
+            : isAppendingToExisting
+              ? `Added ${nextFile.name} to the existing MTTR dataset.`
+              : `Saved MTTR report ${nextFile.name} to the database.`,
+        );
         await loadSavedReports(saved.id);
         setActiveTab("trends");
       }
     } catch (err) {
-      setParsed(null);
       setError(err instanceof Error ? err.message : "Failed to read MTTR workbook.");
     } finally {
       setSavingReport(false);

@@ -49,7 +49,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
       { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-checklist", "qs-escalations"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
   focus: {
@@ -69,7 +69,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "break-tracker", "performance-tracker", "noc-mttr-report"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "mobility-troubleshooter", "smart-search", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: true, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
   learning: {
@@ -79,7 +79,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "my-work", hidden: false, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "my-day", "break-tracker"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor", "building-apps-agents"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
   "command-center": {
@@ -89,7 +89,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["shift-checklist", "escalation-email", "qs-escalations", "email-polisher"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "noc-troubleshooter", "mobility-troubleshooter", "ticket-summary", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["training-updates", "wfh"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
   velocity: {
@@ -129,7 +129,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "communication", hidden: false, itemIds: ["email-polisher", "shift-checklist", "escalation-email", "qs-escalations"] },
       { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "mobility-troubleshooter", "noc-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "queue-monitoring", hidden: true, itemIds: ["zoom-queue", "logic-monitor", "building-apps-agents"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
   "escalation-desk": {
@@ -139,7 +139,7 @@ const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
       { key: "my-work", hidden: false, itemIds: ["my-day", "meeting-notes", "performance-tracker", "noc-mttr-report", "break-tracker"] },
       { key: "ai-tools", hidden: false, itemIds: ["noc-troubleshooter", "smart-search", "ticket-summary", "mobility-troubleshooter", "timezone-helper", "kb-gap-finder"] },
       { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
     ],
   },
 };
@@ -198,7 +198,8 @@ const REQUIRED_WIDGETS: Array<{ id: string; section: DashboardSectionKey; afterI
   { id: "meeting-notes", section: "my-work", afterId: "my-day" },
   { id: "noc-mttr-report", section: "my-work", afterId: "performance-tracker" },
   { id: "timezone-helper", section: "ai-tools" },
-  { id: "celebrations-tracker", section: "team", afterId: "kudos-board" },
+  { id: "team-feedback", section: "team", afterId: "kudos-board" },
+  { id: "celebrations-tracker", section: "team", afterId: "team-feedback" },
   { id: "enhancement-tracker", section: "team", afterId: "celebrations-tracker" },
   { id: "building-apps-agents", section: "queue-monitoring", afterId: "logic-monitor" },
   { id: "work-allotment-generator", section: "team", afterId: "enhancement-tracker" },

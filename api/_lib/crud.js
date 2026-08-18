@@ -37,6 +37,7 @@ const ALLOWED_TABLES = new Set([
   "performance_discussions",
   "kudos",
   "celebrations",
+  "manager_feedback",
   "metric_disputes",
   "noc_mttr_reports",
 ]);

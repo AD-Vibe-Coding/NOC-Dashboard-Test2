@@ -41,7 +41,7 @@ import { WidgetFrame } from "../WidgetFrame";
 import { useZoomQueue } from "./data";
 import { useBreakData } from "../BreakTracker/data";
 import { useRosterShift, type ShiftWindow } from "../../lib/use-roster-shift";
-import { LOCKED_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../PerformanceTracker/team";
+import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../PerformanceTracker/team";
 import { useIdentity } from "../../lib/identity";
 import { db } from "../../db";
 import { postSlackMessage } from "../../lib/slack";
@@ -736,7 +736,7 @@ export function ZoomQueueWidget() {
   });
 
   // Group labels added to LOCKED_TEAM_NAMES for dropdowns — exclude from queue view
-  const GROUP_LABELS = new Set(["Team", "NOC Seniors"]);
+  const GROUP_LABELS = new Set(["Team", "NOC Seniors", "Automation", "Automation - Failed"]);
 
   // Synthetic entries: roster members who are in shift but not in Zoom data at all
   // (e.g. not logged in to the Zoom Phone client)
@@ -1378,7 +1378,7 @@ export function ZoomQueueWidget() {
                 {isManager ? (
                   <Select
                     label="Person"
-                    data={LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
+                    data={PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
                     value={selectedName ?? identity?.name ?? null}
                     onChange={setSelectedName}
                     searchable

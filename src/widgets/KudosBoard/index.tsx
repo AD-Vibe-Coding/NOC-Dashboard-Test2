@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import {
-  ActionIcon, Alert, Badge, Button, Card, Group, Modal, Select,
+  ActionIcon, Alert, Badge, Button, Card, Group, Modal, MultiSelect, Select,
   Stack, Text, Textarea, ThemeIcon, Tooltip,
 } from "@mantine/core";
 import {
@@ -10,7 +10,7 @@ import {
 import { db } from "../../db";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
-import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 
 type Kudos = Awaited<ReturnType<typeof db.kudos.list>>[number];
 
@@ -65,7 +65,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   const [modalOpen, setModalOpen] = useState(false);
 
   // Form state
-  const [toName, setToName] = useState<string | null>(null);
+  const [toNames, setToNames] = useState<string[]>([]);
   const [category, setCategory] = useState<string | null>("teamwork");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
@@ -85,7 +85,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   useEffect(() => { void load(); }, []);
 
   async function submit() {
-    if (!toName || !message.trim() || !category) return;
+    if (toNames.length === 0 || !message.trim() || !category) return;
     if (!myName.trim()) {
       setError("Please sign in before posting kudos.");
       return;
@@ -93,16 +93,18 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
     setSaving(true);
     setError(null);
     try {
-      const inserted = await db.kudos.insert({
-        from_name: myName,
-        to_name: toName,
-        message: message.trim(),
-        category,
-        is_pinned: false,
-      });
+      const inserted = await db.kudos.insert(
+        toNames.map((toName) => ({
+          from_name: myName,
+          to_name: toName,
+          message: message.trim(),
+          category,
+          is_pinned: false,
+        })),
+      );
       const savedKudos = Array.isArray(inserted) ? inserted[0] : null;
       setModalOpen(false);
-      setToName(null);
+      setToNames([]);
       setMessage("");
       setCategory("teamwork");
       await load();
@@ -137,7 +139,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const teamOptions = LOCKED_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
+  const teamOptions = PERSON_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
 
   const pinned = kudosList.filter(k => k.is_pinned);
   const unpinned = kudosList.filter(k => !k.is_pinned);
@@ -226,13 +228,14 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
         <Group gap="xs"><IconHeartFilled size={16} color="var(--mantine-color-yellow-4)" /><Text fw={700}>Give Kudos</Text></Group>
       } radius="lg" centered>
         <Stack gap="md">
-          <Select
+          <MultiSelect
             label="Who are you recognising?"
-            placeholder="Select teammate…"
+            placeholder="Select one or more teammates…"
             data={teamOptions}
-            value={toName}
-            onChange={setToName}
+            value={toNames}
+            onChange={setToNames}
             searchable
+            clearable
             required
           />
           <Select
@@ -258,7 +261,7 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
               leftSection={<IconHeart size={14} />}
               onClick={() => void submit()}
               loading={saving}
-              disabled={!toName || !message.trim() || !category}
+              disabled={toNames.length === 0 || !message.trim() || !category}
             >
               Post Kudos
             </Button>

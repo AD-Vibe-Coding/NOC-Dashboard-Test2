@@ -13,7 +13,7 @@ import { db } from "../../db";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
 import { postSlackMessage } from "../../lib/slack";
-import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -612,7 +612,7 @@ export function ShiftChecklistWidget(_props: { onCollapse?: () => void }) {
   const { identity } = useIdentity();
   const myName    = identity?.name ?? "";
   const isManager = identity?.role === "manager";
-  const agents    = LOCKED_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
+  const agents    = PERSON_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
 
   // Form state
   const [shiftName]           = useState(autoDetectShift());

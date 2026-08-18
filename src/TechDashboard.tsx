@@ -146,6 +146,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "Team",
     items: [
       { id: "kudos-board", label: "Kudos Board", icon: IconStar, color: "yellow", description: "Peer recognition & shoutouts" },
+      { id: "team-feedback", label: "Team Feedback", icon: IconClipboardList, color: "violet", description: "Store peer feedback tied to ticket work" },
       { id: "celebrations-tracker", label: "Celebrations Tracker", icon: IconGift, color: "pink", description: "Birthdays, work anniversaries, and marriage anniversaries" },
       { id: "enhancement-tracker", label: "Enhancement Tracker", icon: IconBulb, color: "yellow", description: "Submit and review team improvement ideas" },
       { id: "shift-checklist", label: "Shift Checklist", icon: IconClipboardList, color: "teal", description: "End-of-shift handover checklist" },

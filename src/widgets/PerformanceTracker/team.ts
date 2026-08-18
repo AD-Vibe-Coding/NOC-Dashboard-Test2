@@ -52,9 +52,35 @@ export const LOCKED_TEAM: TeamMember[] = [
   // ---- Group entries ----
   { name: "Team", tier: "tier1", team: "noc" },
   { name: "NOC Seniors", tier: "tier1", team: "noc" },
+  // ---- Automation entries ----
+  { name: "Automation", tier: "tier1", team: "noc" },
+  { name: "Automation - Failed", tier: "tier1", team: "noc" },
 ];
 
 export const LOCKED_TEAM_NAMES: string[] = LOCKED_TEAM.map((m) => m.name);
+
+/**
+ * Names that are "virtual" entries (groups, automation bots, etc.) — not real
+ * individual people. These should only appear in the Performance Tracker
+ * widget (where tickets may be logged under these names) and must be excluded
+ * from every other widget that builds dropdowns / people-pickers / rosters.
+ */
+export const NON_PERSON_NAMES = new Set<string>([
+  "Team",
+  "NOC Seniors",
+  "Automation",
+  "Automation - Failed",
+]);
+
+/**
+ * Subset of LOCKED_TEAM_NAMES that contains only real individuals.
+ * Use this in any widget that shows a people-picker / roster / assignee list
+ * (BreakTracker, ZoomQueue break schedule, MeetingNotes, KudosBoard,
+ * ShiftChecklist, etc.) to avoid showing virtual/group entries.
+ */
+export const PERSON_TEAM_NAMES: string[] = LOCKED_TEAM_NAMES.filter(
+  (n) => !NON_PERSON_NAMES.has(n),
+);
 
 // =============================================================================
 // Canonical name normalization
@@ -235,6 +261,12 @@ const ALIASES: Array<[string, string]> = [
   ["lokesh naik", "Lokesh Naik Banavath"],
   ["banavath", "Lokesh Naik Banavath"],
   ["lokesh naik banavath", "Lokesh Naik Banavath"],
+
+  // ---- Automation entries ----
+  ["automation", "Automation"],
+  ["automation - failed", "Automation - Failed"],
+  ["automation failed", "Automation - Failed"],
+  ["automation-failed", "Automation - Failed"],
 ];
 
 const VARIANT_MAP = new Map<string, string>();

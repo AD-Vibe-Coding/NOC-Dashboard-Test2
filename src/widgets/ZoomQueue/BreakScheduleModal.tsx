@@ -14,7 +14,7 @@ import {
 } from "@mantine/core";
 import { IconAlertCircle, IconCalendarClock, IconClockEdit, IconListDetails } from "@tabler/icons-react";
 import { db } from "../../db";
-import { LOCKED_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 
 export type BreakScheduleRow = Awaited<ReturnType<typeof db.break_schedules.list>>[number];
 
@@ -55,7 +55,7 @@ export function BreakScheduleModal({ opened, onClose, identityName, isManager }:
 
   const canEditName = isManager;
   const effectiveName = canEditName ? selectedName : (identityName ?? null);
-  const peopleOptions = LOCKED_TEAM_NAMES.map((name) => ({ value: name, label: name }));
+  const peopleOptions = PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }));
 
   async function loadRows() {
     setLoading(true);
@@ -169,7 +169,7 @@ export function BreakScheduleModal({ opened, onClose, identityName, isManager }:
     return h * 60 + m;
   }
 
-  const allRows = LOCKED_TEAM_NAMES.map((name) => {
+  const allRows = PERSON_TEAM_NAMES.map((name) => {
     const key = norm(name);
     const fixed = rowMaps.fixed.get(key);
     const today = rowMaps.overrides.get(key);

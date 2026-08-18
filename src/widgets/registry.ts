@@ -85,6 +85,7 @@ import {
 } from "./TimezoneHelper";
 import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
 import { EnhancementsWidget, EnhancementsTile } from "./Enhancements";
+import { TeamFeedbackTile, TeamFeedbackWidget } from "./TeamFeedback";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
 import { AttendanceTrackerWidget, AttendanceTrackerTile } from "./AttendanceTracker";
@@ -435,6 +436,16 @@ export const WIDGETS: WidgetDefinition[] = [
     tileSize: "sm",
     Tile: KudosBoardTile,
     Full: KudosBoardWidget,
+  },
+  {
+    id: "team-feedback",
+    title: "Team Feedback",
+    description: "Submit or review peer feedback tied to ticket work",
+    icon: IconClipboardList,
+    iconColor: "violet",
+    tileSize: "sm",
+    Tile: TeamFeedbackTile,
+    Full: TeamFeedbackWidget,
   },
   {
     id: "enhancement-tracker",
