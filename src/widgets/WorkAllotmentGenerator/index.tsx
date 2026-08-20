@@ -4,22 +4,18 @@ import {
   Badge,
   Button,
   Card,
-  Divider,
   Group,
-  NumberInput,
   ScrollArea,
   Stack,
   Table,
+  Tabs,
   Text,
 } from "@mantine/core";
 import {
-  IconCheck,
-  IconChevronLeft,
-  IconChevronRight,
   IconClipboard,
   IconClipboardList,
-  IconDeviceFloppy,
   IconRefresh,
+  IconScale,
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
 import { WorkAllotmentGeneratorTile } from "./Tile";
@@ -27,15 +23,9 @@ import { useIdentity } from "../../lib/identity";
 import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 import {
   DEFAULT_MEMBER_NAMES,
-  getCurrentMonthKey,
-  getDateKeyForMonthDay,
-  getDaysInMonth,
-  getHoursForEntry,
-  getMonthLabel,
-  getMonthlyTotals,
+  isExcludedFairnessMember,
   loadTrackerStore,
   saveTrackerStore,
-  type FairnessEntry,
   type ScheduledPostRow,
 } from "./tracker";
 
@@ -69,20 +59,54 @@ interface FairnessUpdate {
   dateKey: string;
 }
 
+interface FairnessGroupMember {
+  name: string;
+  workedDays: number;
+  rosterFairnessCount: number;
+  rosterFairnessHours: number;
+  manualHours: number;
+  totalFairnessHours: number;
+  fairnessScore: number;
+  shiftBreakdown: Array<{ code: string; count: number }>;
+}
+
+interface FairnessGroupSummary {
+  key: string;
+  label: string;
+  shiftLabels: string[];
+  shiftCodes: string[];
+  highestCount: number;
+  members: FairnessGroupMember[];
+}
+
+interface CombinedFairnessMember extends FairnessGroupMember {
+  groupKey: string;
+  groupLabel: string;
+  groupShiftLabels: string[];
+}
+
+interface FairnessSummary {
+  monthKey: string;
+  sheetTitle: string;
+  groups: FairnessGroupSummary[];
+  combinedMembers: CombinedFairnessMember[];
+}
+
 interface DayPlanResult {
   status: "ok";
   dateKey: string;
   rosterSheet: string;
   fairnessSheet: string;
   fairnessWarning?: string | null;
+  fairnessSummary?: FairnessSummary;
   shifts: ShiftPlanResult[];
   fairnessUpdates: FairnessUpdate[];
   appliedFairnessUpdates?: FairnessUpdate[];
   tracker?: {
-    fairnessEntries: FairnessEntry[];
     scheduledPosts: ScheduledPostRow[];
     memberNames: string[];
     monthKey: string;
+    rosterMonthSheet?: string;
   };
 }
 
@@ -100,12 +124,6 @@ interface GeneratorResponse {
   result: DayPlanResult;
 }
 
-interface PostResponse {
-  ok: boolean;
-  config: GeneratorResponse["config"];
-  result: DayPlanResult;
-}
-
 function isManagerIdentity(identity: ReturnType<typeof useIdentity>["identity"]) {
   if (!identity) return false;
   if (identity.role === "manager") return true;
@@ -119,40 +137,54 @@ function isManagerIdentity(identity: ReturnType<typeof useIdentity>["identity"])
 
 function formatAvailableMembers(members: Array<{ name: string; shiftCode?: string | null }> = []) {
   return members
-    .map((member) => member.shiftCode ? `${member.name} (${member.shiftCode})` : member.name)
+    .map((member) => (member.shiftCode ? `${member.name} (${member.shiftCode})` : member.name))
     .join(", ");
+}
+
+function formatMonthLabel(monthKey?: string | null) {
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(monthKey)) return "Current month";
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(new Date(year, month - 1, 1));
+}
+
+const FAIRNESS_GROUP_DISPLAY_ORDER: Record<string, number> = {
+  "overnight-early": 0,
+  "day-swing": 1,
+  "late-evening": 2,
+};
+
+function formatShiftBreakdown(shiftLabels: string[], member: FairnessGroupMember) {
+  return shiftLabels
+    .map((label, index) => `${label}: ${member.shiftBreakdown[index]?.count ?? 0}`)
+    .join(" · ");
 }
 
 export function WorkAllotmentGeneratorWidget() {
   const { identity } = useIdentity();
   const isManager = isManagerIdentity(identity);
   const [loading, setLoading] = useState(false);
-  const [applying, setApplying] = useState(false);
   const [copying, setCopying] = useState(false);
-  const [savingTracker, setSavingTracker] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [data, setData] = useState<GeneratorResponse | null>(null);
-  const [monthKey, setMonthKey] = useState(getCurrentMonthKey());
-  const [fairnessEntries, setFairnessEntries] = useState<FairnessEntry[]>([]);
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledPostRow[]>([]);
+  const [activeTab, setActiveTab] = useState<string | null>("allotments");
 
   const memberNames = useMemo(() => {
     const fromApi = data?.config.memberNames ?? [];
-    return Array.from(new Set([...DEFAULT_MEMBER_NAMES, ...fromApi])).sort((a, b) => a.localeCompare(b));
+    return Array.from(new Set([...DEFAULT_MEMBER_NAMES, ...fromApi]))
+      .filter((name) => !isExcludedFairnessMember(name))
+      .sort((a, b) => a.localeCompare(b));
   }, [data?.config.memberNames]);
 
   useEffect(() => {
     const stored = loadTrackerStore();
-    setFairnessEntries(stored.fairnessEntries);
     setScheduledPosts(stored.scheduledPosts);
   }, []);
 
-  function persistTracker(nextEntries: FairnessEntry[], nextPosts: ScheduledPostRow[], nextNotice?: string) {
-    saveTrackerStore({ fairnessEntries: nextEntries, scheduledPosts: nextPosts });
-    setFairnessEntries(nextEntries);
+  function persistScheduledPosts(nextPosts: ScheduledPostRow[]) {
+    saveTrackerStore({ fairnessEntries: [], scheduledPosts: nextPosts });
     setScheduledPosts(nextPosts);
-    if (nextNotice) setNotice(nextNotice);
   }
 
   async function load() {
@@ -164,40 +196,18 @@ export function WorkAllotmentGeneratorWidget() {
       const response = await fetch(`/api/work-allotment/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fairnessEntries, scheduledPosts, memberNames }),
+        body: JSON.stringify({ scheduledPosts, memberNames }),
       });
       const json = await response.json();
       if (!response.ok) throw new Error(json.error ?? "Failed to generate work allotment.");
       setData(json as GeneratorResponse);
+      if ((json as GeneratorResponse).result?.tracker?.scheduledPosts) {
+        persistScheduledPosts((json as GeneratorResponse).result.tracker?.scheduledPosts ?? []);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate work allotment.");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function applyDayPlan() {
-    if (!identity || !isManager) return;
-    setApplying(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch("/api/work-allotment/post", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fairnessEntries, scheduledPosts, memberNames }),
-      });
-      const json = await response.json();
-      if (!response.ok) throw new Error(json.error ?? "Failed to update fairness tracker.");
-      const posted = json as PostResponse;
-      setData(posted as unknown as GeneratorResponse);
-      const nextEntries = posted.result.tracker?.fairnessEntries ?? fairnessEntries;
-      const nextPosts = posted.result.tracker?.scheduledPosts ?? scheduledPosts;
-      persistTracker(nextEntries, nextPosts, `Updated in-widget fairness tracker for ${posted.result.appliedFairnessUpdates?.length ?? 0} member(s).`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update fairness tracker.");
-    } finally {
-      setApplying(false);
     }
   }
 
@@ -219,53 +229,9 @@ export function WorkAllotmentGeneratorWidget() {
     }
   }
 
-  function updateEntry(name: string, day: number, value: string | number) {
-    const dateKey = getDateKeyForMonthDay(monthKey, day);
-    const numeric = Math.max(0, Number(value) || 0);
-    const remaining = fairnessEntries.filter((entry) => !(entry.name === name && entry.dateKey === dateKey));
-    const nextEntries = numeric > 0
-      ? [...remaining, { name, dateKey, hours: numeric }].sort((a, b) => `${a.dateKey}-${a.name}`.localeCompare(`${b.dateKey}-${b.name}`))
-      : remaining;
-    setFairnessEntries(nextEntries);
-  }
-
-  function saveTracker() {
-    setSavingTracker(true);
-    try {
-      persistTracker(fairnessEntries, scheduledPosts, `Saved fairness tracker for ${getMonthLabel(monthKey)}.`);
-    } finally {
-      setSavingTracker(false);
-    }
-  }
-
-  function moveMonth(offset: number) {
-    const [year, month] = monthKey.split("-").map(Number);
-    const next = new Date(year, (month - 1) + offset, 1);
-    setMonthKey(`${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`);
-  }
-
   useEffect(() => {
     void load();
   }, [identity, isManager]);
-
-  const monthDays = getDaysInMonth(monthKey);
-  const monthLabel = getMonthLabel(monthKey);
-  const monthlyTotals = useMemo(() => getMonthlyTotals(fairnessEntries, memberNames, monthKey), [fairnessEntries, memberNames, monthKey]);
-  const highestTotal = Math.max(0, ...Array.from(monthlyTotals.values()));
-  const fairnessScores = useMemo(() => {
-    return new Map(memberNames.map((name) => {
-      const total = monthlyTotals.get(name) ?? 0;
-      const score = highestTotal > 0 ? (total / highestTotal) * 100 : 0;
-      return [name, score];
-    }));
-  }, [memberNames, monthlyTotals, highestTotal]);
-  const trackerRows = useMemo(() => {
-    return memberNames.map((name) => ({
-      name,
-      total: monthlyTotals.get(name) ?? 0,
-      score: fairnessScores.get(name) ?? 0,
-    }));
-  }, [memberNames, monthlyTotals, fairnessScores]);
 
   if (!identity) {
     return (
@@ -278,19 +244,25 @@ export function WorkAllotmentGeneratorWidget() {
   if (!isManager) {
     return (
       <WidgetFrame title="Work Allotment Generator" subtitle="Manager access required" icon={IconClipboardList} iconColor="indigo">
-        <Alert color="red">Only managers can preview or post the NOC work allotment.</Alert>
+        <Alert color="red">Only managers can preview the NOC work allotment and fairness tracker.</Alert>
       </WidgetFrame>
     );
   }
 
   const result = data?.result ?? null;
   const readyShiftCount = result?.shifts?.filter((shift) => shift.status === "ok").length ?? 0;
-  const fairnessUpdateCount = result?.fairnessUpdates?.length ?? 0;
+  const fairnessSummary = result?.fairnessSummary ?? null;
+  const fairnessGroups = fairnessSummary?.groups ?? [];
+  const combinedFairnessMembers = [...(fairnessSummary?.combinedMembers ?? [])].sort((a, b) => {
+    const orderDiff = (FAIRNESS_GROUP_DISPLAY_ORDER[a.groupKey] ?? 999) - (FAIRNESS_GROUP_DISPLAY_ORDER[b.groupKey] ?? 999);
+    if (orderDiff !== 0) return orderDiff;
+    return a.name.localeCompare(b.name);
+  });
 
   return (
     <WidgetFrame
       title="Work Allotment Generator"
-      subtitle={result ? `${readyShiftCount} shifts prepared for ${result.dateKey}` : "Read roster, plan all shifts, and manage fairness hours inside the widget"}
+      subtitle={result ? `${readyShiftCount} shifts prepared for ${result.dateKey}` : "Read roster, plan all shifts, and review monthly fairness by shift group"}
       icon={IconClipboardList}
       iconColor="indigo"
       loading={loading}
@@ -305,21 +277,18 @@ export function WorkAllotmentGeneratorWidget() {
         <Card withBorder radius="md" p="md">
           <Stack gap="md">
             <Group justify="space-between" align="center">
-              <Text fw={700}>Day planner controls</Text>
+              <Text fw={700}>Planner controls</Text>
               <Badge color="indigo" variant="light">{result?.dateKey ?? "Today"}</Badge>
             </Group>
             <Text size="sm" c="dimmed">
-              This reads today’s roster, uses the in-widget fairness tracker totals for the current month, builds each slot from everyone overlapping that time window, and tries to keep the same AS&amp;RH primary across adjacent shifts unless fairness drift gets too large.
+              The daily tab shows only today&apos;s shift allotments. The fairness tab shows monthly fairness calculated directly from roster data, split into the requested shift groups.
             </Text>
             <Group>
               <Button leftSection={<IconRefresh size={16} />} variant="light" color="indigo" onClick={() => void load()} loading={loading}>
-                Prepare day plan
+                Refresh roster plan
               </Button>
               <Button leftSection={<IconClipboard size={16} />} variant="light" color="gray" onClick={() => void copyMessage()} disabled={readyShiftCount === 0} loading={copying}>
                 Copy all shifts
-              </Button>
-              <Button leftSection={<IconCheck size={16} />} color="indigo" onClick={() => void applyDayPlan()} loading={applying} disabled={fairnessUpdateCount === 0}>
-                Apply to fairness tracker
               </Button>
             </Group>
           </Stack>
@@ -331,152 +300,130 @@ export function WorkAllotmentGeneratorWidget() {
               <Text fw={700}>Sources and summary</Text>
               <Badge color="green" variant="light">{readyShiftCount} ready</Badge>
             </Group>
-            <Text size="sm" c="dimmed">Roster sheet: {result?.rosterSheet ?? "—"} · Fairness source: {result?.fairnessSheet ?? "In-widget tracker"}</Text>
-            <Text size="sm" c="dimmed">Pending fairness updates: {fairnessUpdateCount}</Text>
+            <Text size="sm" c="dimmed">Roster sheet: {result?.rosterSheet ?? "—"} · Monthly fairness source: {fairnessSummary?.sheetTitle ?? result?.fairnessSheet ?? "—"}</Text>
+            <Text size="sm" c="dimmed">Fairness month: {formatMonthLabel(fairnessSummary?.monthKey)}</Text>
           </Stack>
         </Card>
 
-        <Card withBorder radius="md" p="md">
-          <Stack gap="md">
-            <Group justify="space-between" align="center">
-              <Stack gap={2}>
-                <Text fw={700}>Fairness hours tracker</Text>
-                <Text size="sm" c="dimmed">Spreadsheet-style monthly tracker built into the widget. Edit daily hours directly here and use Apply to add today’s assignments into the current month.</Text>
+        <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
+          <Tabs.List>
+            <Tabs.Tab value="allotments" leftSection={<IconClipboardList size={16} />}>
+              Shift allotments
+            </Tabs.Tab>
+            <Tabs.Tab value="fairness" leftSection={<IconScale size={16} />}>
+              Fairness tracker
+            </Tabs.Tab>
+          </Tabs.List>
+
+          <Tabs.Panel value="allotments" pt="md">
+            <Card withBorder radius="md" p="md">
+              <Stack gap="md">
+                <Text fw={700}>Shift allotments for the day</Text>
+                {(result?.shifts ?? []).length === 0 ? (
+                  <Text size="sm" c="dimmed">No shifts were generated for today.</Text>
+                ) : (
+                  (result?.shifts ?? []).map((shift) => (
+                    <Card key={shift.slot} withBorder radius="md" p="md">
+                      <Stack gap="sm">
+                        <Group justify="space-between" align="center">
+                          <Group gap={8}>
+                            <Badge color={shift.status === "ok" ? "green" : "gray"} variant="light">{shift.slot}</Badge>
+                            {shift.primary ? <Badge color="indigo" variant="light">Primary: {shift.primary}</Badge> : null}
+                            {shift.backup ? <Badge color="blue" variant="light">Backup: {shift.backup}</Badge> : null}
+                            {shift.continuingFrom ? <Badge color="violet" variant="light">Continuing from {shift.continuingFrom}</Badge> : null}
+                          </Group>
+                          {typeof shift.fairnessAfter === "number" ? (
+                            <Badge color="grape" variant="light">{shift.fairnessBefore} → {shift.fairnessAfter}</Badge>
+                          ) : null}
+                        </Group>
+                        <Text size="xs" c="dimmed">
+                          Available during {shift.slot}: {formatAvailableMembers(shift.availableMembers)}
+                        </Text>
+                        <Text component="pre" size="sm" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
+                          {shift.message}
+                        </Text>
+                      </Stack>
+                    </Card>
+                  ))
+                )}
               </Stack>
-              <Group gap="xs">
-                <Button variant="light" color="gray" size="xs" onClick={() => moveMonth(-1)} leftSection={<IconChevronLeft size={14} />}>
-                  Prev month
-                </Button>
-                <Badge color="grape" variant="light">{monthLabel}</Badge>
-                <Button variant="light" color="gray" size="xs" onClick={() => moveMonth(1)} rightSection={<IconChevronRight size={14} />}>
-                  Next month
-                </Button>
-                <Button variant="light" color="indigo" size="xs" leftSection={<IconDeviceFloppy size={14} />} onClick={saveTracker} loading={savingTracker}>
-                  Save tracker
-                </Button>
-              </Group>
-            </Group>
+            </Card>
+          </Tabs.Panel>
 
-            <Stack gap={4}>
-              <Text fw={700} size="sm">FAIRNESS HOURS TRACKER - {monthLabel.toUpperCase()}</Text>
-              <Text size="xs" c="dimmed">Member rows mirror the sheet-style layout, while totals and fairness scores are calculated automatically below.</Text>
-            </Stack>
-
-            <ScrollArea>
-              <Table withTableBorder withColumnBorders striped highlightOnHover style={{ minWidth: 1100 }}>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th miw={220}>Member Name</Table.Th>
-                    {Array.from({ length: monthDays }, (_, index) => index + 1).map((day) => (
-                      <Table.Th key={day} ta="center" miw={72}>{day}</Table.Th>
-                    ))}
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {memberNames.map((name) => (
-                    <Table.Tr key={name}>
-                      <Table.Td>
-                        <Text size="sm" fw={600}>{name}</Text>
-                      </Table.Td>
-                      {Array.from({ length: monthDays }, (_, index) => index + 1).map((day) => {
-                        const dateKey = getDateKeyForMonthDay(monthKey, day);
-                        const value = getHoursForEntry(fairnessEntries, name, dateKey);
-                        return (
-                          <Table.Td key={`${name}-${day}`} p={4}>
-                            <NumberInput
-                              value={value || ""}
-                              onChange={(next) => updateEntry(name, day, next)}
-                              min={0}
-                              step={1}
-                              hideControls
-                              decimalScale={0}
-                              allowNegative={false}
-                              placeholder="0"
-                              size="xs"
-                              styles={{ input: { textAlign: "center", minWidth: 56 } }}
-                            />
-                          </Table.Td>
-                        );
-                      })}
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </ScrollArea>
-
-            <Divider />
-
+          <Tabs.Panel value="fairness" pt="md">
             <Stack gap="md">
-              <Text fw={700} size="sm">FAIRNESS SCORE CALCULATION</Text>
-              <Table withTableBorder withColumnBorders striped>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Member Name</Table.Th>
-                    <Table.Th ta="right">Total Hours (Z)</Table.Th>
-                    <Table.Th ta="right">Fairness Score (%)</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {trackerRows.map((row) => (
-                    <Table.Tr key={`score-${row.name}`}>
-                      <Table.Td>{row.name}</Table.Td>
-                      <Table.Td ta="right">{row.total}</Table.Td>
-                      <Table.Td ta="right">{row.score.toFixed(2)}</Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Stack>
-          </Stack>
-        </Card>
-
-        <Card withBorder radius="md" p="md">
-          <Stack gap="md">
-            <Text fw={700}>Shift allotments for the day</Text>
-            {(result?.shifts ?? []).map((shift) => (
-              <Card key={shift.slot} withBorder radius="md" p="md">
-                <Stack gap="sm">
-                  <Group justify="space-between" align="center">
-                    <Group gap={8}>
-                      <Badge color={shift.status === "ok" ? "green" : "gray"} variant="light">{shift.slot}</Badge>
-                      {shift.primary ? <Badge color="indigo" variant="light">Primary: {shift.primary}</Badge> : null}
-                      {shift.backup ? <Badge color="blue" variant="light">Backup: {shift.backup}</Badge> : null}
-                      {shift.continuingFrom ? <Badge color="violet" variant="light">Continuing from {shift.continuingFrom}</Badge> : null}
-                    </Group>
-                    {typeof shift.fairnessAfter === "number" ? (
-                      <Badge color="grape" variant="light">{shift.fairnessBefore} → {shift.fairnessAfter}h</Badge>
-                    ) : null}
-                  </Group>
-                  <Text size="xs" c="dimmed">
-                    Available during {shift.slot}: {formatAvailableMembers(shift.availableMembers)}
-                  </Text>
-                  <Text size="xs" c="dimmed">
-                    Tracker hours added for this slot: {shift.fairnessDelta ?? 0}h · AS&amp;RH primary changes only when overlap ends or fairness variance becomes too large.
-                  </Text>
-                  <Text component="pre" size="sm" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
-                    {shift.message}
+              <Card withBorder radius="md" p="md">
+                <Stack gap="xs">
+                  <Text fw={700}>Monthly fairness tracker</Text>
+                  <Text size="sm" c="dimmed">
+                    Fairness is calculated from the roster for {formatMonthLabel(fairnessSummary?.monthKey)} and includes the manual fairness-hour adjustments you provided. Each group below is tracked separately so you can compare the total fairness hours worked in that shift family.
                   </Text>
                 </Stack>
               </Card>
-            ))}
-          </Stack>
-        </Card>
 
-        <Card withBorder radius="md" p="md">
-          <Stack gap="sm">
-            <Text fw={700}>Fairness tracker updates</Text>
-            {(result?.fairnessUpdates?.length ?? 0) === 0 ? (
-              <Text size="sm" c="dimmed">No fairness changes are pending.</Text>
-            ) : (
-              result?.fairnessUpdates.map((update) => (
-                <Group key={`${update.name}-${update.dateKey}`} justify="space-between" align="center">
-                  <Text size="sm">{update.name} · {update.dateKey}</Text>
-                  <Badge color="grape" variant="light">{update.before} → {update.after} ({update.delta > 0 ? `+${update.delta}` : update.delta})</Badge>
-                </Group>
-              ))
-            )}
-          </Stack>
-        </Card>
+              {combinedFairnessMembers.length === 0 ? (
+                <Card withBorder radius="md" p="md">
+                  <Text size="sm" c="dimmed">No monthly roster fairness data was returned.</Text>
+                </Card>
+              ) : (
+                <Card withBorder radius="md" p="md">
+                  <Stack gap="md">
+                    <Group justify="space-between" align="flex-start">
+                      <Stack gap={4}>
+                        <Text fw={700}>Combined fairness table</Text>
+                        <Text size="sm" c="dimmed">Each member appears only once, under the shift family where they worked the most. Fairness score is still calculated within that shift family only.</Text>
+                      </Stack>
+                      <Badge color="grape" variant="light">{fairnessGroups.length} shift families</Badge>
+                    </Group>
+
+                    <ScrollArea>
+                      <Table withTableBorder withColumnBorders striped highlightOnHover style={{ minWidth: 1120 }}>
+                        <Table.Thead>
+                          <Table.Tr>
+                            <Table.Th>Shift group</Table.Th>
+                            <Table.Th>Member</Table.Th>
+                            <Table.Th ta="right">Worked days in this shift</Table.Th>
+                            <Table.Th>Roster availability / AS&RH</Table.Th>
+                            <Table.Th ta="right">Manual fairness hours</Table.Th>
+                            <Table.Th ta="right">Total fairness hours</Table.Th>
+                            <Table.Th ta="right">Fairness score %</Table.Th>
+                            <Table.Th>Shift breakdown</Table.Th>
+                          </Table.Tr>
+                        </Table.Thead>
+                        <Table.Tbody>
+                          {combinedFairnessMembers.map((member) => {
+                            const highestInGroup = fairnessGroups.find((group) => group.key === member.groupKey)?.highestCount ?? 0;
+                            return (
+                              <Table.Tr key={`${member.groupKey}-${member.name}`}>
+                                <Table.Td>
+                                  <Stack gap={2}>
+                                    <Text size="sm" fw={600}>{member.groupLabel}</Text>
+                                    <Text size="xs" c="dimmed">Highest: {highestInGroup}</Text>
+                                  </Stack>
+                                </Table.Td>
+                                <Table.Td>{member.name}</Table.Td>
+                                <Table.Td ta="right">{member.workedDays}</Table.Td>
+                                <Table.Td>
+                                  <Text size="sm">{member.workedDays} days available · {member.rosterFairnessHours} AS&RH hrs</Text>
+                                </Table.Td>
+                                <Table.Td ta="right">{member.manualHours}</Table.Td>
+                                <Table.Td ta="right">{member.totalFairnessHours}</Table.Td>
+                                <Table.Td ta="right">{member.fairnessScore.toFixed(2)}</Table.Td>
+                                <Table.Td>
+                                  <Text size="sm" c="dimmed">{formatShiftBreakdown(member.groupShiftLabels, member)}</Text>
+                                </Table.Td>
+                              </Table.Tr>
+                            );
+                          })}
+                        </Table.Tbody>
+                      </Table>
+                    </ScrollArea>
+                  </Stack>
+                </Card>
+              )}
+            </Stack>
+          </Tabs.Panel>
+        </Tabs>
       </Stack>
     </WidgetFrame>
   );

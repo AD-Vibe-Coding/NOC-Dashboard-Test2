@@ -1,10 +1,6 @@
 import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 
-export interface FairnessEntry {
-  name: string;
-  dateKey: string;
-  hours: number;
-}
+export type FairnessEntry = { name: string; dateKey: string; hours: number };
 
 export interface ScheduledPostRow {
   date: string;
@@ -17,11 +13,24 @@ export interface ScheduledPostRow {
 }
 
 export interface FairnessTrackerStore {
-  fairnessEntries: FairnessEntry[];
+  fairnessEntries: Array<{ name: string; dateKey: string; hours: number }>;
   scheduledPosts: ScheduledPostRow[];
 }
 
 const STORAGE_KEY = "devsai-work-allotment-fairness-tracker-v1";
+
+export const EXCLUDED_FAIRNESS_MEMBERS = new Set([
+  "Akash Hanvate",
+  "Otukho Olembo",
+  "Anirudh Kukudala",
+  "Perry Cox",
+  "Matt Marquez",
+  "Mahalakshmi Samiti",
+]);
+
+export function isExcludedFairnessMember(name: string) {
+  return EXCLUDED_FAIRNESS_MEMBERS.has(String(name ?? "").trim());
+}
 
 export const DEFAULT_MEMBER_NAMES = Array.from(
   new Set([
@@ -29,8 +38,8 @@ export const DEFAULT_MEMBER_NAMES = Array.from(
     ...Object.entries(ROLE_BY_NAME)
       .filter(([, role]) => role !== "manager")
       .map(([name]) => name),
-  ]),
-);
+  ])
+).filter((name) => !EXCLUDED_FAIRNESS_MEMBERS.has(name));
 
 export function getCurrentMonthKey(date = new Date()) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
@@ -60,7 +69,14 @@ export function sanitizeTrackerStore(input: Partial<FairnessTrackerStore> | null
           dateKey: String(entry?.dateKey ?? "").trim(),
           hours: Number(entry?.hours ?? 0),
         }))
-        .filter((entry) => entry.name && /^\d{4}-\d{2}-\d{2}$/.test(entry.dateKey) && Number.isFinite(entry.hours) && entry.hours >= 0)
+        .filter(
+          (entry) =>
+            entry.name &&
+            !EXCLUDED_FAIRNESS_MEMBERS.has(entry.name) &&
+            /^\d{4}-\d{2}-\d{2}$/.test(entry.dateKey) &&
+            Number.isFinite(entry.hours) &&
+            entry.hours >= 0,
+        )
     : [];
 
   const scheduledPosts = Array.isArray(input?.scheduledPosts)
@@ -74,7 +90,13 @@ export function sanitizeTrackerStore(input: Partial<FairnessTrackerStore> | null
           status: String(row?.status ?? "").trim() || "planned",
           lastChecked: String(row?.lastChecked ?? "").trim(),
         }))
-        .filter((row) => row.date && row.shift)
+        .filter(
+          (row) =>
+            row.date &&
+            row.shift &&
+            !EXCLUDED_FAIRNESS_MEMBERS.has(row.primary) &&
+            !EXCLUDED_FAIRNESS_MEMBERS.has(row.backup),
+        )
     : [];
 
   return { fairnessEntries, scheduledPosts };

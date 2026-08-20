@@ -2024,14 +2024,19 @@ function buildTimeToCarrierPercentageDataset(section: WorkbookTrendSection | nul
     let over15Count = 0;
 
     for (const row of section.rows) {
+      const normalizedLabel = row.label.trim().toLowerCase();
       const rawValue = parseMetricNumber(row.values[monthLabel]);
       const value = rawValue != null ? Math.max(Math.round(rawValue), 0) : 0;
       if (value <= 0) continue;
 
-      const normalizedLabel = row.label.trim().toLowerCase();
       if (normalizedLabel === "under 15 minutes") {
         under15Count += value;
-      } else {
+      } else if (
+        normalizedLabel === "15 - 25 minutes"
+        || normalizedLabel === "25 - 35 minutes"
+        || normalizedLabel === "35 - 60 minutes"
+        || normalizedLabel === "60+ minutes"
+      ) {
         over15Count += value;
       }
     }

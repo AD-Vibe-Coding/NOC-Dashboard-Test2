@@ -40,23 +40,44 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     if (req.method === "PATCH") {
-      if (role !== "manager") {
-        return send(res, 403, { error: "Manager access required." });
-      }
-
       const body = req.body ?? {};
       const patch: Record<string, unknown> = {};
 
-      if (body.approval_status === "approved") {
-        patch.approval_status = "approved";
-        patch.approved_by = sessionName;
-        patch.approved_at = new Date().toISOString();
-      }
+      if (body.mark_as_read === true) {
+        if (role === "manager") {
+          return send(res, 403, { error: "Only recipients can mark feedback as read." });
+        }
 
-      if (typeof body.comment === "string") patch.comment = body.comment.trim();
-      if (typeof body.ticket_number === "string") patch.ticket_number = body.ticket_number.trim() || null;
-      if (typeof body.feedback_from === "string") patch.feedback_from = body.feedback_from.trim();
-      if (typeof body.feedback_for === "string") patch.feedback_for = body.feedback_for.trim();
+        const { data: existing, error: existingError } = await supabaseAdmin
+          .from("manager_feedback")
+          .select("id, feedback_for, approval_status")
+          .eq("id", id)
+          .eq("feedback_for", sessionName)
+          .eq("approval_status", "approved")
+          .single();
+
+        if (existingError || !existing) {
+          return send(res, 404, { error: "Feedback not found." });
+        }
+
+        patch.recipient_read_at = new Date().toISOString();
+      } else {
+        if (role !== "manager") {
+          return send(res, 403, { error: "Manager access required." });
+        }
+
+        if (body.approval_status === "approved") {
+          patch.approval_status = "approved";
+          patch.approved_by = sessionName;
+          patch.approved_at = new Date().toISOString();
+          patch.recipient_read_at = null;
+        }
+
+        if (typeof body.comment === "string") patch.comment = body.comment.trim();
+        if (typeof body.ticket_number === "string") patch.ticket_number = body.ticket_number.trim() || null;
+        if (typeof body.feedback_from === "string") patch.feedback_from = body.feedback_from.trim();
+        if (typeof body.feedback_for === "string") patch.feedback_for = body.feedback_for.trim();
+      }
 
       if (Object.keys(patch).length === 0) {
         return send(res, 400, { error: "No supported fields to update." });

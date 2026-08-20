@@ -730,9 +730,15 @@ export const manager_feedback = pgTable("manager_feedback", {
   feedback_for: text("feedback_for").notNull(),
   ticket_number: text("ticket_number"),
   comment: text("comment").notNull(),
+  recipient_comment: text("recipient_comment"),
+  recipient_comment_by: text("recipient_comment_by"),
+  recipient_comment_at: text("recipient_comment_at"),
+  recipient_acknowledged_at: text("recipient_acknowledged_at"),
+  recipient_acknowledged_by: text("recipient_acknowledged_by"),
   submitted_by: text("submitted_by").notNull(),
-  approval_status: text("approval_status").notNull(), // pending | approved
+  approval_status: text("approval_status").notNull().default("pending"), // pending | approved
   approved_by: text("approved_by"),
   approved_at: text("approved_at"),
+  recipient_read_at: text("recipient_read_at"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });

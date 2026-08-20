@@ -16,11 +16,12 @@ export function WorkAllotmentGeneratorTile({ onExpand }: { onExpand: () => void 
     >
       <Stack gap="xs">
         <Group gap={6} wrap="wrap">
-          <Badge color="indigo" variant="light">Roster + widget tracker</Badge>
+          <Badge color="indigo" variant="light">Roster-based</Badge>
+          <Badge color="grape" variant="light">Fairness tab</Badge>
           <Badge color="teal" variant="light">Slack-ready</Badge>
         </Group>
         <Text size="xs" c="dimmed">
-          Uses the live Google roster plus an embedded fairness-hours tracker stored inside the widget.
+          Uses the live Google roster to generate today’s allotments and a separate monthly fairness view by shift group.
         </Text>
         <Button
           size="xs"

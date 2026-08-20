@@ -25,9 +25,30 @@ const SPREADSHEET_ID = "14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4";
  */
 function currentMonthTabName(): string {
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
-  const month = now.toLocaleString("en-US", { month: "short" }); // "Jun"
-  const year2 = String(now.getFullYear()).slice(2);               // "26"
-  return `${month}'${year2}`;                                     // "Jun'26"
+  const month = now.toLocaleString("en-US", { month: "short" });
+  const year2 = String(now.getFullYear()).slice(2);
+  return `${month}'${year2}`;
+}
+
+function monthTabNameFromMonthKey(monthKey = ""): string {
+  const match = monthKey.match(/^(\d{4})-(\d{2})$/);
+  if (!match) return currentMonthTabName();
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!year || !month) return currentMonthTabName();
+  const date = new Date(year, month - 1, 1);
+  const shortMonth = date.toLocaleString("en-US", { month: "short" });
+  const year2 = String(year).slice(2);
+  return `${shortMonth}'${year2}`;
+}
+
+function monthKeyFromIsoDate(isoDate = "") {
+  const match = isoDate.match(/^(\d{4})-(\d{2})-\d{2}$/);
+  if (!match) {
+    const now = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles" }));
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  }
+  return `${match[1]}-${match[2]}`;
 }
 
 const PUBLISHED_CSV_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTtUVf4cK8WTdKH47k61nmsDWmPq2Gxdw4J_j9WHxGoDEXqthtTdQ2zbKYJXa0zY8Q9blbaGm4lZH2c/pub?output=csv&single=true";
@@ -383,6 +404,29 @@ export interface DailyRosterEntry {
   shift?: { start: number; end: number };
 }
 
+export interface MonthlyRosterAssignment {
+  dateKey: string;
+  cell: string;
+  status: DailyRosterEntry["status"];
+  available: boolean;
+  shift?: { start: number; end: number };
+}
+
+export interface MonthlyRosterMember {
+  name: string;
+  assignments: MonthlyRosterAssignment[];
+}
+
+export interface MonthlyRosterResult {
+  sheetTitle: string;
+  strategy: string;
+  fetchedAt: string;
+  rowCount: number;
+  monthKey: string;
+  members: MonthlyRosterMember[];
+  error?: string;
+}
+
 export interface ShiftResult {
   inShiftNow:    string[];
   allNames:      string[];
@@ -462,10 +506,8 @@ function looksLikeDateHeader(h: string): boolean {
   return false;
 }
 
-function buildDailyEntries(rows: string[][], day: ReturnType<typeof dayMetaPST>): DailyRosterEntry[] {
-  if (rows.length === 0) return [];
-
-  const headers = rows[0].map((h) => (h ?? "").trim());
+function getRosterTableContext(rows: string[][]) {
+  const headers = rows[0]?.map((h) => (h ?? "").trim()) ?? [];
   const secondRow = rows[1]?.map((h) => (h ?? "").trim()) ?? [];
   const combinedHeaders = headers.map((header, idx) => {
     const top = header.trim();
@@ -480,8 +522,64 @@ function buildDailyEntries(rows: string[][], day: ReturnType<typeof dayMetaPST>)
     const idx = headers.findIndex((h) => /^(name|agent|employee|tech|engineer)/i.test(h));
     return idx >= 0 ? idx : 0;
   })();
-
   const rosterRows = dataRows.filter((r) => isRealRosterName((r[nameColIdx] ?? "").trim()));
+
+  return { headers, secondRow, combinedHeaders, hasPublishedCalendarHeader, dataRows, nameColIdx, rosterRows };
+}
+
+function parseHeaderToIsoDate(header: string, fallbackMonthKey: string): string | null {
+  const value = header.trim().toLowerCase();
+  if (!value) return null;
+
+  const [fallbackYear, fallbackMonth] = fallbackMonthKey.split("-").map(Number);
+  const monthMap: Record<string, number> = {
+    jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+    jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+  };
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+
+  let match = value.match(/^(\d{1,2})-([a-z]{3})$/);
+  if (match) {
+    const day = Number(match[1]);
+    const month = monthMap[match[2]];
+    if (fallbackYear && month && day) {
+      return `${fallbackYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+
+  match = value.match(/^([a-z]{3})\s+(\d{1,2})$/);
+  if (match) {
+    const month = monthMap[match[1]];
+    const day = Number(match[2]);
+    if (fallbackYear && month && day) {
+      return `${fallbackYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+
+  match = value.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/);
+  if (match) {
+    const month = Number(match[1]);
+    const day = Number(match[2]);
+    const explicitYear = match[3]
+      ? Number(match[3].length === 2 ? `20${match[3]}` : match[3])
+      : fallbackYear;
+    if (explicitYear && month && day) {
+      return `${explicitYear}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
+
+  if (/^\d{1,2}$/.test(value) && fallbackYear && fallbackMonth) {
+    return `${fallbackYear}-${String(fallbackMonth).padStart(2, "0")}-${String(Number(value)).padStart(2, "0")}`;
+  }
+
+  return null;
+}
+
+function buildDailyEntries(rows: string[][], day: ReturnType<typeof dayMetaPST>): DailyRosterEntry[] {
+  if (rows.length === 0) return [];
+
+  const { headers, combinedHeaders, hasPublishedCalendarHeader, nameColIdx, rosterRows } = getRosterTableContext(rows);
   const dateColIdx = hasPublishedCalendarHeader
     ? Math.max(findDateColumnIndex(headers, day), findDateColumnIndex(combinedHeaders, day))
     : findDateColumnIndex(headers, day);
@@ -502,6 +600,36 @@ function buildDailyEntries(rows: string[][], day: ReturnType<typeof dayMetaPST>)
       shift,
     };
   });
+}
+
+function buildMonthlyEntries(rows: string[][], targetMonthKey: string): MonthlyRosterMember[] {
+  if (rows.length === 0) return [];
+
+  const { headers, combinedHeaders, nameColIdx, rosterRows } = getRosterTableContext(rows);
+  const dateColumns = headers.map((header, idx) => {
+    if (idx === nameColIdx) return null;
+    const dateKey = parseHeaderToIsoDate(combinedHeaders[idx] || header, targetMonthKey) ?? parseHeaderToIsoDate(header, targetMonthKey);
+    if (!dateKey || !dateKey.startsWith(`${targetMonthKey}-`)) return null;
+    return { idx, dateKey };
+  }).filter((value): value is { idx: number; dateKey: string } => Boolean(value));
+
+  return rosterRows.map((row) => {
+    const name = (row[nameColIdx] ?? "").trim();
+    const assignments = dateColumns.map(({ idx, dateKey }) => {
+      const cell = (row[idx] ?? "").trim();
+      const parsedShift = parseShiftCell(cell);
+      const shift = parsedShift && parsedShift !== "OFF" ? parsedShift : undefined;
+      const status = classifyDailyCell(cell);
+      return {
+        dateKey,
+        cell,
+        status,
+        available: status === "Available",
+        shift,
+      };
+    });
+    return { name, assignments };
+  }).filter((row) => row.name);
 }
 
 function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "fetchedAt"> {
@@ -691,6 +819,7 @@ function detectShift(rows: string[][], sheetTitle: string): Omit<ShiftResult, "f
 // ── Response cache (5 min, month-aware) ──────────────────────────────────────
 
 let _cache: { data: ShiftResult; at: number; month: string; targetDate: string } | null = null;
+let _monthCache: { data: MonthlyRosterResult; at: number; month: string } | null = null;
 const CACHE_TTL = 5 * 60_000;
 
 // ── Shared reader + handler ──────────────────────────────────────────────────
@@ -702,7 +831,7 @@ const CACHE_TTL = 5 * 60_000;
  */
 export async function readRosterDailyEntries(requestedDate = ""): Promise<ShiftResult> {
   const targetDay = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? dayMetaFromIso(requestedDate) : todayPST();
-  const tabName = currentMonthTabName();
+  const tabName = monthTabNameFromMonthKey(monthKeyFromIsoDate(targetDay.isoDate));
 
   if (_cache && _cache.month === tabName && _cache.targetDate === targetDay.isoDate && Date.now() - _cache.at < CACHE_TTL) {
     return _cache.data;
@@ -737,6 +866,52 @@ export async function readRosterDailyEntries(requestedDate = ""): Promise<ShiftR
       fetchedAt: new Date().toISOString(),
     };
     _cache = { data, at: Date.now(), month: tabName, targetDate: targetDay.isoDate };
+    return data;
+  }
+
+  throw new Error("Roster reader is not configured. Set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY, or ROSTER_PUBLISHED_CSV_URL.");
+}
+
+export async function readRosterMonthEntries(requestedMonthKey = ""): Promise<MonthlyRosterResult> {
+  const targetMonthKey = /^\d{4}-\d{2}$/.test(requestedMonthKey)
+    ? requestedMonthKey
+    : monthKeyFromIsoDate(todayPST().isoDate);
+  const tabName = monthTabNameFromMonthKey(targetMonthKey);
+
+  if (_monthCache && _monthCache.month === targetMonthKey && Date.now() - _monthCache.at < CACHE_TTL) {
+    return _monthCache.data;
+  }
+
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL?.trim();
+  const privateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.trim();
+  const csvUrl = process.env.ROSTER_PUBLISHED_CSV_URL?.trim();
+
+  if (email && privateKey) {
+    const token = await getAccessToken();
+    const rows = await fetchRows(token, tabName);
+    const data: MonthlyRosterResult = {
+      sheetTitle: tabName,
+      strategy: "month-sheet-api",
+      fetchedAt: new Date().toISOString(),
+      rowCount: rows.length,
+      monthKey: targetMonthKey,
+      members: buildMonthlyEntries(rows, targetMonthKey),
+    };
+    _monthCache = { data, at: Date.now(), month: targetMonthKey };
+    return data;
+  }
+
+  if (csvUrl) {
+    const { rows, sheetTitle } = await fetchPublishedCsvRows(csvUrl);
+    const data: MonthlyRosterResult = {
+      sheetTitle,
+      strategy: "month-sheet-published-csv",
+      fetchedAt: new Date().toISOString(),
+      rowCount: rows.length,
+      monthKey: targetMonthKey,
+      members: buildMonthlyEntries(rows, targetMonthKey),
+    };
+    _monthCache = { data, at: Date.now(), month: targetMonthKey };
     return data;
   }
 
