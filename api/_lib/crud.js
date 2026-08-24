@@ -29,6 +29,7 @@ const ALLOWED_TABLES = new Set([
   "ticket_summaries",
   "escalation_drafts",
   "shift_handovers",
+  "work_allotment_jobs",
   "polished_emails",
   "performance_imports",
   "performance_metrics",

@@ -25,6 +25,7 @@ import {
 } from "@tabler/icons-react";
 import { api } from "../../lib/api";
 import { useIdentity } from "../../lib/identity";
+import { effectiveRoleForIdentity, ROSTER_BY_EMAIL } from "../../lib/roles";
 import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 import { WidgetFrame } from "../WidgetFrame";
 
@@ -71,6 +72,18 @@ function getErrorMessage(error: unknown) {
   if (error instanceof Error && error.message) return error.message;
   if (typeof error === "string") return error;
   return "Something went wrong";
+}
+
+function normalizePersonName(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function getCanonicalRosterName(identity: { name?: string | null; email?: string | null } | null | undefined) {
+  const email = String(identity?.email ?? "").trim().toLowerCase();
+  return ROSTER_BY_EMAIL[email]?.name ?? String(identity?.name ?? "").trim();
 }
 
 function FeedbackCard({
@@ -149,10 +162,10 @@ function FeedbackCard({
 
 export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
   const { identity } = useIdentity();
-  const role = String(identity?.role ?? "").toLowerCase();
-  const isManager = role === "manager";
-  const submittedBy = identity?.name?.trim() || "Unknown";
-  const currentName = identity?.name?.trim() || "";
+  const effectiveRole = effectiveRoleForIdentity(identity);
+  const isManager = effectiveRole === "manager";
+  const canonicalRecipientName = getCanonicalRosterName(identity);
+  const submittedBy = identity?.name?.trim() || canonicalRecipientName || "Unknown";
 
   const [rows, setRows] = useState<FeedbackRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -180,9 +193,13 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
   const safeVisibleRows = isManager
     ? rows
     : rows.filter(
-        (row) => row.approval_status === "approved" && row.feedback_for?.trim() === currentName,
+        (row) =>
+          row.approval_status === "approved"
+          && normalizePersonName(row.feedback_for) === normalizePersonName(canonicalRecipientName),
       );
-  const unreadVisibleRows = safeVisibleRows.filter((row) => !row.recipient_read_at);
+  const unreadVisibleRows = safeVisibleRows.filter(
+    (row) => !row.recipient_read_at && !row.recipient_acknowledged_at,
+  );
 
   const pendingRows = rows.filter((row) => row.approval_status !== "approved");
   const approvedRows = rows.filter((row) => row.approval_status === "approved");
@@ -724,9 +741,9 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
 
 export function TeamFeedbackTile({ onExpand }: { onExpand: () => void }) {
   const { identity } = useIdentity();
-  const role = String(identity?.role ?? "").toLowerCase();
-  const isManager = role === "manager";
-  const currentName = identity?.name?.trim() || "";
+  const effectiveRole = effectiveRoleForIdentity(identity);
+  const isManager = effectiveRole === "manager";
+  const canonicalRecipientName = getCanonicalRosterName(identity);
   const [count, setCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -740,14 +757,15 @@ export function TeamFeedbackTile({ onExpand }: { onExpand: () => void }) {
             rows.filter(
               (row) =>
                 row.approval_status === "approved"
-                && row.feedback_for?.trim() === currentName
-                && !row.recipient_read_at,
+                && normalizePersonName(row.feedback_for) === normalizePersonName(canonicalRecipientName)
+                && !row.recipient_read_at
+                && !row.recipient_acknowledged_at,
             ).length,
           );
         }
       })
       .catch(() => setCount(0));
-  }, [currentName, isManager]);
+  }, [canonicalRecipientName, isManager]);
 
   return (
     <Card withBorder radius="lg" p="md" style={{ cursor: "pointer", height: "100%" }} onClick={onExpand}>

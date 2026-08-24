@@ -5,16 +5,27 @@ export const WORK_ALLOTMENT_CONFIG = {
   rosterSpreadsheetId: "14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4",
   rosterSpreadsheetUrl: "https://docs.google.com/spreadsheets/d/14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4/edit?gid=1728888175#gid=1728888175",
   rosterTabGid: "1728888175",
-  fairnessTrackerMode: "embedded-widget",
-  fairnessTrackerName: "In-app fairness tracker",
-  slackChannelId: "C0AT7KXCA3W",
-  slackChannelName: "test-ani",
+  fairnessSpreadsheetId: "1nxL4kM6Q7YG44j2_wjdiEK511KMgIphCdLVvm7Nnji4",
+  fairnessSpreadsheetUrl: "https://docs.google.com/spreadsheets/d/1nxL4kM6Q7YG44j2_wjdiEK511KMgIphCdLVvm7Nnji4/edit?gid=1765807502#gid=1765807502",
+  fairnessTabGid: "1765807502",
+  fairnessTabName: "Fairness Tracker - Aug'26",
+  fairnessTrackerMode: "google-sheet",
+  fairnessTrackerName: "Fairness Tracker - Aug'26",
+  slackChannelId: process.env.SLACK_CHANNEL_ID || "C09Q89PHN8M",
+  slackChannelName: process.env.SLACK_CHANNEL_NAME || "noc-team",
   timeZone: "America/Los_Angeles",
 };
 
-const MANAGERS = new Set();
+const MANAGERS = new Set([
+  "Anirudh Kukudala",
+  "Perry Cox",
+  "Matt Marquez",
+]);
 
-const RESTRICTED_ASRH = new Set();
+const RESTRICTED_ASRH = new Set([
+  "Akash Hanvate",
+  "Otukho Olembo",
+]);
 
 const OFF_STATUSES = new Set([
   "WO",
@@ -48,14 +59,14 @@ export const ALL_MEMBERS = [
 ];
 
 export const SHIFT_DEFINITIONS = {
-  S1: { label: "Shift 1", rosterCode: "S1", postHour: 3, postMinute: 25, start: "3:00 AM", end: "12:00 PM", next: "S2" },
-  S2: { label: "Shift 2", rosterCode: "S2", postHour: 6, postMinute: 25, start: "6:00 AM", end: "3:00 PM", next: "S3" },
-  S3: { label: "Shift 3", rosterCode: "S3", postHour: 8, postMinute: 25, start: "8:00 AM", end: "5:00 PM", next: "S4" },
-  S4: { label: "Shift 4", rosterCode: "S4", postHour: 11, postMinute: 25, start: "11:00 AM", end: "8:00 PM", next: "S5" },
-  "S4.1": { label: "Shift 4.1", rosterCode: "S4.1", postHour: 14, postMinute: 25, start: "2:25 PM", end: "8:00 PM", next: "S4.2" },
-  "S4.2": { label: "Shift 4.2", rosterCode: "S4.2", postHour: 16, postMinute: 25, start: "4:25 PM", end: "8:00 PM", next: "S5" },
-  S5: { label: "Shift 5", rosterCode: "S5", postHour: 19, postMinute: 25, start: "7:00 PM", end: "4:00 AM", next: "S6" },
-  S6: { label: "Shift 6", rosterCode: "S6", postHour: 23, postMinute: 55, start: "11:30 PM", end: "8:30 AM", next: "S1" },
+  S1: { label: "Shift 1", rosterCode: "S1", postHour: 3, postMinute: 25, handoffHour: 3, handoffMinute: 45, start: "3:00 AM", end: "12:00 PM", next: "S2" },
+  S2: { label: "Shift 2", rosterCode: "S2", postHour: 6, postMinute: 25, handoffHour: 6, handoffMinute: 45, start: "6:00 AM", end: "3:00 PM", next: "S3" },
+  S3: { label: "Shift 3", rosterCode: "S3", postHour: 8, postMinute: 25, handoffHour: 8, handoffMinute: 45, start: "8:00 AM", end: "5:00 PM", next: "S4" },
+  S4: { label: "Shift 4", rosterCode: "S4", postHour: 11, postMinute: 25, handoffHour: 11, handoffMinute: 45, start: "11:00 AM", end: "8:00 PM", next: "S5" },
+  "S4.1": { label: "Shift 4.1", rosterCode: "S4.1", postHour: 14, postMinute: 25, handoffHour: 14, handoffMinute: 45, start: "2:25 PM", end: "8:00 PM", next: "S4.2" },
+  "S4.2": { label: "Shift 4.2", rosterCode: "S4.2", postHour: 16, postMinute: 25, handoffHour: 16, handoffMinute: 45, start: "4:25 PM", end: "8:00 PM", next: "S5" },
+  S5: { label: "Shift 5", rosterCode: "S5", postHour: 19, postMinute: 25, handoffHour: 19, handoffMinute: 45, start: "7:00 PM", end: "4:00 AM", next: "S6" },
+  S6: { label: "Shift 6", rosterCode: "S6", postHour: 0, postMinute: 25, handoffHour: 0, handoffMinute: 45, start: "11:30 PM", end: "8:30 AM", next: "S1" },
 };
 
 const SHIFT_MATCHERS = [
@@ -88,69 +99,114 @@ export const FAIRNESS_SHIFT_GROUPS = [
   },
 ];
 
-const MANUAL_FAIRNESS_HOURS = [
-  { name: "Mohammed Ashraf", dateKey: "2026-08-01", hours: 8 },
-  { name: "Mohammed Ashraf", dateKey: "2026-08-04", hours: 8 },
-  { name: "Mohammed Ashraf", dateKey: "2026-08-09", hours: 8 },
-  { name: "Mohammed Ashraf", dateKey: "2026-08-11", hours: 8 },
-  { name: "Mohammed Ashraf", dateKey: "2026-08-15", hours: 8 },
-  { name: "Karthik Damagalla", dateKey: "2026-08-03", hours: 8 },
-  { name: "Karthik Damagalla", dateKey: "2026-08-07", hours: 5 },
-  { name: "Karthik Damagalla", dateKey: "2026-08-08", hours: 8 },
-  { name: "Mohammed Zubairuddin", dateKey: "2026-08-06", hours: 8 },
-  { name: "Mohammed Zubairuddin", dateKey: "2026-08-10", hours: 8 },
-  { name: "Mohammed Zubairuddin", dateKey: "2026-08-12", hours: 8 },
-  { name: "Mohammed Zubairuddin", dateKey: "2026-08-13", hours: 8 },
-  { name: "Mohammed Zubairuddin", dateKey: "2026-08-17", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-01", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-05", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-08", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-09", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-14", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-15", hours: 8 },
-  { name: "Hamza Rahmani", dateKey: "2026-08-16", hours: 8 },
-  { name: "Karthik Radhakrishnan", dateKey: "2026-08-04", hours: 8 },
-  { name: "Karthik Radhakrishnan", dateKey: "2026-08-05", hours: 3 },
-  { name: "Karthik Radhakrishnan", dateKey: "2026-08-06", hours: 5 },
-  { name: "Karthik Radhakrishnan", dateKey: "2026-08-07", hours: 3 },
-  { name: "Karthik Radhakrishnan", dateKey: "2026-08-17", hours: 5 },
-  { name: "Pranav Dandibhotla", dateKey: "2026-08-02", hours: 8 },
-  { name: "Pranav Dandibhotla", dateKey: "2026-08-03", hours: 8 },
-  { name: "Pranav Dandibhotla", dateKey: "2026-08-11", hours: 8 },
-  { name: "Pranav Dandibhotla", dateKey: "2026-08-13", hours: 5 },
-  { name: "Lokesh Naik Banavath", dateKey: "2026-08-02", hours: 8 },
-  { name: "Lokesh Naik Banavath", dateKey: "2026-08-07", hours: 8 },
-  { name: "Lokesh Naik Banavath", dateKey: "2026-08-10", hours: 5 },
-  { name: "Lokesh Naik Banavath", dateKey: "2026-08-12", hours: 5 },
-  { name: "Lokesh Naik Banavath", dateKey: "2026-08-14", hours: 8 },
-  { name: "Akram Ahmed", dateKey: "2026-08-01", hours: 8 },
-  { name: "Akram Ahmed", dateKey: "2026-08-03", hours: 5 },
-  { name: "Akram Ahmed", dateKey: "2026-08-04", hours: 8 },
-  { name: "Akram Ahmed", dateKey: "2026-08-05", hours: 5 },
-  { name: "Akram Ahmed", dateKey: "2026-08-06", hours: 8 },
-  { name: "Akram Ahmed", dateKey: "2026-08-09", hours: 6 },
-  { name: "Akram Ahmed", dateKey: "2026-08-12", hours: 8 },
-  { name: "Akram Ahmed", dateKey: "2026-08-17", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-02", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-03", hours: 3 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-05", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-07", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-10", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-11", hours: 5 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-13", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-14", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-15", hours: 8 },
-  { name: "Abhishek Benarji", dateKey: "2026-08-16", hours: 8 },
-  { name: "Sriram Parisa", dateKey: "2026-08-06", hours: 6 },
-  { name: "Sriram Parisa", dateKey: "2026-08-08", hours: 8 },
-  { name: "Sriram Parisa", dateKey: "2026-08-09", hours: 2 },
-  { name: "Sriram Parisa", dateKey: "2026-08-10", hours: 3 },
-  { name: "Sriram Parisa", dateKey: "2026-08-11", hours: 3 },
-  { name: "Sriram Parisa", dateKey: "2026-08-12", hours: 3 },
-  { name: "Sriram Parisa", dateKey: "2026-08-13", hours: 3 },
-  { name: "Sriram Parisa", dateKey: "2026-08-16", hours: 8 },
-  { name: "Sriram Parisa", dateKey: "2026-08-17", hours: 3 },
-];
+function buildFairnessCsvUrl() {
+  return `https://docs.google.com/spreadsheets/d/${WORK_ALLOTMENT_CONFIG.fairnessSpreadsheetId}/export?format=csv&gid=${WORK_ALLOTMENT_CONFIG.fairnessTabGid}`;
+}
+
+function parseCsvLine(line) {
+  const cells = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (char === "," && !inQuotes) {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  cells.push(current.trim());
+  return cells;
+}
+
+function parseFairnessHeaderToDateKey(header, targetMonthKey) {
+  const value = normalizeCell(header);
+  const match = value.match(/^([A-Za-z]{3,})\s+(\d{1,2})$/);
+  if (!match) return null;
+  const monthMap = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+  const month = monthMap[match[1].slice(0, 3).toLowerCase()];
+  const day = String(Number(match[2])).padStart(2, "0");
+  const year = String(targetMonthKey || "").slice(0, 4);
+  if (!year || !month) return null;
+  return `${year}-${month}-${day}`;
+}
+
+async function readFairnessTrackerEntries(targetMonthKey) {
+  const response = await fetch(buildFairnessCsvUrl());
+  if (!response.ok) {
+    throw new Error(`Fairness tracker CSV error: ${response.status}`);
+  }
+
+  const csv = await response.text();
+  const rows = csv
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map(parseCsvLine);
+
+  const headerRow = rows[1] ?? [];
+  const dateColumns = headerRow
+    .map((header, index) => ({ index, dateKey: parseFairnessHeaderToDateKey(header, targetMonthKey) }))
+    .filter((entry) => entry.index > 0 && entry.dateKey);
+
+  const entries = [];
+  for (const row of rows.slice(2)) {
+    const name = normalizeName(row[0]);
+    if (!name || EXCLUDED_FAIRNESS_MEMBERS.has(name)) continue;
+
+    for (const { index, dateKey } of dateColumns) {
+      const hours = Number(String(row[index] ?? "").trim());
+      if (!Number.isFinite(hours) || hours <= 0) continue;
+      entries.push({ name, dateKey, hours });
+    }
+  }
+
+  const totalsByName = new Map();
+  const totalsHeaderIndex = rows.findIndex((row) => {
+    const first = normalizeCell(row[0]).toUpperCase();
+    const second = normalizeCell(row[1]).toUpperCase();
+    return first === "MEMBER NAME" && second.includes("TOTAL HOURS");
+  });
+
+  if (totalsHeaderIndex >= 0) {
+    for (const row of rows.slice(totalsHeaderIndex + 1)) {
+      const name = normalizeName(row[0]);
+      const hoursCell = normalizeCell(row[1]);
+      if (!name) continue;
+      if (name.toUpperCase() === "FAIRNESS SCORE CALCULATION") continue;
+      if (!hoursCell) break;
+      const hours = Number(hoursCell);
+      if (EXCLUDED_FAIRNESS_MEMBERS.has(name) || !Number.isFinite(hours) || hours < 0) continue;
+      totalsByName.set(name, hours);
+    }
+  }
+
+  return {
+    sheetTitle: WORK_ALLOTMENT_CONFIG.fairnessTabName,
+    spreadsheetUrl: WORK_ALLOTMENT_CONFIG.fairnessSpreadsheetUrl,
+    entries,
+    totalsByName,
+  };
+}
 
 function formatInZone(date, opts) {
   return new Intl.DateTimeFormat("en-US", { timeZone: WORK_ALLOTMENT_CONFIG.timeZone, ...opts }).format(date);
@@ -220,10 +276,16 @@ function shiftCodeFromWindow(shift) {
   const start = Number(shift.start);
   const end = Number(shift.end);
   const windows = {
-    S1: [180, 720], S2: [360, 900], S3: [480, 1020],
-    S4: [660, 1200], S5: [1140, 240], S6: [1410, 510],
+    S1: [[180, 720]],
+    S2: [[360, 900]],
+    S3: [[480, 1020]],
+    S4: [[660, 1200]],
+    S5: [[1140, 240]],
+    S6: [[1410, 510], [0, 540]],
   };
-  return Object.entries(windows).find(([, values]) => values[0] === start && values[1] === end)?.[0] ?? null;
+  return Object.entries(windows).find(([, ranges]) =>
+    ranges.some((values) => values[0] === start && values[1] === end)
+  )?.[0] ?? null;
 }
 
 /** Uses the same roster endpoint reader as Team Availability and Ticket Rebalancer. */
@@ -241,8 +303,9 @@ export async function readRosterForDate(date) {
       offReason,
       isManager: MANAGERS.has(name),
       asrhRestricted: RESTRICTED_ASRH.has(name),
+      shiftWindow: entry.shift ?? null,
     };
-  }).filter((member) => member.name && !EXCLUDED_FAIRNESS_MEMBERS.has(member.name));
+  }).filter((member) => member.name);
 
   if (members.length === 0) {
     throw new Error(sharedRoster.error || "The shared roster reader returned no roster members.");
@@ -272,6 +335,32 @@ function sanitizeFairnessEntries(entries = []) {
     .filter((entry) => entry.name && /^\d{4}-\d{2}-\d{2}$/.test(entry.dateKey) && Number.isFinite(entry.hours) && entry.hours >= 0);
 }
 
+function buildFairnessHoursByGroup(monthRoster, fairnessEntries = [], targetDateKey = null) {
+  const byGroup = new Map();
+
+  for (const entry of sanitizeFairnessEntries(fairnessEntries)) {
+    const name = normalizeName(entry?.name);
+    const dateKey = normalizeCell(entry?.dateKey);
+    const hours = Number(entry?.hours ?? 0);
+    if (targetDateKey && dateKey > targetDateKey) continue;
+
+    const member = (monthRoster?.members ?? []).find((item) => normalizeName(item?.name) === name);
+    const assignment = member?.assignments?.find((item) => normalizeCell(item?.dateKey) === dateKey);
+    if (!assignment?.available) continue;
+
+    const shiftCode = shiftCodeFromWindow(assignment.shift) ?? parseShiftCode(assignment.cell);
+    const groupKey = getFairnessGroupForShiftCode(shiftCode)?.key ?? null;
+    if (!groupKey || !Number.isFinite(hours) || hours <= 0 || EXCLUDED_FAIRNESS_MEMBERS.has(name)) continue;
+
+    if (!byGroup.has(groupKey)) byGroup.set(groupKey, new Map());
+    const groupMap = byGroup.get(groupKey);
+    if (!groupMap.has(name)) groupMap.set(name, []);
+    groupMap.get(name).push({ dateKey, hours });
+  }
+
+  return byGroup;
+}
+
 function sanitizeScheduledPosts(rows = []) {
   return (Array.isArray(rows) ? rows : [])
     .map((row, index) => ({
@@ -285,42 +374,6 @@ function sanitizeScheduledPosts(rows = []) {
       lastChecked: normalizeCell(row?.lastChecked),
     }))
     .filter((row) => row.date && row.shift);
-}
-
-function getManualEntryGroupKey(entry, monthRoster) {
-  const name = normalizeName(entry?.name);
-  const dateKey = normalizeCell(entry?.dateKey);
-  if (!name || !dateKey) return null;
-
-  const member = (monthRoster?.members ?? []).find((item) => normalizeName(item?.name) === name);
-  const assignment = member?.assignments?.find((item) => normalizeCell(item?.dateKey) === dateKey);
-  if (assignment?.available) {
-    const shiftCode = shiftCodeFromWindow(assignment.shift) ?? parseShiftCode(assignment.cell);
-    const group = getFairnessGroupForShiftCode(shiftCode);
-    if (group?.key) return group.key;
-  }
-
-  return null;
-}
-
-function getManualFairnessHoursByGroup(monthRoster) {
-  const byGroup = new Map();
-
-  for (const entry of MANUAL_FAIRNESS_HOURS) {
-    const name = normalizeName(entry?.name);
-    const dateKey = normalizeCell(entry?.dateKey);
-    const hours = Number(entry?.hours ?? 0);
-    const groupKey = getManualEntryGroupKey(entry, monthRoster);
-    if (!name || !dateKey || !groupKey || !Number.isFinite(hours) || hours <= 0 || EXCLUDED_FAIRNESS_MEMBERS.has(name)) {
-      continue;
-    }
-    if (!byGroup.has(groupKey)) byGroup.set(groupKey, new Map());
-    const groupMap = byGroup.get(groupKey);
-    if (!groupMap.has(name)) groupMap.set(name, []);
-    groupMap.get(name).push({ dateKey, hours });
-  }
-
-  return byGroup;
 }
 
 function getFairnessGroupForShiftCode(shiftCode) {
@@ -337,16 +390,17 @@ function getDominantFairnessGroup(groupRows = []) {
   return [...groupRows]
     .sort((a, b) => {
       if (b.workedDays !== a.workedDays) return b.workedDays - a.workedDays;
-      if (b.manualHours !== a.manualHours) return b.manualHours - a.manualHours;
+      if (b.trackerHours !== a.trackerHours) return b.trackerHours - a.trackerHours;
       if (b.rosterFairnessHours !== a.rosterFairnessHours) return b.rosterFairnessHours - a.rosterFairnessHours;
       return (FAIRNESS_GROUP_TIMING_ORDER.get(a.key) ?? 999) - (FAIRNESS_GROUP_TIMING_ORDER.get(b.key) ?? 999);
     })[0] ?? null;
 }
 
-function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
-  const manualHoursByGroup = getManualFairnessHoursByGroup(monthRoster);
-  const manualNames = MANUAL_FAIRNESS_HOURS.map((entry) => entry.name);
-  const allNames = dedupeMembers([...ALL_MEMBERS, ...memberNames, ...manualNames, ...(monthRoster?.members ?? []).map((member) => member.name)]);
+function buildRosterFairnessSummary({ monthRoster, memberNames = [], targetDateKey = null, fairnessEntries = [], fairnessTotalsByName = new Map(), fairnessSheetTitle = "Fairness tracker" }) {
+  const fairnessHoursByGroup = buildFairnessHoursByGroup(monthRoster, fairnessEntries, targetDateKey);
+  const fairnessNames = sanitizeFairnessEntries(fairnessEntries).map((entry) => entry.name);
+  const fairnessTotalNames = Array.from(fairnessTotalsByName.keys());
+  const allNames = dedupeMembers([...ALL_MEMBERS, ...memberNames, ...fairnessNames, ...fairnessTotalNames, ...(monthRoster?.members ?? []).map((member) => member.name)]);
 
   const rows = allNames.map((name) => ({
     name,
@@ -369,6 +423,8 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
 
     for (const assignment of member.assignments ?? []) {
       if (!assignment?.available) continue;
+      const assignmentDateKey = normalizeCell(assignment?.dateKey);
+      if (targetDateKey && assignmentDateKey && assignmentDateKey > targetDateKey) continue;
       const shiftCode = shiftCodeFromWindow(assignment.shift) ?? parseShiftCode(assignment.cell);
       if (!shiftCode) continue;
       row.totalWorkedDays += 1;
@@ -384,13 +440,15 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
 
   const memberGroupRows = Array.from(byName.values()).flatMap((row) => (
     FAIRNESS_SHIFT_GROUPS.map((group) => {
-      const manualMembers = manualHoursByGroup.get(group.key) ?? new Map();
+      const trackedMembers = fairnessHoursByGroup.get(group.key) ?? new Map();
       const shiftBreakdown = group.shiftCodes.map((code) => ({ code, count: Number(row.shifts[code] ?? 0) }));
       const workedDays = shiftBreakdown.reduce((sum, shift) => sum + Number(shift.count ?? 0), 0);
       const rosterFairnessCount = Number(row.groups[group.key] ?? 0);
       const rosterFairnessHours = rosterFairnessCount * 8;
-      const manualHours = (manualMembers.get(row.name) ?? []).reduce((sum, entry) => sum + Number(entry.hours ?? 0), 0);
-      const totalFairnessHours = manualHours;
+      const trackerHours = fairnessTotalsByName.has(row.name)
+        ? Number(fairnessTotalsByName.get(row.name) ?? 0)
+        : 0;
+      const fairnessUnits = workedDays + trackerHours;
       return {
         key: group.key,
         label: group.label,
@@ -400,8 +458,8 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
         workedDays,
         rosterFairnessCount,
         rosterFairnessHours,
-        manualHours,
-        totalFairnessHours,
+        trackerHours,
+        fairnessUnits,
         shiftBreakdown,
       };
     })
@@ -409,7 +467,7 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
 
   const dominantGroupByMember = new Map();
   for (const name of allNames) {
-    const candidateGroups = memberGroupRows.filter((row) => row.name === name && (row.workedDays > 0 || row.manualHours > 0));
+    const candidateGroups = memberGroupRows.filter((row) => row.name === name && (row.workedDays > 0 || row.trackerHours > 0));
     const dominant = getDominantFairnessGroup(candidateGroups);
     if (dominant) dominantGroupByMember.set(name, dominant.key);
   }
@@ -417,26 +475,26 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
   const groupSummaries = FAIRNESS_SHIFT_GROUPS.map((group) => {
     const memberRows = memberGroupRows
       .filter((row) => row.key === group.key && dominantGroupByMember.get(row.name) === group.key)
-      .sort((a, b) => a.totalFairnessHours - b.totalFairnessHours || a.name.localeCompare(b.name));
+      .sort((a, b) => a.fairnessUnits - b.fairnessUnits || a.name.localeCompare(b.name));
 
-    const highestHours = Math.max(0, ...memberRows.map((row) => row.totalFairnessHours));
+    const highestUnits = Math.max(0, ...memberRows.map((row) => row.fairnessUnits));
 
     return {
       key: group.key,
       label: group.label,
       shiftLabels: group.shiftLabels,
       shiftCodes: group.shiftCodes,
-      highestCount: highestHours,
+      highestCount: highestUnits,
       members: memberRows.map((row) => ({
         ...row,
-        fairnessScore: highestHours > 0 ? (row.totalFairnessHours / highestHours) * 100 : 0,
+        fairnessScore: highestUnits > 0 ? (row.fairnessUnits / highestUnits) * 100 : 0,
       })),
     };
   });
 
   return {
     monthKey: monthRoster?.monthKey ?? "",
-    sheetTitle: monthRoster?.sheetTitle ?? "Roster month",
+    sheetTitle: fairnessSheetTitle,
     groups: groupSummaries,
     combinedMembers: groupSummaries
       .flatMap((group) => group.members.map((member) => ({ ...member, groupKey: group.key, groupLabel: group.label, groupShiftLabels: group.shiftLabels })))
@@ -456,25 +514,25 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [] }) {
   };
 }
 
-function buildFairnessSnapshot({ monthRoster, memberNames = [], targetMonthKey }) {
-  const summary = buildRosterFairnessSummary({ monthRoster, memberNames, targetMonthKey });
+function buildFairnessSnapshot({ monthRoster, memberNames = [], targetMonthKey, targetDateKey = null, fairnessEntries = [], fairnessTotalsByName = new Map(), fairnessSheetTitle = "Fairness tracker" }) {
+  const summary = buildRosterFairnessSummary({ monthRoster, memberNames, targetDateKey, targetMonthKey, fairnessEntries, fairnessTotalsByName, fairnessSheetTitle });
   const byName = new Map();
 
   for (const member of summary.members) {
-    const groupHours = new Map(
+    const groupScores = new Map(
       FAIRNESS_SHIFT_GROUPS.map((group) => {
         const groupSummary = summary.groups.find((item) => item.key === group.key);
         const summaryMember = groupSummary?.members.find((item) => item.name === member.name);
-        return [group.key, Number(summaryMember?.totalFairnessHours ?? 0)];
+        return [group.key, Number(summaryMember?.fairnessUnits ?? 0)];
       })
     );
-    const weightedHours = Array.from(groupHours.values()).reduce((sum, hours) => sum + Number(hours ?? 0), 0);
-    byName.set(member.name, { hours: weightedHours, groupHours, row: null, column: null, sheetName: summary.sheetTitle });
+    const totalScore = Array.from(groupScores.values()).reduce((sum, score) => sum + Number(score ?? 0), 0);
+    byName.set(member.name, { score: totalScore, hours: totalScore, groupScores, row: null, column: null, sheetName: summary.sheetTitle });
   }
 
-  for (const name of dedupeMembers([...ALL_MEMBERS, ...memberNames, ...MANUAL_FAIRNESS_HOURS.map((entry) => entry.name)])) {
+  for (const name of dedupeMembers([...ALL_MEMBERS, ...memberNames, ...sanitizeFairnessEntries(fairnessEntries).map((entry) => entry.name)])) {
     if (!byName.has(name)) {
-      byName.set(name, { hours: 0, groupHours: new Map(), row: null, column: null, sheetName: summary.sheetTitle });
+      byName.set(name, { score: 0, hours: 0, groupScores: new Map(), row: null, column: null, sheetName: summary.sheetTitle });
     }
   }
 
@@ -506,58 +564,200 @@ function memberMapByShift(roster) {
 
 function eligibleShiftCodesForSlot(slot) {
   if (slot === "S1") return ["S1", "S6"];
-  if (slot === "S2") return ["S1", "S2"];
+  if (slot === "S2") return ["S6", "S1", "S2"];
   if (slot === "S3") return ["S1", "S2", "S3"];
   if (slot === "S4") return ["S2", "S3", "S4"];
-  if (slot === "S4.1") return ["S2", "S3", "S4"];
-  if (slot === "S4.2") return ["S3", "S4"];
-  if (slot === "S5") return ["S4", "S5"];
+  if (slot === "S4.1") return ["S3", "S4"];
+  if (slot === "S4.2") return ["S4"];
+  if (slot === "S5") return ["S5"];
   if (slot === "S6") return ["S5", "S6"];
   return [slot];
 }
 
-function fairnessHoursFor(name, fairness) {
-  return Number(fairness.byName.get(name)?.hours ?? 0);
+function asrhShiftCodesForSlot(slot) {
+  if (slot === "S1") return ["S1", "S6"];
+  if (slot === "S2") return ["S2", "S1", "S6"];
+  if (slot === "S3") return ["S3"];
+  if (slot === "S4") return ["S4"];
+  if (slot === "S4.1") return ["S4"];
+  if (slot === "S4.2") return ["S4"];
+  if (slot === "S5") return ["S5"];
+  if (slot === "S6") return ["S6"];
+  return [slot];
 }
 
-function sortByFairness(members, fairness) {
+function minutesSinceMidnightForSlotPost(slot) {
+  const def = SHIFT_DEFINITIONS[slot];
+  if (!def) return null;
+  return (Number(def.postHour) * 60) + Number(def.postMinute);
+}
+
+function remainingMinutesAfterPost(member, slot) {
+  const postMinutes = minutesSinceMidnightForSlotPost(slot);
+  const shiftEnd = Number(member?.shiftWindow?.end);
+  if (!Number.isFinite(postMinutes) || !Number.isFinite(shiftEnd)) return Number.POSITIVE_INFINITY;
+  if (shiftEnd >= postMinutes) return shiftEnd - postMinutes;
+  return (24 * 60 - postMinutes) + shiftEnd;
+}
+
+function isAvailableLongEnoughForSlot(member, slot, minimumMinutes = 45) {
+  return remainingMinutesAfterPost(member, slot) >= minimumMinutes;
+}
+
+function minutesSinceShiftStartAtSlot(member, slot) {
+  const postMinutes = minutesSinceMidnightForSlotPost(slot);
+  const shiftStart = Number(member?.shiftWindow?.start);
+  if (!Number.isFinite(postMinutes) || !Number.isFinite(shiftStart)) return Number.POSITIVE_INFINITY;
+  if (postMinutes >= shiftStart) return postMinutes - shiftStart;
+  return (24 * 60 - shiftStart) + postMinutes;
+}
+
+function canReceiveAsrhWithinFirstHour(member, slot) {
+  if (!member) return false;
+  if (!["S1", "S2", "S3"].includes(member.shiftCode)) return true;
+  return minutesSinceShiftStartAtSlot(member, slot) <= 60;
+}
+
+function getFairnessGroupKeyForSlot(slot) {
+  return getFairnessGroupForShiftCode(slot)?.key
+    ?? (slot === "S4.1" || slot === "S4.2" ? "day-swing" : null);
+}
+
+function fairnessScoreFor(name, fairness, slot = null) {
+  const member = fairness.byName.get(name);
+  if (!member) return 0;
+  const groupKey = slot ? getFairnessGroupKeyForSlot(slot) : null;
+  if (groupKey) return Number(member.groupScores?.get(groupKey) ?? 0);
+  return Number(member.score ?? 0);
+}
+
+function sortByFairness(members, fairness, slot = null) {
   return [...members].sort((a, b) => {
-    const ah = fairnessHoursFor(a.name, fairness);
-    const bh = fairnessHoursFor(b.name, fairness);
+    const ah = fairnessScoreFor(a.name, fairness, slot);
+    const bh = fairnessScoreFor(b.name, fairness, slot);
     return ah - bh || a.name.localeCompare(b.name);
   });
 }
 
+function allowedRollingSourcesForSlot(slot) {
+  const allowedTransitions = {
+    S2: ["S1", "S6"],
+    S3: ["S1", "S2"],
+    S4: ["S1", "S2", "S3"],
+    "S4.1": ["S2"],
+    "S4.2": ["S3"],
+    S5: ["S4", "S4.1", "S4.2"],
+    S6: ["S5"],
+  };
+
+  return allowedTransitions[slot] ?? [];
+}
+
+function isAllowedRollingHandoff(previousSlot, nextSlot) {
+  return Boolean(previousSlot && allowedRollingSourcesForSlot(nextSlot).includes(previousSlot));
+}
+
+function formatCarryPath(slot, previousSlot = null) {
+  if (previousSlot && isAllowedRollingHandoff(previousSlot, slot)) {
+    return `${displayShiftLabel(previousSlot)} → ${displayShiftLabel(slot)}`;
+  }
+
+  const sources = allowedRollingSourcesForSlot(slot);
+  if (sources.length === 0) return null;
+  return `${sources.map((source) => displayShiftLabel(source)).join(" / ")} → ${displayShiftLabel(slot)}`;
+}
+
+function preferredPrimaryPoolForSlot(slot, eligible) {
+  if (slot === "S1") {
+    const s1Pool = eligible.filter((member) => member.shiftCode === "S1");
+    return s1Pool.length > 0 ? s1Pool : eligible.filter((member) => member.shiftCode === "S6");
+  }
+  if (slot === "S2") {
+    const s2Pool = eligible.filter((member) => member.shiftCode === "S2");
+    if (s2Pool.length > 0) return s2Pool;
+    const s1Pool = eligible.filter((member) => member.shiftCode === "S1");
+    if (s1Pool.length > 0) return s1Pool;
+    return eligible.filter((member) => member.shiftCode === "S6");
+  }
+  if (slot === "S4.1") return eligible.filter((member) => member.shiftCode === "S4");
+  if (slot === "S4.2") return eligible.filter((member) => member.shiftCode === "S4");
+  return eligible;
+}
+
+function chooseBackupForSlot(slot, eligible, primaryName) {
+  if (!primaryName) return [];
+
+  if (slot === "S1") {
+    return eligible
+      .filter((member) => member.name !== primaryName && (member.shiftCode === "S1" || member.shiftCode === "S6"))
+      .map((member) => member.name);
+  }
+
+  if (slot === "S2") {
+    return eligible
+      .filter((member) => member.name !== primaryName && (member.shiftCode === "S1" || member.shiftCode === "S2" || member.shiftCode === "S6"))
+      .map((member) => member.name);
+  }
+
+  const backup = eligible.find((member) => member.name !== primaryName)?.name ?? null;
+  return backup ? [backup] : [];
+}
+
+function shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligible, fairness, slotIndex }) {
+  if (!previousPrimary || !previousSlot || !isAllowedRollingHandoff(previousSlot, slot)) return false;
+  const carriedMember = eligible.find((member) => member.name === previousPrimary);
+  if (!carriedMember) return false;
+
+  if (slot === "S2") {
+    if (carriedMember.shiftCode === "S6") {
+      const directHandoffPool = eligible.filter((member) => member.name !== previousPrimary && (member.shiftCode === "S1" || member.shiftCode === "S2"));
+      return directHandoffPool.length === 0;
+    }
+    return true;
+  }
+  if (slot === "S3") return eligible.every((member) => member.shiftCode !== "S3");
+  if (slot === "S4") return previousSlot === "S2" || previousSlot === "S3";
+
+  const primaryPool = preferredPrimaryPoolForSlot(slot, eligible);
+  const comparisonPool = primaryPool.length > 0 ? primaryPool : eligible;
+  const referencePrimary = comparisonPool[0]?.name ?? null;
+  if (!referencePrimary) return true;
+
+  const previousScore = fairnessScoreFor(previousPrimary, fairness, slot);
+  const minScore = fairnessScoreFor(referencePrimary, fairness, slot);
+  const handoffThreshold = slotIndex < 2 ? 16 : 8;
+  return (previousScore - minScore) <= handoffThreshold;
+}
+
 function choosePrimaryForSlot({
+  slot,
   availableMembers,
   fairness,
   previousPrimary = null,
-  previousPrimaryStillAvailable = false,
+  previousSlot = null,
   slotIndex = 0,
 }) {
   const eligible = sortByFairness(
     availableMembers.filter((member) => !member.asrhRestricted),
     fairness,
+    slot,
   );
 
-  if (eligible.length === 0) return { primary: null, backup: null };
+  if (eligible.length === 0) return { primary: null, backup: null, carried: false };
 
-  const backup = eligible[1]?.name ?? null;
-  const previousHours = previousPrimary ? fairnessHoursFor(previousPrimary, fairness) : null;
-  const minHours = fairnessHoursFor(eligible[0].name, fairness);
-  const handoffThreshold = slotIndex < 2 ? 16 : 8;
-
-  if (previousPrimaryStillAvailable && previousPrimary && previousHours !== null) {
-    const shouldKeepPrimary = (previousHours - minHours) <= handoffThreshold;
-    if (shouldKeepPrimary) {
-      return {
-        primary: previousPrimary,
-        backup: eligible.find((member) => member.name !== previousPrimary)?.name ?? backup,
-      };
-    }
+  if (shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligible, fairness, slotIndex })) {
+    return {
+      primary: previousPrimary,
+      backup: chooseBackupForSlot(slot, eligible, previousPrimary),
+      carried: true,
+    };
   }
 
-  return { primary: eligible[0]?.name ?? null, backup };
+  const slotPrimaryEligible = preferredPrimaryPoolForSlot(slot, eligible);
+  const primaryPool = slotPrimaryEligible.length > 0 ? slotPrimaryEligible : eligible;
+  const primary = primaryPool[0]?.name ?? null;
+  const backup = chooseBackupForSlot(slot, eligible, primary);
+  return { primary, backup, carried: false };
 }
 
 function buildOffGroups(offMembers) {
@@ -570,6 +770,10 @@ function buildOffGroups(offMembers) {
   return Array.from(groups.entries()).map(([reason, names]) => `${reason}: ${names.join(", ")}`);
 }
 
+function displayShiftLabel(slot) {
+  return slot === "S6" ? "S5.1" : slot;
+}
+
 function nextSlotInfo(date, slot) {
   const order = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
   const idx = order.indexOf(slot);
@@ -579,15 +783,42 @@ function nextSlotInfo(date, slot) {
   return { slot: nextSlot, date: nextDate };
 }
 
+function formatClockTime(hour = 0, minute = 0) {
+  const normalizedHour = Number(hour) || 0;
+  const normalizedMinute = Number(minute) || 0;
+  const displayHour = normalizedHour === 0 ? 12 : normalizedHour > 12 ? normalizedHour - 12 : normalizedHour;
+  const meridiem = normalizedHour >= 12 ? "PM" : "AM";
+  return `${displayHour}:${String(normalizedMinute).padStart(2, "0")} ${meridiem} PT`;
+}
+
 function formatPostTime(slot) {
   const def = SHIFT_DEFINITIONS[slot];
   if (!def) return "TBD";
-  return `${def.postHour > 12 ? def.postHour - 12 : def.postHour}:${String(def.postMinute).padStart(2, "0")} ${def.postHour >= 12 ? "PM" : "AM"} PT`;
+  return formatClockTime(def.postHour, def.postMinute);
+}
+
+function formatHandoffTime(slot) {
+  const def = SHIFT_DEFINITIONS[slot];
+  if (!def) return "TBD";
+  return formatClockTime(def.handoffHour ?? def.postHour, def.handoffMinute ?? def.postMinute);
 }
 
 function roundRobinAssignments(offMembers, assignees) {
   if (!offMembers.length || !assignees.length) return [];
   return offMembers.map((member, index) => `• ${member.name} (${member.offReason}) → ${assignees[index % assignees.length]}`);
+}
+
+function getOffOwnershipAssignees(byShift, primary, fallbackAssignees = []) {
+  const coverageShiftCodes = ["S1", "S2", "S3", "S4"];
+  const pool = coverageShiftCodes
+    .flatMap((code) => byShift.get(code) ?? [])
+    .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
+    .filter((member) => !member.asrhRestricted)
+    .map((member) => member.name)
+    .filter((name) => name !== primary);
+
+  const fallbackPool = fallbackAssignees.filter((name) => name !== primary);
+  return pool.length > 0 ? pool : fallbackPool;
 }
 
 function previousPostedPrimary(scheduledPosts, dateKey, slot) {
@@ -618,42 +849,101 @@ function lateS4CarryAllowed({ slot, roster, scheduledPosts, dateKey }) {
   return false;
 }
 
-function formatMessage({ slot, date, primary, backup, ntPrimary, offAssignments, offGroups, nextPrimary, nextPostTime, continuingFrom, onePersonShift = false }) {
+function formatMessage({ slot, date, primary, backup, ntPrimary, offAssignments, offGroups, nextPrimary, nextPostTime, continuingFrom, onePersonShift = false, asrhUnassigned = false }) {
   const dateLabel = formatInZone(date, { month: "short", day: "numeric", year: "numeric" });
   const dayName = formatInZone(date, { weekday: "long" });
-  const handingClause = nextPrimary && nextPostTime
-    ? ` (handing to ${nextPrimary} at ${nextPostTime})`
+  const visibleSlot = displayShiftLabel(slot);
+  const visibleContinuingFrom = continuingFrom ? displayShiftLabel(continuingFrom) : null;
+  const nextAssignmentLabel = nextPrimary && nextPostTime
+    ? `${nextPrimary} at ${nextPostTime}`
+    : null;
+  const handingClause = nextAssignmentLabel
+    ? ` (handing to ${nextAssignmentLabel})`
     : "";
-  const continuingClause = continuingFrom ? ` (continuing from ${continuingFrom})` : "";
+  const continuingClause = visibleContinuingFrom ? ` (continuing from ${visibleContinuingFrom})` : "";
+  const primaryLabel = primary ?? "Unassigned";
+  const backupNames = Array.isArray(backup) ? backup : (backup ? [backup] : []);
+  const backupLabel = backupNames.length > 0 ? backupNames.join(", ") : "—";
+  const offTodayLabel = offGroups
+    .flatMap((group) => {
+      const text = String(group ?? "");
+      const parts = text.split(": ");
+      return parts[1] ? parts[1].split(", ") : [text];
+    })
+    .filter(Boolean)
+    .join(", ");
 
-  if (onePersonShift) {
-    return `**NOC Work Allotment — Shift ${slot}**\n${dateLabel} (${dayName})\n\nOnly 1 person in the shift, ${primary} handles all the responsibilities and logs the AS&RH hours under their name until handoff.${handingClause ? ` Next handoff: ${nextPrimary} at ${nextPostTime}.` : ""}`;
+  if (onePersonShift && primary) {
+    return [
+      `NOC Work Allotment — Shift ${visibleSlot}`,
+      `${dateLabel} (${dayName})`,
+      "",
+      "Active Service & Rolling Handoff:",
+      `• Primary: ${primary}${handingClause}`,
+      `• Backup: —`,
+      "",
+      "📋 New Tickets / Tasks:",
+      `• Primary: ${primary}`,
+      `• Backup: ${primary}`,
+      "",
+      "📌 Ticket Ownership - Off Members:",
+      ...offAssignments,
+      "",
+      `Off Today: ${offTodayLabel}`,
+      "",
+      nextPostTime ? `⏩ Next shift posting: ${nextPostTime}` : null,
+    ].join("\n");
   }
 
   return [
-    `**NOC Work Allotment — Shift ${slot}**`,
+    `NOC Work Allotment — Shift ${visibleSlot}`,
     `${dateLabel} (${dayName})`,
     "",
-    "**🧑 Active Service & Rolling Handoff:**",
-    `• **Primary:** ${primary}${continuingClause}${handingClause}`,
-    `• **Backup:** ${backup}`,
-    nextPrimary && nextPostTime ? `• **Next handoff:** ${nextPrimary} at ${nextPostTime}` : null,
+    "Active Service & Rolling Handoff:",
+    `• Primary: ${primaryLabel}${primary ? `${continuingClause}${handingClause}` : ""}`,
+    `• Backup: ${backupLabel}`,
     "",
-    "**📋 New Tickets / Tasks:**",
-    `• **Primary:** ${ntPrimary.join(", ")}`,
-    `• **Backup:** ${primary}`,
+    "📋 New Tickets / Tasks:",
+    `• Primary: ${ntPrimary.join(", ")}`,
+    `• Backup: ${primary ?? "—"}`,
     "",
-    "**📌 Ticket Ownership - Off Members:**",
-    offAssignments.join("\n"),
+    "📌 Ticket Ownership - Off Members:",
+    ...offAssignments,
     "",
-    "**Off Today:**",
-    offGroups.join("\n"),
+    `Off Today: ${offTodayLabel}`,
     "",
-    nextPrimary && nextPostTime ? `**⏩ Next shift posting / handoff:** ${nextPrimary} at ${nextPostTime}` : `**⏩ Next shift posting:** ${nextPostTime}`,
-  ].filter(Boolean).join("\n");
+    nextPostTime ? `⏩ Next shift posting: ${nextPostTime}` : null,
+  ].join("\n");
 }
 
-export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, slotIndex = 0 }) {
+function determineNextHandoffCandidates({ slot, primaryShiftCode, byShift, fairness }) {
+  if (slot === "S1") {
+    const targetSlot = primaryShiftCode === "S6" ? "S3" : "S2";
+    let pool = (byShift.get(targetSlot) ?? []).filter((member) => !member.asrhRestricted);
+    if (primaryShiftCode === "S6" && pool.length === 0) {
+      pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
+    }
+    return { pool, targetSlot: pool.length > 0 ? targetSlot : (primaryShiftCode === "S6" ? "S2" : targetSlot) };
+  }
+
+  if (slot === "S6") {
+    const s2Pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
+    const s3Pool = (byShift.get("S3") ?? []).filter((member) => !member.asrhRestricted);
+    if (s2Pool.length > 0) return { pool: s2Pool, targetSlot: "S2" };
+    if (s3Pool.length > 0) return { pool: s3Pool, targetSlot: "S3" };
+    const s1Pool = (byShift.get("S1") ?? []).filter((member) => !member.asrhRestricted);
+    return { pool: s1Pool, targetSlot: "S1" };
+  }
+
+  const next = nextSlotInfo(new Date(), slot);
+  const pool = asrhShiftCodesForSlot(next.slot)
+    .flatMap((code) => byShift.get(code) ?? [])
+    .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
+    .filter((member) => !member.asrhRestricted);
+  return { pool, targetSlot: next.slot };
+}
+
+export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, slotIndex = 0, fixedOffAssignments = null, fixedOffGroups = null }) {
   const slot = slotOverride ?? detectDueShiftSlot(now);
   if (!slot) return { status: "no_post", message: "NO_POST_REQUIRED" };
 
@@ -663,44 +953,137 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
   }
 
   const { byShift, offMembers } = memberMapByShift(roster);
+  const previous = previousPostedPrimary(scheduledPosts, dateKey, slot);
+  const carryPrimary = preferredPrimary ?? previous?.primary ?? null;
+  const carrySourceSlot = previous?.shift ?? null;
+
   const shiftPool = eligibleShiftCodesForSlot(slot).flatMap((code) => byShift.get(code) ?? []);
-  const availableMembers = shiftPool.filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index);
-  if (availableMembers.length === 0) {
+  const availableMembers = shiftPool
+    .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
+    .filter((member) => isAvailableLongEnoughForSlot(member, slot, 45));
+
+  const fallbackCarryMember = carryPrimary
+    ? roster.members.find((member) => (
+      member.name === carryPrimary
+      && !member.asrhRestricted
+      && isAvailableLongEnoughForSlot(member, slot, 45)
+    )) ?? null
+    : null;
+
+  if (availableMembers.length === 0 && !fallbackCarryMember) {
     throw new Error(`No active members found for ${slot} on ${dateKey}.`);
   }
 
-  const soleMember = availableMembers.length === 1 ? availableMembers[0] : null;
-  const previous = previousPostedPrimary(scheduledPosts, dateKey, slot);
-  const carryPrimary = preferredPrimary ?? previous?.primary ?? null;
-  const previousPrimaryStillAvailable = Boolean(carryPrimary && availableMembers.some((member) => member.name === carryPrimary && !member.asrhRestricted));
+  const effectiveAvailableMembers = availableMembers.length > 0
+    ? availableMembers
+    : [fallbackCarryMember];
+
+  const asrhMembers = asrhShiftCodesForSlot(slot)
+    .flatMap((code) => byShift.get(code) ?? [])
+    .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
+    .filter((member) => isAvailableLongEnoughForSlot(member, slot, 45))
+    .filter((member) => canReceiveAsrhWithinFirstHour(member, slot));
+
+  const carryCandidate = carryPrimary
+    ? effectiveAvailableMembers.find((member) => member.name === carryPrimary && !member.asrhRestricted)
+    : null;
+  const canInjectCarryCandidate = Boolean(
+    carryCandidate
+    && carrySourceSlot
+    && isAllowedRollingHandoff(carrySourceSlot, slot)
+  );
+  const selectionMembers = canInjectCarryCandidate && !asrhMembers.some((member) => member.name === carryCandidate.name)
+    ? [...asrhMembers, carryCandidate]
+    : asrhMembers;
 
   const selection = choosePrimaryForSlot({
-    availableMembers,
+    slot,
+    availableMembers: selectionMembers,
     fairness,
     previousPrimary: carryPrimary,
-    previousPrimaryStillAvailable,
+    previousSlot: carrySourceSlot,
     slotIndex,
   });
 
-  const primary = selection.primary ?? soleMember?.name ?? null;
-  const backup = soleMember ? null : selection.backup;
+  const fallbackRollingPool = sortByFairness(
+    effectiveAvailableMembers.filter((member) => (
+      !member.asrhRestricted
+      && allowedRollingSourcesForSlot(slot).includes(member.shiftCode)
+      && canReceiveAsrhWithinFirstHour(member, slot)
+    )),
+    fairness,
+    slot,
+  );
+  const forcedCarrySelection = !selection.primary && canInjectCarryCandidate
+    ? {
+      primary: carryCandidate.name,
+      backup: chooseBackupForSlot(slot, selectionMembers.length > 0 ? selectionMembers : effectiveAvailableMembers, carryCandidate.name),
+      carried: true,
+    }
+    : !selection.primary && (slot === "S3" || slot === "S4") && fallbackRollingPool.length > 0
+      ? {
+        primary: fallbackRollingPool[0].name,
+        backup: chooseBackupForSlot(slot, selectionMembers.length > 0 ? selectionMembers : effectiveAvailableMembers, fallbackRollingPool[0].name),
+        carried: true,
+      }
+      : selection;
 
-  if (!primary) {
-    throw new Error(`No eligible AS&RH Primary available for ${slot}.`);
-  }
+  const primary = forcedCarrySelection.primary ?? null;
+  const s3BackupPool = slot === "S3"
+    ? effectiveAvailableMembers.filter((member) => !member.asrhRestricted)
+    : null;
+  const resolvedBackupNames = slot === "S3" && primary
+    ? chooseBackupForSlot(slot, s3BackupPool ?? [], primary)
+    : forcedCarrySelection.backup;
+  const backupNames = Array.isArray(resolvedBackupNames)
+    ? resolvedBackupNames
+    : (resolvedBackupNames ? [resolvedBackupNames] : []);
+  const backup = backupNames.length > 0 ? backupNames.join(", ") : null;
+  const asrhUnassigned = !primary;
+  const primaryShiftCode = primary ? shiftCodeForMember(roster, primary) : null;
 
-  const next = nextSlotInfo(now, slot);
-  const nextPool = eligibleShiftCodesForSlot(next.slot).flatMap((code) => byShift.get(code) ?? []);
-  const nextCandidates = sortByFairness(nextPool.filter((member) => !member.asrhRestricted), fairness);
+  const { pool: nextPool, targetSlot: nextTargetSlot } = determineNextHandoffCandidates({
+    slot,
+    primaryShiftCode,
+    byShift,
+    fairness,
+  });
+  const nextCandidates = sortByFairness(
+    nextPool.filter((member) => isAvailableLongEnoughForSlot(member, nextTargetSlot, 45)),
+    fairness,
+    nextTargetSlot,
+  );
   const nextPrimary = nextCandidates[0]?.name ?? carryPrimary ?? "next shift lead";
-  const nextPostTime = formatPostTime(next.slot);
+  const nextPostTime = formatPostTime(nextTargetSlot);
 
-  const ntPrimary = availableMembers.filter((member) => member.name !== primary).map((member) => member.name);
-  if (backup && !ntPrimary.includes(backup)) ntPrimary.push(backup);
-  const effectiveNtPrimary = ntPrimary.length > 0 ? ntPrimary : [primary];
-  const offAssignments = roundRobinAssignments(offMembers, effectiveNtPrimary);
-  const offGroups = buildOffGroups(offMembers);
-  const continuingFrom = (previous?.primary === primary || preferredPrimary === primary) ? (previous?.shift ?? null) : null;
+  const continuingFrom = (
+    primary
+    && forcedCarrySelection.carried
+    && previous?.primary === primary
+    && isAllowedRollingHandoff(previous?.shift ?? null, slot)
+  ) ? (previous?.shift ?? null) : null;
+  const carryPathUsed = continuingFrom ? formatCarryPath(slot, continuingFrom) : null;
+  const carryPathRule = formatCarryPath(slot);
+
+  const isTwoMemberShift = availableMembers.length === 2;
+  const carriedWithoutHandoff = Boolean(forcedCarrySelection.carried && (slot === "S3" || slot === "S4"));
+  let ntPrimary = isTwoMemberShift && primary && backupNames.length > 0
+    ? [...backupNames]
+    : effectiveAvailableMembers.filter((member) => member.name !== primary).map((member) => member.name);
+  if (carriedWithoutHandoff) {
+    ntPrimary = effectiveAvailableMembers
+      .filter((member) => member.name !== primary)
+      .map((member) => member.name);
+  }
+  if (!isTwoMemberShift) {
+    for (const backupName of backupNames) {
+      if (!ntPrimary.includes(backupName)) ntPrimary.push(backupName);
+    }
+  }
+  const effectiveNtPrimary = ntPrimary.length > 0 ? ntPrimary : (primary ? [primary] : effectiveAvailableMembers.map((member) => member.name));
+  const offOwnershipAssignees = getOffOwnershipAssignees(byShift, primary, effectiveNtPrimary);
+  const offAssignments = fixedOffAssignments ?? roundRobinAssignments(offMembers, offOwnershipAssignees);
+  const offGroups = fixedOffGroups ?? buildOffGroups(offMembers);
 
   const message = formatMessage({
     slot,
@@ -713,10 +1096,9 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     nextPrimary,
     nextPostTime,
     continuingFrom,
-    onePersonShift: availableMembers.length === 1,
+    onePersonShift: effectiveAvailableMembers.length === 1 && Boolean(primary),
+    asrhUnassigned,
   });
-
-  const primaryShiftCode = shiftCodeForMember(roster, primary);
 
   return {
     status: "ok",
@@ -730,21 +1112,40 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     nextPrimary,
     nextPostTime,
     continuingFrom,
+    carryPathUsed,
+    carryPathRule,
     dateKey,
     primaryShiftCode,
-    availableMembers: availableMembers.map((member) => ({ name: member.name, shiftCode: member.shiftCode })),
+    availableMembers: effectiveAvailableMembers.map((member) => ({ name: member.name, shiftCode: member.shiftCode })),
   };
 }
 
 function cloneFairnessSnapshot(fairness) {
   const byName = new Map();
   for (const [name, row] of fairness.byName.entries()) {
-    byName.set(name, { ...row });
+    byName.set(name, { ...row, groupScores: new Map(row.groupScores ?? []) });
   }
   return {
     ...fairness,
     byName,
   };
+}
+
+function applyFairnessDelta(fairnessSnapshot, name, slot, delta = 0) {
+  const current = fairnessSnapshot.byName.get(name) ?? { score: 0, hours: 0, groupScores: new Map(), row: null, column: null, sheetName: fairnessSnapshot.sheetName };
+  const groupKey = getFairnessGroupKeyForSlot(slot);
+  const nextGroupScores = new Map(current.groupScores ?? []);
+  if (groupKey) {
+    nextGroupScores.set(groupKey, Number(nextGroupScores.get(groupKey) ?? 0) + Number(delta ?? 0));
+  }
+  const nextScore = Number(current.score ?? 0) + Number(delta ?? 0);
+  fairnessSnapshot.byName.set(name, {
+    ...current,
+    score: nextScore,
+    hours: nextScore,
+    groupScores: nextGroupScores,
+  });
+  return { before: Number(current.score ?? 0), after: nextScore };
 }
 
 const DAILY_SHIFT_ORDER = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
@@ -753,10 +1154,20 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
   const roster = await readRosterForDate(now);
   const targetMonthKey = monthKey(now);
   const monthRoster = await readRosterMonthEntries(targetMonthKey);
-  const fairnessEntries = sanitizeFairnessEntries(tracker.fairnessEntries);
+  const fairnessTracker = await readFairnessTrackerEntries(targetMonthKey);
+  const fairnessEntries = sanitizeFairnessEntries(fairnessTracker.entries);
+  const fairnessTotalsByName = fairnessTracker.totalsByName ?? new Map();
   const scheduledPosts = sanitizeScheduledPosts(tracker.scheduledPosts);
   const memberNames = dedupeMembers([...ALL_MEMBERS, ...roster.members.map((member) => member.name), ...(tracker.memberNames ?? [])]);
-  const fairness = buildFairnessSnapshot({ monthRoster, memberNames, targetMonthKey });
+  const fairness = buildFairnessSnapshot({
+    monthRoster,
+    memberNames,
+    targetMonthKey,
+    targetDateKey: localDateKey(now),
+    fairnessEntries,
+    fairnessTotalsByName,
+    fairnessSheetTitle: fairnessTracker.sheetTitle,
+  });
 
   return {
     roster,
@@ -764,6 +1175,8 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
     fairness,
     scheduledPosts,
     fairnessEntries,
+    fairnessSheetTitle: fairnessTracker.sheetTitle,
+    fairnessSpreadsheetUrl: fairnessTracker.spreadsheetUrl,
     memberNames,
     fairnessWarning: null,
   };
@@ -782,11 +1195,13 @@ export async function generateDueWorkAllotment({ now = new Date(), slotOverride 
 }
 
 export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} } = {}) {
-  const { roster, fairness, scheduledPosts, fairnessEntries, memberNames, fairnessWarning, monthRoster } = await loadPlanningInputs(now, tracker);
+  const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster } = await loadPlanningInputs(now, tracker);
   const planningFairness = cloneFairnessSnapshot(fairness);
   const planningScheduledPosts = [...scheduledPosts];
   const shifts = [];
   let currentPrimary = null;
+  let sharedOffAssignments = null;
+  let sharedOffGroups = null;
 
   for (const [slotIndex, slot] of DAILY_SHIFT_ORDER.entries()) {
     const result = generateWorkAllotmentFromData({
@@ -797,14 +1212,18 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
       scheduledPosts: planningScheduledPosts,
       preferredPrimary: currentPrimary,
       slotIndex,
+      fixedOffAssignments: sharedOffAssignments,
+      fixedOffGroups: sharedOffGroups,
     });
 
     if (result.status === "ok") {
-      const current = planningFairness.byName.get(result.primary) ?? { hours: 0, row: null, column: null, sheetName: planningFairness.sheetName };
-      const fairnessBefore = Number(current.hours ?? 0);
+      if (!sharedOffAssignments) sharedOffAssignments = [...result.offAssignments];
+      if (!sharedOffGroups) sharedOffGroups = [...result.offGroups];
+      const current = planningFairness.byName.get(result.primary) ?? { score: 0, hours: 0, groupScores: new Map(), row: null, column: null, sheetName: planningFairness.sheetName };
+      const fairnessBefore = fairnessScoreFor(result.primary, planningFairness, result.slot);
       const fairnessDelta = slot === "S4.1" || slot === "S4.2" ? 5 : 8;
-      const fairnessAfter = fairnessBefore + fairnessDelta;
-      planningFairness.byName.set(result.primary, { ...current, hours: fairnessAfter });
+      const fairnessChange = applyFairnessDelta(planningFairness, result.primary, result.slot, fairnessDelta);
+      const fairnessAfter = fairnessScoreFor(result.primary, planningFairness, result.slot);
       planningScheduledPosts.push({
         rowNumber: null,
         date: result.dateKey,
@@ -815,7 +1234,7 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
         status: "planned",
         lastChecked: new Date().toISOString(),
       });
-      shifts.push({ ...result, fairnessBefore, fairnessAfter, fairnessDelta });
+      shifts.push({ ...result, fairnessBefore, fairnessAfter, fairnessDelta, fairnessChange });
       currentPrimary = result.primary ?? currentPrimary;
     } else {
       shifts.push({ slot, status: result.status, message: result.message, dateKey: result.dateKey ?? localDateKey(now) });
@@ -829,7 +1248,7 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
 
     const nextShift = shifts.slice(index + 1).find((candidate) => candidate.status === "ok") ?? null;
     const actualNextPrimary = nextShift?.primary ?? null;
-    const actualNextPostTime = nextShift ? formatPostTime(nextShift.slot) : null;
+    const actualNextPostTime = nextShift ? formatHandoffTime(nextShift.slot) : null;
 
     shift.nextPrimary = actualNextPrimary;
     shift.nextPostTime = actualNextPostTime;
@@ -877,7 +1296,7 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
         delta: after - before,
         row: null,
         column: null,
-        sheetName: "widget-tracker",
+        sheetName: fairnessSheetTitle,
         dateKey: localDateKey(now),
       };
     })
@@ -898,6 +1317,8 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
       memberNames,
       monthKey: monthKey(now),
       rosterMonthSheet: monthRoster.sheetTitle,
+      fairnessSheetTitle,
+      fairnessSpreadsheetUrl,
     },
   };
 }
@@ -957,6 +1378,8 @@ export async function applyWorkAllotmentsForDay({ now = new Date(), tracker = {}
       scheduledPosts,
       memberNames: plan.tracker.memberNames,
       monthKey: plan.tracker.monthKey,
+      fairnessSheetTitle: plan.tracker.fairnessSheetTitle,
+      fairnessSpreadsheetUrl: plan.tracker.fairnessSpreadsheetUrl,
     },
   };
 }

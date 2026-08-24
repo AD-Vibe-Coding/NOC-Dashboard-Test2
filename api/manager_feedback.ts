@@ -35,6 +35,13 @@ function anonymizeRecipientRows<T extends Record<string, any>>(rows: T[] | null 
   }));
 }
 
+function normalizePersonName(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
 function getEffectiveRole(session: { role?: string | null; email?: string | null; name?: string | null } | null) {
   if (!session) return "anonymous";
   return (
@@ -48,7 +55,8 @@ function getEffectiveRole(session: { role?: string | null; email?: string | null
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const session = getSession(req);
   const role = getEffectiveRole(session);
-  const sessionName = String(session?.name ?? "").trim();
+  const canonicalIdentity = lookupByEmail(String(session?.email ?? "").toLowerCase());
+  const sessionName = String(canonicalIdentity?.name ?? session?.name ?? "").trim();
 
   if (!sessionName) {
     return send(res, 403, { error: "Sign in required." });
@@ -61,7 +69,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return query.order("created_at", { ascending: false });
         }
         return query
-          .eq("feedback_for", sessionName)
           .eq("approval_status", "approved")
           .order("approved_at", { ascending: false });
       };
@@ -86,7 +93,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return send(res, 500, { error: error.message });
       }
 
-      const rows = withManagerFeedbackFallback(data);
+      const baseRows = withManagerFeedbackFallback(data);
+      const rows = role === "manager"
+        ? baseRows
+        : baseRows.filter((row) => {
+            const signedInNames = new Set([
+              normalizePersonName(sessionName),
+              normalizePersonName(session?.name ?? ""),
+            ].filter(Boolean));
+            return signedInNames.has(normalizePersonName(row.feedback_for));
+          });
 
       if (role !== "manager" && req.query.markRead === "true" && rows.length > 0) {
         const unreadIds = rows
@@ -155,29 +171,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const changes: Record<string, unknown> = {};
       let updateQuery = supabaseAdmin.from("manager_feedback").update(changes).eq("id", id);
 
-      if (recipientCommentRequested) {
-        if (!recipientComment) {
-          return send(res, 400, { error: "Recipient comment cannot be empty." });
+      if (recipientCommentRequested || recipientAcknowledgeRequested) {
+        const recipientLookup = await supabaseAdmin
+          .from("manager_feedback")
+          .select("id, feedback_for, approval_status")
+          .eq("id", id)
+          .maybeSingle();
+
+        if (recipientLookup.error) {
+          return send(res, 500, { error: recipientLookup.error.message });
         }
 
-        changes.recipient_comment = recipientComment;
-        changes.recipient_comment_by = sessionName;
-        changes.recipient_comment_at = new Date().toISOString();
+        const targetRow = recipientLookup.data;
+        const signedInNames = new Set([
+          normalizePersonName(sessionName),
+          normalizePersonName(session?.name ?? ""),
+        ].filter(Boolean));
+        const isRecipient = signedInNames.has(normalizePersonName(targetRow?.feedback_for));
+        const isApprovedRecipientRow = targetRow?.approval_status === "approved";
+
+        if (!targetRow || !isRecipient || !isApprovedRecipientRow) {
+          return send(res, 404, {
+            error: recipientCommentRequested
+              ? "Only the feedback recipient can comment on approved feedback."
+              : "Only the feedback recipient can acknowledge approved feedback.",
+          });
+        }
+
+        if (recipientCommentRequested) {
+          if (!recipientComment) {
+            return send(res, 400, { error: "Recipient comment cannot be empty." });
+          }
+
+          changes.recipient_comment = recipientComment;
+          changes.recipient_comment_by = sessionName;
+          changes.recipient_comment_at = new Date().toISOString();
+        } else {
+          changes.recipient_acknowledged_by = sessionName;
+          changes.recipient_acknowledged_at = new Date().toISOString();
+        }
+
         updateQuery = supabaseAdmin
           .from("manager_feedback")
           .update(changes)
-          .eq("id", id)
-          .eq("feedback_for", sessionName)
-          .eq("approval_status", "approved");
-      } else if (recipientAcknowledgeRequested) {
-        changes.recipient_acknowledged_by = sessionName;
-        changes.recipient_acknowledged_at = new Date().toISOString();
-        updateQuery = supabaseAdmin
-          .from("manager_feedback")
-          .update(changes)
-          .eq("id", id)
-          .eq("feedback_for", sessionName)
-          .eq("approval_status", "approved");
+          .eq("id", id);
       } else {
         if (feedbackFrom !== undefined) {
           if (!feedbackFrom) return send(res, 400, { error: "feedback_from cannot be empty." });

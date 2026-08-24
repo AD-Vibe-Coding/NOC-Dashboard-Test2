@@ -16,6 +16,15 @@ import { supabaseAdmin } from "./_lib/supabase-admin.js";
 import { getSession, requireManager } from "./_lib/auth-middleware.js";
 
 // Static roster for filling in users who haven't opened the app yet
+const EXCLUDED_WIDGET_IDS = new Set(["zoom-queue", "shift-checklist"]);
+const EXCLUDED_WIDGET_TITLES = new Set(["team availability", "shift handover checklist"]);
+
+function isExcludedAppUsageEvent(event: any) {
+  const widgetId = String(event?.widget_id ?? "").trim().toLowerCase();
+  const widgetTitle = String(event?.widget_title ?? "").trim().toLowerCase();
+  return EXCLUDED_WIDGET_IDS.has(widgetId) || EXCLUDED_WIDGET_TITLES.has(widgetTitle);
+}
+
 const STATIC_ROSTER = [
   { name: "Anirudh Kukudala",      role: "manager" },
   { name: "Perry Cox",             role: "manager" },
@@ -94,7 +103,7 @@ export default async function handler(req: any, res: any) {
         .gte("created_at", startOf(30))
         .order("created_at", { ascending: false })
         .limit(5000);
-      events = evData ?? [];
+      events = (evData ?? []).filter((event: any) => !isExcludedAppUsageEvent(event));
 
       // Sign-in sessions
       const { data: sesData } = await supabaseAdmin

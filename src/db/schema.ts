@@ -144,6 +144,44 @@ export const shift_handovers = pgTable("shift_handovers", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const work_allotment_jobs = pgTable("work_allotment_jobs", {
+  id: serial("id").primaryKey(),
+  operational_date: text("operational_date").notNull(), // YYYY-MM-DD run date (S1..S6 batch)
+  post_date: text("post_date").notNull(), // YYYY-MM-DD actual calendar post date (S6 rolls to next day)
+  shift: text("shift").notNull(),
+  primary: text("primary"),
+  backup: text("backup"),
+  nt_primary: text("nt_primary"),
+  message: text("message").notNull(),
+  next_primary: text("next_primary"),
+  next_post_time: text("next_post_time"),
+  continuing_from: text("continuing_from"),
+  carry_path_used: text("carry_path_used"),
+  carry_path_rule: text("carry_path_rule"),
+  available_members_json: text("available_members_json"),
+  post_time_label: text("post_time_label").notNull(),
+  post_at: text("post_at").notNull(), // ISO timestamp in UTC for cron comparison
+  status: text("status").notNull(), // planned | posted
+  slack_ts: text("slack_ts"),
+  last_error: text("last_error"),
+  generated_at: text("generated_at").notNull(),
+  posted_at: text("posted_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const work_allotment_automation_runs = pgTable("work_allotment_automation_runs", {
+  id: serial("id").primaryKey(),
+  action: text("action").notNull(), // generate | post-due | run
+  ran_at: text("ran_at").notNull(),
+  generation_triggered: boolean("generation_triggered"),
+  generation_skipped: boolean("generation_skipped"),
+  due_count: integer("due_count"),
+  posted_count: integer("posted_count"),
+  failure_count: integer("failure_count"),
+  note: text("note"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const polished_emails = pgTable("polished_emails", {
   id: serial("id").primaryKey(),
   // "customer" | "internal" | "carrier"

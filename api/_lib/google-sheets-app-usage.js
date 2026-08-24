@@ -6,6 +6,9 @@ const SPREADSHEET_ID = "1gCue6XyP40Zk7KTgGG92wvaSBAbrGLygLImD54RTvuk";
 const SHEET_TAB_NAME = "App_Usage";
 const SHEET_RANGE = `${SHEET_TAB_NAME}!A:G`;
 const APP_USAGE_SOURCE = "AppDirect";
+const APP_USAGE_DEPARTMENT = "NOC";
+const EXCLUDED_WIDGET_IDS = new Set(["zoom-queue", "shift-checklist"]);
+const EXCLUDED_WIDGET_TITLES = new Set(["team availability", "shift handover checklist"]);
 
 function parseServiceAccountJson() {
   const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -129,8 +132,16 @@ async function loadWeeklyWidgetEvents(window) {
   return data ?? [];
 }
 
+function isExcludedAppUsageEvent(event) {
+  const widgetId = String(event?.widget_id ?? "").trim().toLowerCase();
+  const widgetTitle = String(event?.widget_title ?? "").trim().toLowerCase();
+  return EXCLUDED_WIDGET_IDS.has(widgetId) || EXCLUDED_WIDGET_TITLES.has(widgetTitle);
+}
+
 function buildUsageRows(events, emailByName) {
   return events.flatMap((event) => {
+    if (isExcludedAppUsageEvent(event)) return [];
+
     const memberName = String(event.user_name ?? "").trim();
     const memberEmail = normalizeEmail(emailByName.get(memberName));
     const workItemName = String(event.widget_title ?? event.widget_id ?? "").trim();
@@ -141,7 +152,7 @@ function buildUsageRows(events, emailByName) {
     return [[
       memberEmail,
       createdAt.slice(0, 10),
-      companyFromEmail(memberEmail),
+      APP_USAGE_DEPARTMENT,
       workItemName,
       "app",
       "",

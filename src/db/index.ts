@@ -112,6 +112,7 @@ type PersonalActionItemRow = typeof schema.personal_action_items.$inferSelect;
 type TicketSummaryRow = typeof schema.ticket_summaries.$inferSelect;
 type EscalationDraftRow = typeof schema.escalation_drafts.$inferSelect;
 type ShiftHandoverRow = typeof schema.shift_handovers.$inferSelect;
+type WorkAllotmentJobRow = typeof schema.work_allotment_jobs.$inferSelect;
 type PolishedEmailRow = typeof schema.polished_emails.$inferSelect;
 type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
@@ -152,6 +153,7 @@ export const db = {
   ticket_summaries: tableClient<TicketSummaryRow>("ticket_summaries"),
   escalation_drafts: tableClient<EscalationDraftRow>("escalation_drafts"),
   shift_handovers: tableClient<ShiftHandoverRow>("shift_handovers"),
+  work_allotment_jobs: tableClient<WorkAllotmentJobRow>("work_allotment_jobs"),
   polished_emails: tableClient<PolishedEmailRow>("polished_emails"),
   performance_imports: tableClient<PerformanceImportRow>("performance_imports"),
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
