@@ -3,6 +3,7 @@ import { postSlackMessage } from "./slack.js";
 import {
   SHIFT_DEFINITIONS,
   WORK_ALLOTMENT_CONFIG,
+  getReadOnlyFairnessSnapshot,
   planWorkAllotmentsForDay,
 } from "./google-sheets-work-allotment.js";
 
@@ -280,6 +281,19 @@ export async function getWorkAllotmentAutomationStatus({ now = new Date() } = {}
   const jobs = await listJobsForOperationalDate(operationalDate);
   const recent = await listRecentJobs(24);
   const latestRun = await getLatestAutomationRun();
+  let fairnessSummary = null;
+  let fairnessTracker = null;
+  let fairnessWarning = null;
+
+  try {
+    const fairnessSnapshot = await getReadOnlyFairnessSnapshot({ now });
+    fairnessSummary = fairnessSnapshot.fairnessSummary ?? null;
+    fairnessTracker = fairnessSnapshot.tracker ?? null;
+    fairnessWarning = fairnessSnapshot.fairnessWarning ?? null;
+  } catch (error) {
+    fairnessWarning = error instanceof Error ? error.message : "Failed to load fairness data.";
+  }
+
   return {
     ok: true,
     operationalDate,
@@ -290,6 +304,9 @@ export async function getWorkAllotmentAutomationStatus({ now = new Date() } = {}
     jobs,
     recent,
     latestRun,
+    fairnessSummary,
+    fairnessTracker,
+    fairnessWarning,
   };
 }
 

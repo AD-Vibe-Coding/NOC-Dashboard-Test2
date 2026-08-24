@@ -284,11 +284,10 @@ export const WIDGETS: WidgetDefinition[] = [
   {
     id: "work-allotment-generator",
     title: "Work Allotment Generator",
-    description: "Generate and post the exact NOC shift allotment message due at runtime",
+    description: "View today’s NOC shift allotments and fairness status; managers can also generate and post runtime messages",
     icon: IconClipboardList,
     iconColor: "indigo",
     tileSize: "sm",
-    roles: ["manager"],
     Tile: WorkAllotmentGeneratorTile,
     Full: WorkAllotmentGeneratorWidget,
   },

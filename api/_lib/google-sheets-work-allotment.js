@@ -1194,6 +1194,21 @@ export async function generateDueWorkAllotment({ now = new Date(), slotOverride 
   };
 }
 
+export async function getReadOnlyFairnessSnapshot({ now = new Date(), tracker = {} } = {}) {
+  const { fairness, fairnessSheetTitle, fairnessSpreadsheetUrl, fairnessWarning, monthRoster } = await loadPlanningInputs(now, tracker);
+  return {
+    monthKey: monthKey(now),
+    fairnessWarning,
+    fairnessSummary: fairness.summary,
+    tracker: {
+      monthKey: monthKey(now),
+      rosterMonthSheet: monthRoster.sheetTitle,
+      fairnessSheetTitle,
+      fairnessSpreadsheetUrl,
+    },
+  };
+}
+
 export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} } = {}) {
   const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster } = await loadPlanningInputs(now, tracker);
   const planningFairness = cloneFairnessSnapshot(fairness);

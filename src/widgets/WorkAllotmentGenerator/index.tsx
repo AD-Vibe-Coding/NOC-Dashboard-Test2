@@ -139,6 +139,10 @@ interface WorkAllotmentJobStatus {
   post_time_label?: string | null;
   posted_at?: string | null;
   generated_at?: string | null;
+  message?: string | null;
+  continuing_from?: string | null;
+  carry_path_used?: string | null;
+  carry_path_rule?: string | null;
 }
 
 interface WorkAllotmentAutomationRun {
@@ -163,6 +167,14 @@ interface WorkAllotmentStatusResult {
   jobs: WorkAllotmentJobStatus[];
   recent: WorkAllotmentJobStatus[];
   latestRun?: WorkAllotmentAutomationRun | null;
+  fairnessSummary?: FairnessSummary | null;
+  fairnessTracker?: {
+    monthKey: string;
+    rosterMonthSheet?: string;
+    fairnessSheetTitle?: string;
+    fairnessSpreadsheetUrl?: string;
+  } | null;
+  fairnessWarning?: string | null;
 }
 
 function formatTimestamp(value?: string | null) {
@@ -244,7 +256,7 @@ export function WorkAllotmentGeneratorWidget() {
   }
 
   async function loadStatus() {
-    if (!identity || !isManager) return;
+    if (!identity) return;
     setStatusLoading(true);
     setStatusError(null);
     try {
@@ -284,9 +296,35 @@ export function WorkAllotmentGeneratorWidget() {
     }
   }
 
-  useEffect(() => {
+  async function refreshAutomation() {
     if (!identity || !isManager) return;
-    void load();
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const automationResponse = await fetch(`/api/work-allotment/automation`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "run" }),
+      });
+      const automationJson = await automationResponse.json();
+      if (!automationResponse.ok) {
+        throw new Error(automationJson.error ?? "Failed to refresh work allotment automation.");
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh work allotment automation.");
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!identity) return;
+    if (isManager) {
+      void load();
+      return;
+    }
+    void loadStatus();
   }, [identity, isManager]);
 
   if (!identity) {
@@ -297,20 +335,21 @@ export function WorkAllotmentGeneratorWidget() {
     );
   }
 
-  if (!isManager) {
-    return (
-      <WidgetFrame title="Work Allotment Generator" subtitle="Manager access required" icon={IconClipboardList} iconColor="indigo">
-        <Alert color="red">Only managers can preview the NOC work allotment and fairness tracker.</Alert>
-      </WidgetFrame>
-    );
-  }
-
   const result = data?.result ?? null;
-  const readyShiftCount = result?.shifts?.filter((shift) => shift.status === "ok").length ?? 0;
-  const fairnessSummary = result?.fairnessSummary ?? null;
+  const readyShiftCount = result?.shifts?.filter((shift) => shift.status === "ok").length
+    ?? automationStatus?.jobs?.length
+    ?? 0;
+  const fairnessSummary = result?.fairnessSummary ?? automationStatus?.fairnessSummary ?? null;
   const fairnessGroups = fairnessSummary?.groups ?? [];
-  const fairnessSourceTitle = result?.tracker?.fairnessSheetTitle ?? fairnessSummary?.sheetTitle ?? result?.fairnessSheet ?? "—";
-  const fairnessSourceUrl = result?.tracker?.fairnessSpreadsheetUrl ?? null;
+  const fairnessSourceTitle = result?.tracker?.fairnessSheetTitle
+    ?? automationStatus?.fairnessTracker?.fairnessSheetTitle
+    ?? fairnessSummary?.sheetTitle
+    ?? result?.fairnessSheet
+    ?? "—";
+  const fairnessSourceUrl = isManager
+    ? (result?.tracker?.fairnessSpreadsheetUrl ?? automationStatus?.fairnessTracker?.fairnessSpreadsheetUrl ?? null)
+    : null;
+  const activeFairnessWarning = result?.fairnessWarning ?? automationStatus?.fairnessWarning ?? null;
   const latestAutomationActivity = automationStatus?.latestRun?.ran_at
     ?? ([...(automationStatus?.recent ?? [])]
       .map((job) => job.posted_at || job.generated_at || null)
@@ -324,17 +363,27 @@ export function WorkAllotmentGeneratorWidget() {
   return (
     <WidgetFrame
       title="Work Allotment Generator"
-      subtitle={result ? `${readyShiftCount} shifts prepared for ${result.dateKey}` : "Read roster, plan all shifts, and review monthly fairness by shift group"}
+      subtitle={result
+        ? `${readyShiftCount} shifts prepared for ${result.dateKey}`
+        : automationStatus?.operationalDate
+          ? `${readyShiftCount} saved shifts available for ${automationStatus.operationalDate}`
+          : "Read roster, plan all shifts, and review monthly fairness by shift group"}
       icon={IconClipboardList}
       iconColor="indigo"
       loading={loading}
-      onRefresh={() => void load()}
-      status={{ label: result ? `${readyShiftCount} shifts planned` : "Loading", color: result ? "green" : "gray" }}
+      onRefresh={isManager ? (() => void refreshAutomation()) : undefined}
+      status={{
+        label: result || automationStatus ? `${readyShiftCount} shifts planned` : "Loading",
+        color: result || automationStatus ? "green" : "gray",
+      }}
       headerActions={<Badge variant="light" color="indigo">PDT / America/Los_Angeles</Badge>}
     >
       <Stack gap="lg">
         {(error || notice) && <Alert color={error ? "red" : "green"}>{error || notice}</Alert>}
-        {result?.fairnessWarning ? <Alert color="yellow">{result.fairnessWarning}</Alert> : null}
+        {!isManager ? (
+          <Alert color="blue">Read-only mode: non-managers can view saved work allotments, posting status, and monthly fairness data, but only managers can run generation or refresh automation.</Alert>
+        ) : null}
+        {activeFairnessWarning ? <Alert color="yellow">{activeFairnessWarning}</Alert> : null}
 
         <Tabs value={activeTab} onChange={setActiveTab} keepMounted={false}>
           <Tabs.List>
@@ -421,9 +470,7 @@ export function WorkAllotmentGeneratorWidget() {
               <Card withBorder radius="md" p="md">
                 <Stack gap="md">
                   <Text fw={700}>Shift allotments for the day</Text>
-                  {(result?.shifts ?? []).length === 0 ? (
-                    <Text size="sm" c="dimmed">No shifts were generated for today.</Text>
-                  ) : (
+                  {(result?.shifts ?? []).length > 0 ? (
                     (result?.shifts ?? []).map((shift) => (
                       <Card key={shift.slot} withBorder radius="md" p="md">
                         <Stack gap="sm">
@@ -453,6 +500,33 @@ export function WorkAllotmentGeneratorWidget() {
                         </Stack>
                       </Card>
                     ))
+                  ) : (automationStatus?.jobs ?? []).length > 0 ? (
+                    (automationStatus?.jobs ?? []).map((job) => (
+                      <Card key={job.id} withBorder radius="md" p="md">
+                        <Stack gap="sm">
+                          <Group justify="space-between" align="center">
+                            <Group gap={8}>
+                              <Badge color={job.status === "posted" ? "green" : "yellow"} variant="light">{formatVisibleShiftLabel(job.shift)}</Badge>
+                              {job.primary ? <Badge color="indigo" variant="light">Primary: {job.primary}</Badge> : null}
+                              {job.backup ? <Badge color="blue" variant="light">Backup: {job.backup}</Badge> : null}
+                              {job.continuing_from ? <Badge color="violet" variant="light">Continuing from {formatVisibleShiftLabel(job.continuing_from)}</Badge> : null}
+                              {job.carry_path_used ? <Badge color="teal" variant="light">Carry path used: {job.carry_path_used}</Badge> : null}
+                            </Group>
+                            <Badge color={job.status === "posted" ? "green" : "yellow"} variant="light">{job.status}</Badge>
+                          </Group>
+                          {job.carry_path_rule ? (
+                            <Text size="xs" c="dimmed">
+                              Carry rule for {formatVisibleShiftLabel(job.shift)}: {job.carry_path_rule}
+                            </Text>
+                          ) : null}
+                          <Text component="pre" size="sm" style={{ whiteSpace: "pre-wrap", margin: 0, fontFamily: "ui-monospace, SFMono-Regular, monospace" }}>
+                            {job.message || "Saved work allotment message unavailable."}
+                          </Text>
+                        </Stack>
+                      </Card>
+                    ))
+                  ) : (
+                    <Text size="sm" c="dimmed">No shifts were generated for today.</Text>
                   )}
                 </Stack>
               </Card>
@@ -467,8 +541,13 @@ export function WorkAllotmentGeneratorWidget() {
                     <Stack gap={4}>
                       <Text fw={700}>Monthly fairness tracker</Text>
                       <Text size="sm" c="dimmed">
-                        This tracker is sourced from the Google Sheet <strong>{fairnessSourceTitle}</strong> for {formatMonthLabel(fairnessSummary?.monthKey)}. It now shows only member name, worked days till date, and AS&amp;RH hours taken directly from that sheet.
+                        This tracker is sourced from <strong>{fairnessSourceTitle}</strong> for {formatMonthLabel(fairnessSummary?.monthKey)}. It shows member name, worked days till date, and AS&amp;RH hours from the fairness sheet.
                       </Text>
+                      {!isManager ? (
+                        <Text size="xs" c="dimmed">
+                          Read-only access: non-managers can view the monthly fairness data, but only managers can run generation or automation actions.
+                        </Text>
+                      ) : null}
                     </Stack>
                     {fairnessSourceUrl ? (
                       <Button component="a" href={fairnessSourceUrl} target="_blank" rel="noreferrer" variant="light" color="grape" size="xs">
