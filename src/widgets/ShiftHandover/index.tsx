@@ -237,7 +237,7 @@ function splitSubjectBody(text: string): { subject: string; body: string } {
   // The output starts with "Hello Team," then a blank line then "Subject: ..."
   // We display "Hello Team," + everything as body, and lift just the subject
   // into the separate Subject field for the Copy-Subject button.
-  const m = /^\s*subject\s*[:\-—]\s*(.*)$/im.exec(text);
+  const m = text.match(/^\s*subject\s*[:\-—]\s*(.*)$/im);
   const subject = m ? m[1].trim() : "";
   return { subject, body: text.trim() };
 }

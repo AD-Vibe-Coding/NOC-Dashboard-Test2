@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireManager } from "../_lib/auth-middleware.js";
+import { requireManagerAppBuilder } from "../_lib/appbuilder-auth.js";
 import { ALL_MEMBERS, planWorkAllotmentsForDay, WORK_ALLOTMENT_CONFIG } from "../_lib/google-sheets-work-allotment.js";
 
 function parseNow(value: unknown) {
@@ -26,7 +26,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed." });
   }
 
-  if (!requireManager(req, res)) return;
+  const managerSession = await requireManagerAppBuilder(req, res);
+  if (!managerSession) return;
 
   try {
     const now = parseNow(req.method === "GET" ? req.query.at : req.body?.at);

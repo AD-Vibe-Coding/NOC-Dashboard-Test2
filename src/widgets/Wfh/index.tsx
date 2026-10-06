@@ -156,33 +156,42 @@ export function WfhWidget() {
     }
   }
 
+  async function processDecision(
+    request: WfhRequest,
+    decision: "approved" | "denied",
+    note?: string,
+  ) {
+    if (!identity?.name) return;
+
+    const result = await decideWfhRequest(request.id, {
+      reviewer: identity.name,
+      decision,
+      note: note?.trim() || undefined,
+    });
+
+    const channels = ["Slack thread reply"];
+    if (result.email_sent) {
+      channels.push(`email to ${result.employee_email}`);
+    } else if (result.email_error === "disabled") {
+      // skip — employee notifications disabled by config
+    } else if (result.email_error && !/AI_API_KEY/.test(result.email_error)) {
+      channels.push("email failed (see server log)");
+    } else if (result.email_error) {
+      channels.push("email pending (AI agent not configured)");
+    }
+
+    showToast({
+      color: decision === "approved" ? "green" : "blue",
+      title: `${decision === "approved" ? "Approved" : "Denied"} — ${request.employee_name}`,
+      body: `${formatDateRange(request.start_date, request.end_date)} · ${channels.join(" · ")}`,
+    });
+  }
+
   async function handleDecision() {
-    if (!deciding || !identity?.name) return;
+    if (!deciding) return;
     setDecisionWorking(true);
     try {
-      const result = await decideWfhRequest(deciding.request.id, {
-        reviewer: identity.name,
-        decision: deciding.decision,
-        note: decisionNote.trim() || undefined,
-      });
-      const channels = ["Slack thread reply"];
-      if (result.email_sent) {
-        channels.push(`email to ${result.employee_email}`);
-      } else if (result.email_error === "disabled") {
-        // skip — employee notifications disabled by config
-      } else if (
-        result.email_error &&
-        !/AI_API_KEY/.test(result.email_error)
-      ) {
-        channels.push("email failed (see server log)");
-      } else if (result.email_error) {
-        channels.push("email pending (AI agent not configured)");
-      }
-      showToast({
-        color: deciding.decision === "approved" ? "green" : "blue",
-        title: `${deciding.decision === "approved" ? "Approved" : "Denied"} — ${deciding.request.employee_name}`,
-        body: `${formatDateRange(deciding.request.start_date, deciding.request.end_date)} · ${channels.join(" · ")}`,
-      });
+      await processDecision(deciding.request, deciding.decision, decisionNote);
       setDeciding(null);
       setDecisionNote("");
       await refresh();

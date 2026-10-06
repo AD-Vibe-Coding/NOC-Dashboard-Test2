@@ -4,7 +4,7 @@
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
-import { getSession } from "../_lib/auth-middleware.js";
+import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
 
 function dayCount(start: string, end: string): number {
   const a = Date.parse(`${start}T00:00:00Z`);
@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // GET — list requests
     // ----------------------------------------------------------------
     if (req.method === "GET") {
-      const session = getSession(req);
+      const session = await getAppBuilderSession(req);
       if (!session) {
         return res.status(200).json({
           requests: [],
@@ -55,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // POST — submit a new request
     // ----------------------------------------------------------------
     if (req.method === "POST") {
-      const session = getSession(req);
+      const session = await getAppBuilderSession(req);
       if (!session) {
         return res.status(401).json({ error: "Not authenticated — please sign in first" });
       }

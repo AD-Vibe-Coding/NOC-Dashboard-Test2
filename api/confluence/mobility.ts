@@ -182,11 +182,10 @@ interface Section {
 function extractSections(html: string): Section[] {
   const re = /<(h[12])[^>]*>([\s\S]*?)<\/\1>/gi;
   const heads: Array<{ level: 1 | 2; title: string; idx: number }> = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html))) {
+  for (const m of html.matchAll(re)) {
     const level = m[1].toLowerCase() === "h1" ? 1 : 2;
     const title = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-    if (title) heads.push({ level, title, idx: m.index });
+    if (title) heads.push({ level, title, idx: m.index ?? 0 });
   }
 
   return heads.map((h, i) => {

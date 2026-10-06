@@ -70,7 +70,6 @@ export const TASK_AGENT_COLUMN = "closed by";
 export const IGNORED_TICKET_COLUMNS: ReadonlySet<string> = new Set([
   "tier",
   "inventory_id",
-  "carrier_desc",
   "category",
   "severity",
   "stage",
@@ -88,7 +87,6 @@ export const IGNORED_TICKET_COLUMNS: ReadonlySet<string> = new Set([
   "time_spent",
   "is_after_hours_note",
   "count_after_hours_notes",
-  "is_chronic_customer",
   "contact_names",
   "channel",
   "opened_by_2",
@@ -152,7 +150,7 @@ export const TICKET_COLUMN_LABELS: Record<string, string> = {
   customer: "Customer Name",
   account: "Customer Account",
   regarding: "Circuit ID",
-  carrier_summary: "Carrier Name",
+  carrier_desc: "Carrier Name",
   subject: "Ticket Subject",
   type: "Service Type",
   issue: "Issue Type",
@@ -162,7 +160,6 @@ export const TICKET_COLUMN_LABELS: Record<string, string> = {
   opened_by_name: "Opened By",
   carrier_ticket_created: "Carrier Ticket Opened Time",
   time_to_carrier_ticket: "Time to Open Carrier Ticket",
-  age: "Ticket Age",
   mttr: "MTTR",
   is_chronic_inventory: "Chronic Circuit",
   first_touch: "Acknowledgement Time",
@@ -202,6 +199,10 @@ export interface SheetInfo {
   totalRows: number;
   /** Projected match count if imported as-is with the detected name column. */
   projectedMatches: number;
+  /** Unique unmatched names/emails sampled before import for review. */
+  projectedUnmatchedNames: string[];
+  /** Number of distinct unmatched names/emails found before import. */
+  projectedUnmatchedCount: number;
 }
 
 export interface SheetPlan {
@@ -257,6 +258,11 @@ export interface ImportSheetResult {
 export interface ImportResult {
   fileName: string;
   bySheet: ImportSheetResult[];
+}
+
+export interface ParsedWorkbookFile {
+  fileName: string;
+  sheets: SheetInfo[];
 }
 
 // =============================================================================
@@ -690,7 +696,7 @@ function parseYearNumber(v: unknown): number | undefined {
   const n = asNumber(v);
   if (n != null && n >= 1900 && n <= 2200) return Math.round(n);
   // String like "2025" or "FY2025"
-  const m = /\b(\d{4})\b/.exec(String(v));
+  const m = String(v).match(/\b(\d{4})\b/);
   if (m) {
     const y = Number(m[1]);
     if (y >= 1900 && y <= 2200) return y;
@@ -716,7 +722,7 @@ function matchYearMonth(v: unknown): string | undefined {
   const s = String(v).trim();
   if (!s) return undefined;
   // "2025-09" or "2025-09-15..." — strictly ISO-prefixed
-  const isoM = /^(\d{4})-(\d{2})\b/.exec(s);
+  const isoM = s.match(/^(\d{4})-(\d{2})\b/);
   if (isoM) {
     const y = Number(isoM[1]);
     const m = Number(isoM[2]);
@@ -725,13 +731,13 @@ function matchYearMonth(v: unknown): string | undefined {
     }
   }
   // "Sep 2025" / "September 2025" / "Jan-2026"
-  const nameM = /^([A-Za-z]+)[\s\-/]+(\d{4})$/.exec(s);
+  const nameM = s.match(/^([A-Za-z]+)[\s\-/]+(\d{4})$/);
   if (nameM) {
     const mn = MONTH_NAMES[nameM[1].slice(0, 3).toLowerCase()];
     if (mn) return `${nameM[2]}-${String(mn).padStart(2, "0")}`;
   }
   // "2025-Sep" / "2025/Jan"
-  const yNameM = /^(\d{4})[\s\-/]+([A-Za-z]+)$/.exec(s);
+  const yNameM = s.match(/^(\d{4})[\s\-/]+([A-Za-z]+)$/);
   if (yNameM) {
     const mn = MONTH_NAMES[yNameM[2].slice(0, 3).toLowerCase()];
     if (mn) return `${yNameM[1]}-${String(mn).padStart(2, "0")}`;
@@ -825,7 +831,7 @@ function parseLabelLoose(
   if (!s) return undefined;
 
   // ISO datetime: "2026-04-15T00:00:00.000Z"
-  const isoDateTimeM = /^(\d{4})-(\d{2})-(\d{2})T/.exec(s);
+  const isoDateTimeM = s.match(/^(\d{4})-(\d{2})-(\d{2})T/);
   if (isoDateTimeM) {
     const y = Number(isoDateTimeM[1]);
     const m = Number(isoDateTimeM[2]);
@@ -840,7 +846,7 @@ function parseLabelLoose(
 
   // ---- 2-digit-year formats: "Apr 25", "Apr-25", "Apr/26", "25-Apr" ----
   const expandYear = (yy: number) => (yy >= 70 ? 1900 + yy : 2000 + yy);
-  let m = /^([A-Za-z]+)[\s\-/.]+(\d{2})$/.exec(s);
+  let m = s.match(/^([A-Za-z]+)[\s\-/.]+(\d{2})$/);
   if (m) {
     const mn = MONTH_NAMES[m[1].slice(0, 3).toLowerCase()];
     const yy = Number(m[2]);
@@ -849,7 +855,7 @@ function parseLabelLoose(
       return `${y}-${String(mn).padStart(2, "0")}`;
     }
   }
-  m = /^(\d{2})[\s\-/.]+([A-Za-z]+)$/.exec(s);
+  m = s.match(/^(\d{2})[\s\-/.]+([A-Za-z]+)$/);
   if (m) {
     const mn = MONTH_NAMES[m[2].slice(0, 3).toLowerCase()];
     const yy = Number(m[1]);
@@ -862,7 +868,7 @@ function parseLabelLoose(
   // ---- 4-digit year formats with various separators ----
   // "Apr-2026", "Apr.2026", "Apr/2026" — handled by matchYearMonth, but
   // matchYearMonth doesn't allow "." separator. Add explicit support here.
-  m = /^([A-Za-z]+)[\s\-/.]+(\d{4})$/.exec(s);
+  m = s.match(/^([A-Za-z]+)[\s\-/.]+(\d{4})$/);
   if (m) {
     const mn = MONTH_NAMES[m[1].slice(0, 3).toLowerCase()];
     const y = Number(m[2]);
@@ -870,7 +876,7 @@ function parseLabelLoose(
       return `${y}-${String(mn).padStart(2, "0")}`;
     }
   }
-  m = /^(\d{4})[\s\-/.]+([A-Za-z]+)$/.exec(s);
+  m = s.match(/^(\d{4})[\s\-/.]+([A-Za-z]+)$/);
   if (m) {
     const mn = MONTH_NAMES[m[2].slice(0, 3).toLowerCase()];
     const y = Number(m[1]);
@@ -880,7 +886,7 @@ function parseLabelLoose(
   }
 
   // ---- Numeric MM-YYYY / M/YYYY / MM.YYYY ----
-  m = /^(\d{1,2})[\s\-/.](\d{4})$/.exec(s);
+  m = s.match(/^(\d{1,2})[\s\-/.](\d{4})$/);
   if (m) {
     const mm = Number(m[1]);
     const y = Number(m[2]);
@@ -889,7 +895,7 @@ function parseLabelLoose(
     }
   }
   // ---- YYYY-MM where MM is 1-digit: "2026-4", "2026.4" ----
-  m = /^(\d{4})[\s\-/.](\d{1,2})$/.exec(s);
+  m = s.match(/^(\d{4})[\s\-/.](\d{1,2})$/);
   if (m) {
     const y = Number(m[1]);
     const mm = Number(m[2]);
@@ -899,7 +905,7 @@ function parseLabelLoose(
   }
 
   // ---- DMY format: "DD-MM-YYYY" — only when D > 12 (unambiguous) ----
-  m = /^(\d{1,2})[\s\-/.](\d{1,2})[\s\-/.](\d{4})$/.exec(s);
+  m = s.match(/^(\d{1,2})[\s\-/.](\d{1,2})[\s\-/.](\d{4})$/);
   if (m) {
     const a = Number(m[1]);
     const b = Number(m[2]);
@@ -928,7 +934,7 @@ function parseLabelLoose(
   //   - second > 12 → MDY (day is the second number)
   //   - both ≤ 12 → assume MDY (US default in Excel)
   // 2-digit years: 70..99 → 1970..1999, 00..69 → 2000..2069.
-  m = /^(\d{1,2})[\s\-/.](\d{1,2})[\s\-/.](\d{2})$/.exec(s);
+  m = s.match(/^(\d{1,2})[\s\-/.](\d{1,2})[\s\-/.](\d{2})$/);
   if (m) {
     const a = Number(m[1]);
     const b = Number(m[2]);
@@ -1070,7 +1076,7 @@ function parsePeriodMonth(
       return startTime.getFullYear();
     }
     if (startTime != null) {
-      const m = /^(\d{4})-/.exec(String(startTime));
+      const m = String(startTime).match(/^(\d{4})-/);
       if (m) return Number(m[1]);
     }
     return undefined;
@@ -1108,7 +1114,7 @@ function parsePeriodMonth(
     if (v == null || v === "") continue;
     const fromDate = ymFromDate(v);
     if (fromDate) return fromDate;
-    const m = /^(\d{4})-(\d{2})\b/.exec(String(v));
+    const m = String(v).match(/^(\d{4})-(\d{2})\b/);
     if (m) {
       const y = Number(m[1]);
       const mm = Number(m[2]);
@@ -1135,7 +1141,7 @@ function parsePeriodQuarter(
     // "2025-Q3" → keep
     if (/^\d{4}-Q[1-4]$/i.test(s)) return s.toUpperCase();
     // "Q3" or "3" with the year coming from period_month or Year column
-    const qM = /^Q?([1-4])$/i.exec(s);
+    const qM = s.match(/^Q?([1-4])$/i);
     if (qM) {
       const year =
         (periodMonth ? periodMonth.slice(0, 4) : null) ??
@@ -1145,7 +1151,7 @@ function parsePeriodQuarter(
   }
   // Compute from period_month
   if (periodMonth) {
-    const m = /^(\d{4})-(\d{2})$/.exec(periodMonth);
+    const m = periodMonth.match(/^(\d{4})-(\d{2})$/);
     if (m) {
       const monthN = parseInt(m[2], 10);
       const q = Math.ceil(monthN / 3);
@@ -1416,6 +1422,11 @@ function stripIgnored(
 // =============================================================================
 
 export async function parseWorkbook(file: File): Promise<SheetInfo[]> {
+  const parsed = await parseWorkbookFile(file);
+  return parsed.sheets;
+}
+
+export async function parseWorkbookFile(file: File): Promise<ParsedWorkbookFile> {
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: "array", cellDates: true });
 
@@ -1424,14 +1435,14 @@ export async function parseWorkbook(file: File): Promise<SheetInfo[]> {
     const ws = wb.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, {
       defval: null,
-      raw: false,    // ensures dates become strings, percentages stay readable
+      raw: false,
     });
     const headers = rows.length > 0 ? Object.keys(rows[0]) : [];
     const detectedType = detectSourceType(sheetName, headers);
     const detectedNameColumn = detectNameColumn(headers, detectedType);
 
-    // Project how many rows would actually match the locked roster
     let projectedMatches = 0;
+    const projectedUnmatched = new Set<string>();
     if (detectedNameColumn) {
       for (const r of rows) {
         const primary = r[detectedNameColumn];
@@ -1441,7 +1452,11 @@ export async function parseWorkbook(file: File): Promise<SheetInfo[]> {
           (fallbackEmail && resolveTeamMember(String(fallbackEmail)))
         ) {
           projectedMatches++;
+          continue;
         }
+
+        const unmatchedValue = String(primary ?? fallbackEmail ?? "").trim();
+        if (unmatchedValue) projectedUnmatched.add(unmatchedValue);
       }
     }
 
@@ -1453,9 +1468,15 @@ export async function parseWorkbook(file: File): Promise<SheetInfo[]> {
       preview: rows.slice(0, 5),
       totalRows: rows.length,
       projectedMatches,
+      projectedUnmatchedNames: Array.from(projectedUnmatched).slice(0, 30),
+      projectedUnmatchedCount: projectedUnmatched.size,
     });
   }
-  return out;
+
+  return {
+    fileName: file.name,
+    sheets: out,
+  };
 }
 
 export async function executeImport(

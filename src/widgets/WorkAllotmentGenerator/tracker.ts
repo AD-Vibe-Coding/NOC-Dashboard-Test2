@@ -13,6 +13,7 @@ export interface ScheduledPostRow {
 }
 
 export interface FairnessTrackerStore {
+  monthKey?: string;
   fairnessEntries: Array<{ name: string; dateKey: string; hours: number }>;
   scheduledPosts: ScheduledPostRow[];
 }
@@ -32,12 +33,28 @@ export function isExcludedFairnessMember(name: string) {
   return EXCLUDED_FAIRNESS_MEMBERS.has(String(name ?? "").trim());
 }
 
+const PREFERRED_MEMBER_NAME: Record<string, string> = {
+  "Abishek Benarji": "Abhishek Benarji",
+  "Hamza Umme": "Hamza Rahmani",
+  "Lokesh Banavath": "Lokesh Naik Banavath",
+  "Zubair Mohammed": "Mohammed Zubairuddin",
+  "Ashraf Mohammed": "Mohammed Ashraf",
+  "Mohammed Akram Ahmed": "Akram Ahmed",
+  "Samiti Mahalakshmi": "Mahalakshmi Samiti",
+};
+
+function preferredMemberName(name: string) {
+  return PREFERRED_MEMBER_NAME[String(name ?? "").trim()] ?? String(name ?? "").trim();
+}
+
 export const DEFAULT_MEMBER_NAMES = Array.from(
   new Set([
-    ...Object.values(ROSTER_BY_EMAIL).map((entry) => entry.name),
+    ...Object.values(ROSTER_BY_EMAIL)
+      .filter((entry) => entry.role !== "manager" && entry.role !== "customer_service_manager")
+      .map((entry) => preferredMemberName(entry.name)),
     ...Object.entries(ROLE_BY_NAME)
-      .filter(([, role]) => role !== "manager")
-      .map(([name]) => name),
+      .filter(([, role]) => role !== "manager" && role !== "customer_service_manager")
+      .map(([name]) => preferredMemberName(name)),
   ])
 ).filter((name) => !EXCLUDED_FAIRNESS_MEMBERS.has(name));
 
@@ -62,6 +79,7 @@ export function getMonthLabel(monthKey: string) {
 }
 
 export function sanitizeTrackerStore(input: Partial<FairnessTrackerStore> | null | undefined): FairnessTrackerStore {
+  const monthKey = String(input?.monthKey ?? "").trim();
   const fairnessEntries = Array.isArray(input?.fairnessEntries)
     ? input.fairnessEntries
         .map((entry) => ({
@@ -99,23 +117,30 @@ export function sanitizeTrackerStore(input: Partial<FairnessTrackerStore> | null
         )
     : [];
 
-  return { fairnessEntries, scheduledPosts };
+  return { monthKey, fairnessEntries, scheduledPosts };
 }
 
-export function loadTrackerStore(): FairnessTrackerStore {
-  if (typeof window === "undefined") return { fairnessEntries: [], scheduledPosts: [] };
+export function loadTrackerStore(currentMonthKey = getCurrentMonthKey()): FairnessTrackerStore {
+  if (typeof window === "undefined") return { monthKey: currentMonthKey, fairnessEntries: [], scheduledPosts: [] };
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { fairnessEntries: [], scheduledPosts: [] };
-    return sanitizeTrackerStore(JSON.parse(raw));
+    if (!raw) return { monthKey: currentMonthKey, fairnessEntries: [], scheduledPosts: [] };
+    const parsed = sanitizeTrackerStore(JSON.parse(raw));
+    if (parsed.monthKey && parsed.monthKey !== currentMonthKey) {
+      return { monthKey: currentMonthKey, fairnessEntries: [], scheduledPosts: [] };
+    }
+    return { ...parsed, monthKey: currentMonthKey };
   } catch {
-    return { fairnessEntries: [], scheduledPosts: [] };
+    return { monthKey: currentMonthKey, fairnessEntries: [], scheduledPosts: [] };
   }
 }
 
 export function saveTrackerStore(store: FairnessTrackerStore) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeTrackerStore(store)));
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitizeTrackerStore({
+    ...store,
+    monthKey: store.monthKey || getCurrentMonthKey(),
+  })));
 }
 
 export function upsertFairnessEntry(entries: FairnessEntry[], nextEntry: FairnessEntry) {

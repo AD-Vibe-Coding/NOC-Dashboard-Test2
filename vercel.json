@@ -11,12 +11,16 @@
     "api/app-usage/weekly-sync.ts": { "maxDuration": 30 },
     "api/work-allotment/generate.ts": { "maxDuration": 30 },
     "api/work-allotment/post.ts": { "maxDuration": 30 },
-    "api/work-allotment/cron.ts": { "maxDuration": 30 }
+    "api/work-allotment/cron.ts": { "maxDuration": 30 },
+    "api/reminders/meetings/sync.ts": { "maxDuration": 30 },
+    "api/reminders/meetings/plan.ts": { "maxDuration": 30 },
+    "api/reminders/meetings/dispatch.ts": { "maxDuration": 30 },
+    "api/reminders/meetings/reconcile.ts": { "maxDuration": 30 }
   },
   "crons": [
     {
       "path": "/api/app-usage/weekly-sync",
-      "schedule": "0 13 * * 1"
+      "schedule": "0 12 * * 5"
     },
     {
       "path": "/api/work-allotment/cron?action=generate",
@@ -24,6 +28,22 @@
     },
     {
       "path": "/api/work-allotment/cron?action=post-due",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/reminders/meetings/sync",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/reminders/meetings/plan",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/reminders/meetings/dispatch",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/reminders/meetings/reconcile",
       "schedule": "*/5 * * * *"
     }
   ]

@@ -64,8 +64,11 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppOverview } from "./components/AppOverview";
 import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { AutoChatAssistant } from "./components/AutoChatAssistant";
+import { KudosLiveOverlay } from "./components/KudosLiveOverlay";
+import { WfhApprovalPopup } from "./components/WfhApprovalPopup";
 import { SmartSearchPanel } from "./widgets/SmartSearch";
 import { type DashboardTemplate, useDashboardPreferences } from "./lib/dashboard-preferences";
+import { NocMttrReportWidget } from "./widgets/NocMttrReport";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -97,7 +100,13 @@ function AppInner() {
   const effectiveRole = effectiveRoleForIdentity(identity);
 
   const visibleWidgets = useMemo(() => {
-    const accessible = !identity ? WIDGETS : WIDGETS.filter((w) => canAccess(effectiveRole, w.roles));
+    if (!identity) return WIDGETS.filter((w) => w.id !== "smart-search");
+
+    if (effectiveRole === "customer_service_manager") {
+      return WIDGETS.filter((w) => w.id === "noc-mttr-report");
+    }
+
+    const accessible = WIDGETS.filter((w) => canAccess(effectiveRole, w.roles));
     return accessible.filter((w) => w.id !== "smart-search");
   }, [effectiveRole, identity]);
 
@@ -118,9 +127,8 @@ function AppInner() {
     const fromHash = () => {
       const h = window.location.hash.replace(/^#\/?/, "");
       if (!h) return;
-      const widget = WIDGETS.find((w) => w.id === h);
-      if (!widget) return;
-      if (!canAccess(effectiveRole, widget.roles)) {
+      const widget = visibleWidgets.find((w) => w.id === h);
+      if (!widget) {
         window.location.hash = "";
         return;
       }
@@ -131,7 +139,7 @@ function AppInner() {
     fromHash();
     window.addEventListener("hashchange", fromHash);
     return () => window.removeEventListener("hashchange", fromHash);
-  }, [effectiveRole, identity, openWindow]);
+  }, [effectiveRole, identity, openWindow, visibleWidgets]);
 
   useEffect(() => {
     if (!identity) return;
@@ -162,6 +170,51 @@ function AppInner() {
     const handleVisibility = () => {
       if (!document.hidden) {
         void triggerReminderCheck();
+      }
+    };
+
+    window.addEventListener("focus", handleVisibility);
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleVisibility);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [identity]);
+
+  useEffect(() => {
+    if (!identity) return;
+
+    let disposed = false;
+    let inFlight = false;
+
+    const triggerWorkAllotmentRefresh = async () => {
+      if (disposed || inFlight || document.hidden) return;
+      inFlight = true;
+      try {
+        await fetch("/api/work-allotment/automation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ action: "run" }),
+        });
+      } catch {
+        // Best-effort polling only; the widget reads the updated status when opened.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void triggerWorkAllotmentRefresh();
+    const interval = window.setInterval(() => {
+      void triggerWorkAllotmentRefresh();
+    }, 10 * 60 * 1000);
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        void triggerWorkAllotmentRefresh();
       }
     };
 
@@ -259,7 +312,7 @@ function AppInner() {
               <Box
                 style={{
                   position: "relative",
-                  filter: `drop-shadow(0 0 16px var(--mantine-color-${accentColor}-6))`,
+                  filter: ["drop-shadow(0 0 16px var(--mantine-color-", accentColor, "-6))"].join(""),
                 }}
               >
                 <BrandLogo
@@ -422,18 +475,27 @@ function AppInner() {
         />
         <Box className="dot-grid-bg" />
         <Box style={{ position: "relative", zIndex: 1 }}>
-          <Box px={8} pt={0} pb={0}>
-            <NewsTicker />
-          </Box>
-          <Box px={8} pt={0} pb={6}>
-            <ManagerHome
-              identity={identity}
-              featuredWidgets={featuredWidgets}
-              visibleWidgets={visibleWidgets}
-              onExpand={expand}
-              template={template}
-            />
-          </Box>
+          {effectiveRole === "customer_service_manager" ? (
+            <Box px={8} pt={8} pb={6}>
+              <NocMttrReportWidget />
+            </Box>
+          ) : (
+            <>
+              <Box px={8} pt={0} pb={0}>
+                <NewsTicker />
+              </Box>
+              <Box px={8} pt={0} pb={6}>
+                <ManagerHome
+                  identity={identity}
+                  effectiveRole={effectiveRole}
+                  featuredWidgets={featuredWidgets}
+                  visibleWidgets={visibleWidgets}
+                  onExpand={expand}
+                  template={template}
+                />
+              </Box>
+            </>
+          )}
         </Box>
       </AppShell.Main>
 
@@ -465,6 +527,8 @@ function AppInner() {
       ))}
 
       <AutoChatAssistant model="auto" />
+      <KudosLiveOverlay />
+      <WfhApprovalPopup />
 
       {/* ── Taskbar ── */}
       <Taskbar />
@@ -480,17 +544,57 @@ function AppInner() {
 
 function ManagerHome({
   identity,
+  effectiveRole,
   featuredWidgets,
   visibleWidgets,
   onExpand,
   template,
 }: {
   identity?: ReturnType<typeof useIdentity>["identity"];
+  effectiveRole?: ReturnType<typeof effectiveRoleForIdentity>;
   featuredWidgets: WidgetDefinition[];
   visibleWidgets: WidgetDefinition[];
   onExpand: (id: string) => void;
   template: DashboardTemplate;
 }) {
+  if (effectiveRole === "customer_service_manager") {
+    const mttrWidget = visibleWidgets.find((w) => w.id === "noc-mttr-report");
+    if (!mttrWidget) return null;
+    const Tile = mttrWidget.Tile;
+
+    return (
+      <Stack gap={6}>
+        <Card
+          withBorder
+          radius="xl"
+          p="xs"
+          style={{
+            background: "linear-gradient(180deg, color-mix(in srgb, var(--mantine-color-white) 4%, var(--mantine-color-body)) 0%, color-mix(in srgb, var(--mantine-color-white) 1%, var(--mantine-color-body)) 100%)",
+            boxShadow: "0 14px 34px rgba(3, 10, 24, 0.14)",
+          }}
+        >
+          <Group justify="space-between" align="center" mb="xs">
+            <Text
+              size="xs"
+              fw={700}
+              tt="uppercase"
+              c="dimmed"
+              style={{ letterSpacing: "0.08em" }}
+            >
+              Customer Service Manager Dashboard
+            </Text>
+            <Badge variant="light" color="orange" radius="sm">
+              1 tool
+            </Badge>
+          </Group>
+          <ErrorBoundary label={mttrWidget.title} compact>
+            <Tile onExpand={() => onExpand(mttrWidget.id)} />
+          </ErrorBoundary>
+        </Card>
+      </Stack>
+    );
+  }
+
   const monitoringWidgets = featuredWidgets.filter((w) => w.id !== "my-day");
   const highlightedWidgets =
     template === "learning"
@@ -713,7 +817,8 @@ const MANAGER_QUICK_GROUPS: Array<{
       { id: "training-updates",    emoji: "🎓", label: "Training Hub",      desc: "Requests, sessions, progress", color: "blue" },
       { id: "attendance-tracker",  emoji: "🕒", label: "Attendance & Reminders", desc: "Punches + reminder counts", color: "orange" },
       { id: "ticket-rebalancer",   emoji: "🔀", label: "Ticket Rebalancer", desc: "Balance team ticket load",     color: "grape" },
-      { id: "meeting-notes",       emoji: "📒", label: "Meeting Notes",     desc: "1:1 and team notebooks",      color: "grape" },
+      { id: "meeting-notes",       emoji: "📒", label: "Notebook",          desc: "1:1 and team notebooks",      color: "grape" },
+      { id: "finance-cases",       emoji: "💼", label: "Finance Cases",     desc: "Monthly finance case log",    color: "teal" },
       { id: "kudos-board",         emoji: "⭐", label: "Kudos Board",       desc: "Peer recognition",             color: "yellow" },
       { id: "team-feedback",       emoji: "🗣️", label: "Team Feedback",    desc: "Store peer feedback on ticket work", color: "violet" },
       { id: "enhancement-tracker", emoji: "💡", label: "Enhancement Tracker", desc: "Ideas, approvals, and status", color: "yellow" },

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { handleCollection } from "./_lib/crud.js";
-import { getSession } from "./_lib/auth-middleware.js";
+import { getAppBuilderSession } from "./_lib/appbuilder-auth.js";
 
 /**
  * Performance Metrics collection.
@@ -10,8 +10,8 @@ import { getSession } from "./_lib/auth-middleware.js";
  *   - Any filter.member_name they pass is IGNORED and replaced with their
  *     session name, so they can only ever see their own data.
  */
-export default function handler(req: VercelRequest, res: VercelResponse) {
-  const session = getSession(req);
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  const session = await getAppBuilderSession(req);
   const isManager = session?.role === "manager";
 
   if (!isManager && session?.name) {

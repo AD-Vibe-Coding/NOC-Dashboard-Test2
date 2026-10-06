@@ -97,7 +97,7 @@ export function WidgetFrame({
             <Box
               style={{
                 position: "relative",
-                filter: `drop-shadow(0 0 14px ${accent6}55)`,
+                filter: ["drop-shadow(0 0 14px ", accent6, "55)"] .join(""),
               }}
             >
               <ThemeIcon

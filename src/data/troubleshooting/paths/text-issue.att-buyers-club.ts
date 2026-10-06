@@ -58,7 +58,7 @@ ${SIGN_OFF}`,
         iphone: [
           ...DEVICE_NETWORK_RESET.iphone,
           "Settings → Messages → iMessage ON",
-          "Settings → Messages → Send & Receive: select phone number + correct Apple ID",
+          "Settings → Messages → Send & Receive: select phone number and correct Apple ID",
         ],
       },
       resolvedTemplate: `Hello,

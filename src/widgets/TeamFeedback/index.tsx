@@ -2,10 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
+  Box,
   Button,
   Card,
   Divider,
+  FileButton,
   Group,
+  Image,
   Modal,
   Select,
   Stack,
@@ -21,7 +24,10 @@ import {
   IconEdit,
   IconMessageCircle,
   IconMessageReply,
+  IconPhoto,
   IconSend,
+  IconTrash,
+  IconX,
 } from "@tabler/icons-react";
 import { api } from "../../lib/api";
 import { useIdentity } from "../../lib/identity";
@@ -34,6 +40,9 @@ type FeedbackRow = {
   feedback_from: string;
   feedback_for: string;
   ticket_number: string | null;
+  screenshot_name: string | null;
+  screenshot_type: string | null;
+  screenshot_data_url: string | null;
   comment: string;
   recipient_comment: string | null;
   recipient_comment_by: string | null;
@@ -48,12 +57,19 @@ type FeedbackRow = {
   created_at: string;
 };
 
+type ScreenshotDraft = {
+  name: string;
+  type: string;
+  dataUrl: string;
+};
+
 type FeedbackDraft = {
   id: number;
   feedback_from: string;
   feedback_for: string;
   ticket_number: string;
   comment: string;
+  screenshot: ScreenshotDraft | null;
 };
 
 type RecipientCommentDraft = {
@@ -86,6 +102,91 @@ function getCanonicalRosterName(identity: { name?: string | null; email?: string
   return ROSTER_BY_EMAIL[email]?.name ?? String(identity?.name ?? "").trim();
 }
 
+function normalizeScreenshotDataUrl(dataUrl: string) {
+  return /^data:image\//i.test(dataUrl) ? dataUrl : "";
+}
+
+async function readScreenshotFile(file: File): Promise<ScreenshotDraft> {
+  if (!file.type.startsWith("image/")) {
+    throw new Error("Please attach an image file for the screenshot.");
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    throw new Error("Screenshot must be 2 MB or smaller.");
+  }
+
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Failed to read the screenshot file."));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  });
+
+  return {
+    name: file.name,
+    type: file.type,
+    dataUrl: normalizeScreenshotDataUrl(dataUrl),
+  };
+}
+
+function ScreenshotPreview({ screenshot, removable = false, onRemove }: { screenshot: ScreenshotDraft; removable?: boolean; onRemove?: () => void }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  return (
+    <>
+      <Card withBorder radius="md" p="sm">
+        <Stack gap="sm">
+          <Group justify="space-between" align="flex-start">
+            <Group gap="xs">
+              <ThemeIcon size="sm" variant="light" color="violet"><IconPhoto size={14} /></ThemeIcon>
+              <Box>
+                <Text size="sm" fw={600}>{screenshot.name || "Attached screenshot"}</Text>
+                <Text size="xs" c="dimmed">Optional screenshot · click to enlarge</Text>
+              </Box>
+            </Group>
+            {removable && onRemove ? (
+              <Button variant="subtle" color="gray" size="compact-xs" leftSection={<IconX size={12} />} onClick={onRemove}>Remove</Button>
+            ) : null}
+          </Group>
+          <Card withBorder radius="sm" p={6} bg="var(--mantine-color-gray-0)">
+            <Box maw="70%">
+              <Image
+                src={screenshot.dataUrl}
+                alt={screenshot.name || "Feedback screenshot"}
+                radius="sm"
+                fit="contain"
+                h={224}
+                onClick={() => setPreviewOpen(true)}
+                style={{ cursor: "zoom-in" }}
+              />
+            </Box>
+          </Card>
+        </Stack>
+      </Card>
+
+      <Modal
+        opened={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title={screenshot.name || "Attached screenshot"}
+        size="95vw"
+        centered
+      >
+        <Stack gap="xs">
+          <Text size="xs" c="dimmed">Full-size preview</Text>
+          <Card withBorder radius="md" p="sm" bg="var(--mantine-color-gray-0)">
+            <Image
+              src={screenshot.dataUrl}
+              alt={screenshot.name || "Feedback screenshot"}
+              radius="md"
+              fit="contain"
+              h="75vh"
+            />
+          </Card>
+        </Stack>
+      </Modal>
+    </>
+  );
+}
+
 function FeedbackCard({
   row,
   action,
@@ -96,9 +197,11 @@ function FeedbackCard({
   isManagerView?: boolean;
 }) {
   const isApproved = row.approval_status === "approved";
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   return (
-    <Card withBorder radius="lg" p="md">
+    <>
+      <Card withBorder radius="lg" p="md">
       <Stack gap={6}>
         <Group justify="space-between" align="flex-start">
           <Group gap="xs" wrap="wrap">
@@ -118,6 +221,26 @@ function FeedbackCard({
           <Text size="xs" c="dimmed">{formatDate(row.created_at)}</Text>
         </Group>
         <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>{row.comment}</Text>
+        {row.screenshot_data_url ? (
+          <Card withBorder radius="md" p="sm" bg="var(--mantine-color-gray-0)">
+            <Stack gap="sm">
+              <Text size="xs" fw={700} c="dimmed">Attached screenshot {row.screenshot_name ? `· ${row.screenshot_name}` : ""} · click to enlarge</Text>
+              <Card withBorder radius="sm" p={6} bg="white">
+                <Box maw="70%">
+                  <Image
+                    src={row.screenshot_data_url}
+                    alt={row.screenshot_name || "Attached feedback screenshot"}
+                    radius="sm"
+                    fit="contain"
+                    h={224}
+                    onClick={() => setPreviewOpen(true)}
+                    style={{ cursor: "zoom-in" }}
+                  />
+                </Box>
+              </Card>
+            </Stack>
+          </Card>
+        ) : null}
         {row.recipient_comment ? (
           <Card withBorder radius="md" p="sm" bg="var(--mantine-color-gray-0)">
             <Stack gap={2}>
@@ -157,6 +280,30 @@ function FeedbackCard({
         </Group>
       </Stack>
     </Card>
+
+      <Modal
+        opened={previewOpen}
+        onClose={() => setPreviewOpen(false)}
+        title={row.screenshot_name || "Attached screenshot"}
+        size="95vw"
+        centered
+      >
+        {row.screenshot_data_url ? (
+          <Stack gap="xs">
+            <Text size="xs" c="dimmed">Full-size preview</Text>
+            <Card withBorder radius="md" p="sm" bg="var(--mantine-color-gray-0)">
+              <Image
+                src={row.screenshot_data_url}
+                alt={row.screenshot_name || "Attached feedback screenshot"}
+                radius="md"
+                fit="contain"
+                h="75vh"
+              />
+            </Card>
+          </Stack>
+        ) : null}
+      </Modal>
+    </>
   );
 }
 
@@ -171,6 +318,8 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [approvingId, setApprovingId] = useState<number | null>(null);
+  const [denyingId, setDenyingId] = useState<number | null>(null);
+  const [deletingApprovedId, setDeletingApprovedId] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -184,6 +333,7 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
   const [feedbackFor, setFeedbackFor] = useState<string | null>(null);
   const [ticketNumber, setTicketNumber] = useState("");
   const [comment, setComment] = useState("");
+  const [screenshot, setScreenshot] = useState<ScreenshotDraft | null>(null);
 
   const teamOptions = useMemo(
     () => PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name })),
@@ -249,6 +399,9 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
         feedback_from: effectiveFrom,
         feedback_for: feedbackFor,
         ticket_number: ticketNumber.trim() || null,
+        screenshot_name: screenshot?.name ?? null,
+        screenshot_type: screenshot?.type ?? null,
+        screenshot_data_url: screenshot?.dataUrl ?? null,
         comment: comment.trim(),
         submitted_by: submittedBy,
       });
@@ -258,6 +411,7 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
       setFeedbackFor(null);
       setTicketNumber("");
       setComment("");
+      setScreenshot(null);
       setSuccessMessage(
         isManager
           ? "Feedback saved and approved immediately."
@@ -289,6 +443,36 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
     }
   }
 
+  async function denyFeedback(id: number) {
+    setDenyingId(id);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api.delete<{ ok: true }>(`/api/manager_feedback?id=${id}`);
+      setSuccessMessage("Pending feedback was denied and removed.");
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setDenyingId(null);
+    }
+  }
+
+  async function deleteApprovedFeedback(id: number) {
+    setDeletingApprovedId(id);
+    setError(null);
+    setSuccessMessage(null);
+    try {
+      await api.delete<{ ok: true }>(`/api/manager_feedback?id=${id}`);
+      setSuccessMessage("Approved feedback was removed from the record.");
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setDeletingApprovedId(null);
+    }
+  }
+
   function openEditModal(row: FeedbackRow) {
     setError(null);
     setSuccessMessage(null);
@@ -298,6 +482,13 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
       feedback_for: String(row.feedback_for ?? ""),
       ticket_number: String(row.ticket_number ?? ""),
       comment: String(row.comment ?? ""),
+      screenshot: row.screenshot_data_url
+        ? {
+            name: String(row.screenshot_name ?? "screenshot"),
+            type: String(row.screenshot_type ?? "image/png"),
+            dataUrl: String(row.screenshot_data_url),
+          }
+        : null,
     });
   }
 
@@ -336,6 +527,9 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
         feedback_from: editingDraft.feedback_from.trim(),
         feedback_for: editingDraft.feedback_for.trim(),
         ticket_number: editingDraft.ticket_number.trim(),
+        screenshot_name: editingDraft.screenshot?.name ?? null,
+        screenshot_type: editingDraft.screenshot?.type ?? null,
+        screenshot_data_url: editingDraft.screenshot?.dataUrl ?? null,
         comment: editingDraft.comment.trim(),
       });
       setSuccessMessage("Feedback updated successfully.");
@@ -444,6 +638,37 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
               minRows={4}
               required
             />
+
+            <Stack gap="xs">
+              <Group justify="space-between" align="center" wrap="wrap">
+                <div>
+                  <Text size="sm" fw={500}>Screenshot (optional)</Text>
+                  <Text size="xs" c="dimmed">Attach an image if it helps explain the feedback.</Text>
+                </div>
+                <FileButton
+                  onChange={async (file) => {
+                    if (!file) return;
+                    try {
+                      const next = await readScreenshotFile(file);
+                      setEditingDraft((current) => (current ? { ...current, screenshot: next } : current));
+                      setError(null);
+                    } catch (e) {
+                      setError(getErrorMessage(e));
+                    }
+                  }}
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                >
+                  {(props) => <Button {...props} variant="light" leftSection={<IconPhoto size={14} />}>Attach screenshot</Button>}
+                </FileButton>
+              </Group>
+              {editingDraft.screenshot ? (
+                <ScreenshotPreview
+                  screenshot={editingDraft.screenshot}
+                  removable
+                  onRemove={() => setEditingDraft((current) => (current ? { ...current, screenshot: null } : current))}
+                />
+              ) : null}
+            </Stack>
 
             <Group justify="flex-end">
               <Button variant="default" onClick={closeEditModal} disabled={editingId !== null}>Cancel</Button>
@@ -559,6 +784,37 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
               required
             />
 
+            <Stack gap="xs">
+              <Group justify="space-between" align="center" wrap="wrap">
+                <div>
+                  <Text size="sm" fw={500}>Screenshot (optional)</Text>
+                  <Text size="xs" c="dimmed">Attach a screenshot if it helps explain the ticket feedback.</Text>
+                </div>
+                <FileButton
+                  onChange={async (file) => {
+                    if (!file) return;
+                    try {
+                      const next = await readScreenshotFile(file);
+                      setScreenshot(next);
+                      setError(null);
+                    } catch (e) {
+                      setError(getErrorMessage(e));
+                    }
+                  }}
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                >
+                  {(props) => <Button {...props} variant="light" leftSection={<IconPhoto size={14} />}>Attach screenshot</Button>}
+                </FileButton>
+              </Group>
+              {screenshot ? (
+                <ScreenshotPreview
+                  screenshot={screenshot}
+                  removable
+                  onRemove={() => setScreenshot(null)}
+                />
+              ) : null}
+            </Stack>
+
             <Group justify="flex-end">
               <Button
                 color="violet"
@@ -615,9 +871,21 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
                             </Button>
                             <Button
                               size="xs"
+                              color="red"
+                              variant="light"
+                              leftSection={<IconTrash size={14} />}
+                              loading={denyingId === row.id}
+                              disabled={approvingId === row.id}
+                              onClick={() => void denyFeedback(Number(row.id))}
+                            >
+                              Deny & Remove
+                            </Button>
+                            <Button
+                              size="xs"
                               color="teal"
                               leftSection={<IconCheck size={14} />}
                               loading={approvingId === row.id}
+                              disabled={denyingId === row.id}
                               onClick={() => void approveFeedback(Number(row.id))}
                             >
                               Approve
@@ -659,14 +927,27 @@ export function TeamFeedbackWidget(_props: { onCollapse?: () => void }) {
                       row={row}
                       isManagerView={isManager}
                       action={
-                        <Button
-                          size="xs"
-                          variant="default"
-                          leftSection={<IconEdit size={14} />}
-                          onClick={() => openEditModal(row)}
-                        >
-                          Edit
-                        </Button>
+                        <Group gap="xs">
+                          <Button
+                            size="xs"
+                            variant="default"
+                            leftSection={<IconEdit size={14} />}
+                            disabled={deletingApprovedId === row.id}
+                            onClick={() => openEditModal(row)}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            size="xs"
+                            color="red"
+                            variant="light"
+                            leftSection={<IconTrash size={14} />}
+                            loading={deletingApprovedId === row.id}
+                            onClick={() => void deleteApprovedFeedback(Number(row.id))}
+                          >
+                            Delete
+                          </Button>
+                        </Group>
                       }
                     />
                   ))}

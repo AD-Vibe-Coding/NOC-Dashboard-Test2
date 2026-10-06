@@ -113,6 +113,8 @@ type TicketSummaryRow = typeof schema.ticket_summaries.$inferSelect;
 type EscalationDraftRow = typeof schema.escalation_drafts.$inferSelect;
 type ShiftHandoverRow = typeof schema.shift_handovers.$inferSelect;
 type WorkAllotmentJobRow = typeof schema.work_allotment_jobs.$inferSelect;
+type WorkAllotmentAsrhHoursRow = typeof schema.work_allotment_asrh_hours.$inferSelect;
+type OwnershipTaskRow = typeof schema.ownership_tasks.$inferSelect;
 type PolishedEmailRow = typeof schema.polished_emails.$inferSelect;
 type PerformanceImportRow = typeof schema.performance_imports.$inferSelect;
 type PerformanceMetricRow = typeof schema.performance_metrics.$inferSelect;
@@ -141,6 +143,7 @@ type NotificationTargetRow = typeof schema.notification_targets.$inferSelect;
 type ReminderPolicyRow = typeof schema.reminder_policies.$inferSelect;
 type NocMttrReportRow = typeof schema.noc_mttr_reports.$inferSelect;
 type ManagerFeedbackRow = typeof schema.manager_feedback.$inferSelect;
+type FinanceCaseRow = typeof schema.finance_cases.$inferSelect;
 
 export const db = {
   breaks: tableClient<BreakRow>("breaks"),
@@ -154,6 +157,8 @@ export const db = {
   escalation_drafts: tableClient<EscalationDraftRow>("escalation_drafts"),
   shift_handovers: tableClient<ShiftHandoverRow>("shift_handovers"),
   work_allotment_jobs: tableClient<WorkAllotmentJobRow>("work_allotment_jobs"),
+  work_allotment_asrh_hours: tableClient<WorkAllotmentAsrhHoursRow>("work_allotment_asrh_hours"),
+  ownership_tasks: tableClient<OwnershipTaskRow>("ownership_tasks"),
   polished_emails: tableClient<PolishedEmailRow>("polished_emails"),
   performance_imports: tableClient<PerformanceImportRow>("performance_imports"),
   performance_metrics: tableClient<PerformanceMetricRow>("performance_metrics"),
@@ -182,4 +187,5 @@ export const db = {
   reminder_policies: tableClient<ReminderPolicyRow>("reminder_policies"),
   noc_mttr_reports: tableClient<NocMttrReportRow>("noc_mttr_reports"),
   manager_feedback: tableClient<ManagerFeedbackRow>("manager_feedback"),
+  finance_cases: tableClient<FinanceCaseRow>("finance_cases"),
 };

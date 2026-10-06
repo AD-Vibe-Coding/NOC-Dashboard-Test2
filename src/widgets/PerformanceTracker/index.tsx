@@ -23,12 +23,13 @@ import {
   IconAlertCircle,
   IconCalendarStats,
   IconCalendarTime,
-  IconChartHistogram,
   IconHistory,
   IconLayoutDashboard,
   IconGavel,
   IconLock,
-  IconReportAnalytics,
+  IconChartBar,
+  IconChartHistogram,
+  IconRefresh,
   IconTrash,
   IconUpload,
   IconUser,
@@ -463,7 +464,7 @@ export function PerformanceTrackerWidget() {
     } catch (err) {
       console.error("[performance-tracker] deleteImport failed:", err);
       setImportError(
-        `Failed to delete import: ${err instanceof Error ? err.message : String(err)}`,
+        ["Failed to delete import: ", err instanceof Error ? err.message : String(err)].join(""),
       );
     }
   }
@@ -476,7 +477,7 @@ export function PerformanceTrackerWidget() {
     } catch (err) {
       console.error("[performance-tracker] reset failed:", err);
       setImportError(
-        `Failed to reset data: ${err instanceof Error ? err.message : String(err)}`,
+        ["Failed to reset data: ", err instanceof Error ? err.message : String(err)].join(""),
       );
     }
   }
@@ -522,7 +523,7 @@ export function PerformanceTrackerWidget() {
           ? "Team-wide metrics + per-member drill-down · Excel import"
           : "Your performance metrics from imported team data"
       }
-      icon={IconReportAnalytics}
+      icon={IconChartBar}
       iconColor="green"
       loading={loading}
       status={{
@@ -631,6 +632,17 @@ export function PerformanceTrackerWidget() {
                   )}
                 </Group>
                 <Group gap="xs" wrap="nowrap">
+                  <Tooltip label="Reload latest performance imports and metrics">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      leftSection={<IconRefresh size={14} />}
+                      onClick={() => refresh()}
+                      loading={loading}
+                    >
+                      Reload
+                    </Button>
+                  </Tooltip>
                   <SegmentedControl
                     size="xs"
                     value={viewMode}
@@ -705,7 +717,7 @@ export function PerformanceTrackerWidget() {
               value="trends"
               leftSection={<IconCalendarStats size={14} />}
             >
-              Trends
+              Team Trends
             </Tabs.Tab>
             {isManager && (
               <Tabs.Tab value="import" leftSection={<IconUpload size={14} />}>

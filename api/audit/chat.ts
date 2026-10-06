@@ -20,6 +20,7 @@
  * }
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { applyCors } from "../_lib/cors.js";
 
 function buildAuditChatSystemPrompt(ctx: {
   ticket_number: string | null;
@@ -102,9 +103,8 @@ YOUR ROLE
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(204).end();
+    const allowed = applyCors(req, res);
+    return allowed ? res.status(204).end() : res.status(403).json({ error: "Origin not allowed" });
   }
 
   if (req.method !== "POST") {

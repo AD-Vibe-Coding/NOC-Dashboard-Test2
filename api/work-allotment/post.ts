@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireManager } from "../_lib/auth-middleware.js";
+import { requireManagerAppBuilder } from "../_lib/appbuilder-auth.js";
 import { ALL_MEMBERS, applyWorkAllotmentsForDay, WORK_ALLOTMENT_CONFIG } from "../_lib/google-sheets-work-allotment.js";
 
 function parseNow(value: unknown) {
@@ -33,7 +33,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const isCron = req.method === "GET" && cronAuthorized(req);
-  if (!isCron && !requireManager(req, res)) return;
+  if (!isCron) {
+    const managerSession = await requireManagerAppBuilder(req, res);
+    if (!managerSession) return;
+  }
 
   try {
     const now = parseNow(req.query.at ?? req.body?.at);

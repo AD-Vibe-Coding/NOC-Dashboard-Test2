@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "./_lib/supabase-admin.js";
-import { getSession } from "./_lib/auth-middleware.js";
-import { defaultRoleFor, lookupByEmail } from "./_lib/roles.js";
+import { getAuthorizedIdentity } from "./_lib/authz.js";
+import { getAppBuilderSession } from "./_lib/appbuilder-auth.js";
 
 function send(res: VercelResponse, code: number, body: unknown) {
   return res.status(code).json(body);
@@ -19,6 +19,9 @@ function withManagerFeedbackFallback<T extends Record<string, any>>(rows: T[] | 
     recipient_comment_at: null,
     recipient_acknowledged_at: null,
     recipient_acknowledged_by: null,
+    screenshot_name: null,
+    screenshot_type: null,
+    screenshot_data_url: null,
     ...row,
   }));
 }
@@ -42,21 +45,9 @@ function normalizePersonName(value: string | null | undefined) {
     .replace(/\s+/g, " ");
 }
 
-function getEffectiveRole(session: { role?: string | null; email?: string | null; name?: string | null } | null) {
-  if (!session) return "anonymous";
-  return (
-    session.role
-    ?? lookupByEmail(String(session.email ?? "").toLowerCase())?.role
-    ?? defaultRoleFor(String(session.name ?? ""))
-    ?? "anonymous"
-  );
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const session = getSession(req);
-  const role = getEffectiveRole(session);
-  const canonicalIdentity = lookupByEmail(String(session?.email ?? "").toLowerCase());
-  const sessionName = String(canonicalIdentity?.name ?? session?.name ?? "").trim();
+  const session = await getAppBuilderSession(req);
+  const { role, name: sessionName } = await getAuthorizedIdentity(session);
 
   if (!sessionName) {
     return send(res, 403, { error: "Sign in required." });
@@ -79,6 +70,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isMissingColumnError(error, "recipient_comment")
         || isMissingColumnError(error, "recipient_read_at")
         || isMissingColumnError(error, "recipient_acknowledged_at")
+        || isMissingColumnError(error, "screenshot_name")
+        || isMissingColumnError(error, "screenshot_type")
+        || isMissingColumnError(error, "screenshot_data_url")
       ) {
         const fallback = await applyScope(
           supabaseAdmin
@@ -96,13 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const baseRows = withManagerFeedbackFallback(data);
       const rows = role === "manager"
         ? baseRows
-        : baseRows.filter((row) => {
-            const signedInNames = new Set([
-              normalizePersonName(sessionName),
-              normalizePersonName(session?.name ?? ""),
-            ].filter(Boolean));
-            return signedInNames.has(normalizePersonName(row.feedback_for));
-          });
+        : baseRows.filter((row) => normalizePersonName(row.feedback_for) === normalizePersonName(sessionName));
 
       if (role !== "manager" && req.query.markRead === "true" && rows.length > 0) {
         const unreadIds = rows
@@ -142,6 +130,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const feedbackFor = row?.feedback_for !== undefined ? String(row.feedback_for ?? "").trim() : undefined;
       const comment = row?.comment !== undefined ? String(row.comment ?? "").trim() : undefined;
       const ticketNumber = row?.ticket_number !== undefined ? (String(row.ticket_number ?? "").trim() || null) : undefined;
+      const screenshotName = row?.screenshot_name !== undefined ? (String(row.screenshot_name ?? "").trim() || null) : undefined;
+      const screenshotType = row?.screenshot_type !== undefined ? (String(row.screenshot_type ?? "").trim() || null) : undefined;
+      const screenshotDataUrl = row?.screenshot_data_url !== undefined ? (String(row.screenshot_data_url ?? "").trim() || null) : undefined;
       const approvalStatus = row?.approval_status !== undefined ? String(row.approval_status ?? "").trim() : undefined;
       const recipientComment = row?.recipient_comment !== undefined ? String(row.recipient_comment ?? "").trim() : undefined;
       const recipientAcknowledge = row?.recipient_acknowledge === true;
@@ -150,7 +141,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return send(res, 400, { error: "A valid feedback id is required." });
       }
 
-      const managerChangeRequested = [feedbackFrom, feedbackFor, comment, ticketNumber, approvalStatus].some((value) => value !== undefined);
+      const managerChangeRequested = [feedbackFrom, feedbackFor, comment, ticketNumber, screenshotName, screenshotType, screenshotDataUrl, approvalStatus].some((value) => value !== undefined);
       const recipientCommentRequested = recipientComment !== undefined;
       const recipientAcknowledgeRequested = recipientAcknowledge;
 
@@ -183,11 +174,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const targetRow = recipientLookup.data;
-        const signedInNames = new Set([
-          normalizePersonName(sessionName),
-          normalizePersonName(session?.name ?? ""),
-        ].filter(Boolean));
-        const isRecipient = signedInNames.has(normalizePersonName(targetRow?.feedback_for));
+        const isRecipient = normalizePersonName(targetRow?.feedback_for) === normalizePersonName(sessionName);
         const isApprovedRecipientRow = targetRow?.approval_status === "approved";
 
         if (!targetRow || !isRecipient || !isApprovedRecipientRow) {
@@ -231,6 +218,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (ticketNumber !== undefined) {
           changes.ticket_number = ticketNumber;
         }
+        if (screenshotName !== undefined) {
+          changes.screenshot_name = screenshotName;
+        }
+        if (screenshotType !== undefined) {
+          changes.screenshot_type = screenshotType;
+        }
+        if (screenshotDataUrl !== undefined) {
+          changes.screenshot_data_url = screenshotDataUrl;
+        }
         if (approvalStatus !== undefined) {
           changes.approval_status = approvalStatus;
           if (approvalStatus === "approved") {
@@ -248,6 +244,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isMissingColumnError(error, "recipient_comment")
         || isMissingColumnError(error, "recipient_read_at")
         || isMissingColumnError(error, "recipient_acknowledged_at")
+        || isMissingColumnError(error, "screenshot_name")
+        || isMissingColumnError(error, "screenshot_type")
+        || isMissingColumnError(error, "screenshot_data_url")
       ) {
         const fallback = await updateQuery.select("id, feedback_from, feedback_for, ticket_number, comment, submitted_by, approval_status, approved_by, approved_at, created_at");
         data = withManagerFeedbackFallback(fallback.data);
@@ -279,6 +278,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const feedbackFor = String(row?.feedback_for ?? "").trim();
       const comment = String(row?.comment ?? "").trim();
       const ticketNumber = String(row?.ticket_number ?? "").trim() || null;
+      const screenshotName = String(row?.screenshot_name ?? "").trim() || null;
+      const screenshotType = String(row?.screenshot_type ?? "").trim() || null;
+      const screenshotDataUrl = String(row?.screenshot_data_url ?? "").trim() || null;
       const requestedFrom = String(row?.feedback_from ?? "").trim();
       const submittedBy = sessionName;
       const isManager = role === "manager";
@@ -293,6 +295,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!feedbackFor || !comment || !feedbackFrom) {
         return send(res, 400, { error: "feedback_for, comment, and feedback_from are required." });
       }
+      if ((screenshotName || screenshotType || screenshotDataUrl) && (!screenshotDataUrl || !screenshotType)) {
+        return send(res, 400, { error: "Attached screenshots must include image data and a file type." });
+      }
 
       let { data, error } = await supabaseAdmin
         .from("manager_feedback")
@@ -300,6 +305,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           feedback_from: feedbackFrom,
           feedback_for: feedbackFor,
           ticket_number: ticketNumber,
+          screenshot_name: screenshotName,
+          screenshot_type: screenshotType,
+          screenshot_data_url: screenshotDataUrl,
           comment,
           submitted_by: submittedBy,
           approval_status: approvalStatus,
@@ -315,6 +323,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         isMissingColumnError(error, "recipient_comment")
         || isMissingColumnError(error, "recipient_read_at")
         || isMissingColumnError(error, "recipient_acknowledged_at")
+        || isMissingColumnError(error, "screenshot_name")
+        || isMissingColumnError(error, "screenshot_type")
+        || isMissingColumnError(error, "screenshot_data_url")
       ) {
         const fallback = await supabaseAdmin
           .from("manager_feedback")
@@ -340,7 +351,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return send(res, 201, withManagerFeedbackFallback(data));
     }
 
-    res.setHeader("Allow", "GET, POST");
+    if (req.method === "DELETE") {
+      if (role !== "manager") {
+        return send(res, 403, { error: "Only managers can remove feedback submissions." });
+      }
+
+      const id = Number(req.query.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return send(res, 400, { error: "A valid feedback id is required." });
+      }
+
+      const existing = await supabaseAdmin
+        .from("manager_feedback")
+        .select("id, approval_status")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (existing.error) {
+        return send(res, 500, { error: existing.error.message });
+      }
+
+      if (!existing.data) {
+        return send(res, 404, { error: "Feedback record not found." });
+      }
+
+      const deletion = await supabaseAdmin
+        .from("manager_feedback")
+        .delete()
+        .eq("id", id);
+
+      if (deletion.error) {
+        return send(res, 500, { error: deletion.error.message });
+      }
+
+      return send(res, 200, { ok: true });
+    }
+
+    res.setHeader("Allow", "GET, POST, DELETE");
     return send(res, 405, { error: "Method not allowed" });
   } catch (err) {
     return send(res, 500, {

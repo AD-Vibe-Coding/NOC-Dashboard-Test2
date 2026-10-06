@@ -6,8 +6,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // extensions are required for Node's strict ESM resolver on Vercel.
 import { getProvider } from "../_lib/oauth-providers.js";
 import { getOrigin, getRedirectUri } from "../_lib/redirect-uri.js";
-import { mintExchangeToken, setSession, type SessionPayload } from "../_lib/session.js";
-import { defaultRoleFor, lookupByEmail } from "../../_lib/roles.js";
+import { buildSessionClearCookie, mintExchangeToken, setSession, type SessionPayload } from "../_lib/session.js";
+import { lookupByEmail } from "../../_lib/roles.js";
 import { saveGoogleAccountTokens, upsertGoogleSessionRow } from "../../_lib/google-gmail.js";
 
 const STATE_COOKIE_PREFIX = "oauth_state_";
@@ -116,12 +116,24 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     return renderError(res, targetOrigin, "missing_subject", "Provider did not return a stable user id.");
   }
 
+  const approvedMember = lookupByEmail(profile.email ?? "");
+  if (!approvedMember) {
+    res.setHeader("Set-Cookie", buildSessionClearCookie());
+    return renderError(
+      res,
+      targetOrigin,
+      "member_not_authorized",
+      "Your email is not on the approved access list for this dashboard. Please contact the NOC leadership team if you need access.",
+    );
+  }
+
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     sub: profile.sub,
     email: profile.email,
-    name: profile.name,
+    name: approvedMember.name,
     picture: profile.picture,
+    role: approvedMember.role,
     provider: provider.id,
     iat: now,
     exp: now + 60 * 60 * 24 * 7,
@@ -130,7 +142,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   try {
     await upsertGoogleSessionRow({
-      name: profile.name,
+      name: approvedMember.name,
       email: profile.email,
       picture: profile.picture,
     });
@@ -138,7 +150,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     await saveGoogleAccountTokens({
       googleSub: profile.sub,
       email: profile.email,
-      name: profile.name,
+      name: approvedMember.name,
       tokens,
     });
   } catch (error) {
@@ -219,18 +231,31 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
   // emitting `\u003c` for any `<` keeps the inline-script
   // guarantee self-contained.
   const targetOriginLiteral = JSON.stringify(targetOrigin).replace(/</g, "\\u003c");
+  const appFallbackPathLiteral = JSON.stringify("/");
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.end(`<!doctype html><meta charset="utf-8"><title>Sign-in complete</title>
 <body style="font-family:system-ui;padding:2rem;color:#374151">
-<p>Sign-in complete. You can close this window.</p>
+<p>Sign-in complete. Returning to the app…</p>
 <script>
+  var delivered = false;
   try {
     if (window.opener) {
       window.opener.postMessage({ type: "appbuilder-oauth-success", provider: "google", exchangeToken: ${tokenLiteral} }, ${targetOriginLiteral});
+      delivered = true;
     }
   } catch (e) {}
-  setTimeout(function(){ window.close(); }, 100);
+
+  setTimeout(function(){
+    try { window.close(); } catch (e) {}
+    if (!delivered) {
+      try {
+        window.location.replace(${appFallbackPathLiteral});
+      } catch (e) {
+        window.location.href = ${appFallbackPathLiteral};
+      }
+    }
+  }, 150);
 </script>
 </body>`);
 }

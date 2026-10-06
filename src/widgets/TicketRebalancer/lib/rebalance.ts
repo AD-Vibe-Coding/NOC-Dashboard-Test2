@@ -582,8 +582,9 @@ export function rebalance(
 // ---------------------------------------------------------------------------
 // Shift-handoff mode
 // ---------------------------------------------------------------------------
-// Only hot SLA tickets (stage Pending Carrier Action / Update + priority
-// Critical or High AND service is on the SLA list) are eligible to move.
+// Only hot SLA tickets are eligible to move.
+// Here, "hot" means carrier-action/update stage plus Critical/High priority,
+// and the service must be on the SLA list.
 // Other tickets stay where they are.
 //
 // Eligible agent pool depends on the transition:

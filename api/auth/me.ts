@@ -42,6 +42,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       name,
       picture,
       provider: session.provider,
+      role,
     },
   }));
 }

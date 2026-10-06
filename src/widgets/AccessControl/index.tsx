@@ -79,7 +79,7 @@ interface SsoConfig {
 
 interface AccessControlData {
   members: TeamMember[];
-  counts: { manager: number; tier3: number; tier2: number; tier1: number };
+  counts: Record<Role, number>;
   sso: SsoConfig;
 }
 
@@ -87,6 +87,7 @@ const ROLE_OPTIONS = [
   { value: "tier1", label: "Tier 1 — Entry-level NOC tech" },
   { value: "tier2", label: "Tier 2 — Mid-level NOC tech" },
   { value: "tier3", label: "Tier 3 — Senior NOC tech" },
+  { value: "customer_service_manager", label: "Customer Service Manager — NOC MTTR only" },
   { value: "manager", label: "Manager — Full access" },
 ];
 
@@ -300,7 +301,7 @@ export function AccessControlWidget() {
               {/* Stats row */}
               {data && ssoStats && (
                 <Group gap="xs" wrap="wrap">
-                  {(["manager", "tier3", "tier2", "tier1"] as Role[]).map((role) =>
+                  {(["manager", "customer_service_manager", "tier3", "tier2", "tier1"] as Role[]).map((role) =>
                     data.counts[role] > 0 ? (
                       <Badge
                         key={role}

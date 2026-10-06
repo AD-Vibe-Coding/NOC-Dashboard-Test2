@@ -333,7 +333,7 @@ async function sendEmail(
       );
       return { sent: true };
     }
-    const failMatch = /__EMAIL_FAILED__\s*[:\-]?\s*(.+)/.exec(assembled);
+    const failMatch = assembled.match(/__EMAIL_FAILED__\s*[:\-]?\s*(.+)/);
     if (failMatch) {
       const reason = failMatch[1].trim().slice(0, 200);
       console.warn(`[wfh-proxy] email failed via agent → ${reason}`);
@@ -616,7 +616,7 @@ export function wfhProxyPlugin(): Plugin {
           const url = new URL(req.url ?? "/", "http://localhost");
           // Strip the /api/wfh/requests prefix; what remains is "" or "/:id"
           const path = url.pathname;
-          const idMatch = /^\/?([A-Za-z0-9_-]+)$/.exec(path);
+          const idMatch = path.match(/^\/?([A-Za-z0-9_-]+)$/);
           const targetId = idMatch ? idMatch[1] : null;
 
           // ---- LIST -----------------------------------------------------

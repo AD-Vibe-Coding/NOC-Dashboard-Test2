@@ -8,6 +8,7 @@
  * Model: AUDIT_MODEL env var (defaults to AI_AGENT_ID — the Ticket Auditor agent).
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { applyCors } from "../_lib/cors.js";
 
 const SYSTEM_PROMPT = `TICKET AUDITOR — CONDENSED RULES
 Last Updated: June 2026 | Version: 3.1
@@ -182,9 +183,8 @@ function buildUserMessage(ticketText: string, fileName: string): string {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(204).end();
+    const allowed = applyCors(req, res);
+    return allowed ? res.status(204).end() : res.status(403).json({ error: "Origin not allowed" });
   }
 
   if (req.method !== "POST") {

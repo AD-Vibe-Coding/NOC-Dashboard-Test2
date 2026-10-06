@@ -1,4 +1,6 @@
+import { google } from "googleapis";
 import { readRosterDailyEntries, readRosterMonthEntries } from "../roster-shift.js";
+import { supabaseAdmin } from "./supabase-admin.js";
 import { postSlackMessage } from "./slack.js";
 
 export const WORK_ALLOTMENT_CONFIG = {
@@ -6,11 +8,11 @@ export const WORK_ALLOTMENT_CONFIG = {
   rosterSpreadsheetUrl: "https://docs.google.com/spreadsheets/d/14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4/edit?gid=1728888175#gid=1728888175",
   rosterTabGid: "1728888175",
   fairnessSpreadsheetId: "1nxL4kM6Q7YG44j2_wjdiEK511KMgIphCdLVvm7Nnji4",
-  fairnessSpreadsheetUrl: "https://docs.google.com/spreadsheets/d/1nxL4kM6Q7YG44j2_wjdiEK511KMgIphCdLVvm7Nnji4/edit?gid=1765807502#gid=1765807502",
-  fairnessTabGid: "1765807502",
-  fairnessTabName: "Fairness Tracker - Aug'26",
-  fairnessTrackerMode: "google-sheet",
-  fairnessTrackerName: "Fairness Tracker - Aug'26",
+  fairnessSpreadsheetUrl: "",
+  fairnessTabGid: "2080121964",
+  fairnessTabName: "AS&RH Hours Table",
+  fairnessTrackerMode: "app-table",
+  fairnessTrackerName: "AS&RH Hours Table",
   slackChannelId: process.env.SLACK_CHANNEL_ID || "C09Q89PHN8M",
   slackChannelName: process.env.SLACK_CHANNEL_NAME || "noc-team",
   timeZone: "America/Los_Angeles",
@@ -58,6 +60,8 @@ export const ALL_MEMBERS = [
   "Sriram Parisa",
 ];
 
+export const BASE_SHIFT_ORDER = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
+
 export const SHIFT_DEFINITIONS = {
   S1: { label: "Shift 1", rosterCode: "S1", postHour: 3, postMinute: 25, handoffHour: 3, handoffMinute: 45, start: "3:00 AM", end: "12:00 PM", next: "S2" },
   S2: { label: "Shift 2", rosterCode: "S2", postHour: 6, postMinute: 25, handoffHour: 6, handoffMinute: 45, start: "6:00 AM", end: "3:00 PM", next: "S3" },
@@ -66,7 +70,7 @@ export const SHIFT_DEFINITIONS = {
   "S4.1": { label: "Shift 4.1", rosterCode: "S4.1", postHour: 14, postMinute: 25, handoffHour: 14, handoffMinute: 45, start: "2:25 PM", end: "8:00 PM", next: "S4.2" },
   "S4.2": { label: "Shift 4.2", rosterCode: "S4.2", postHour: 16, postMinute: 25, handoffHour: 16, handoffMinute: 45, start: "4:25 PM", end: "8:00 PM", next: "S5" },
   S5: { label: "Shift 5", rosterCode: "S5", postHour: 19, postMinute: 25, handoffHour: 19, handoffMinute: 45, start: "7:00 PM", end: "4:00 AM", next: "S6" },
-  S6: { label: "Shift 6", rosterCode: "S6", postHour: 0, postMinute: 25, handoffHour: 0, handoffMinute: 45, start: "11:30 PM", end: "8:30 AM", next: "S1" },
+  S6: { label: "Shift 6", rosterCode: "S6", postHour: 0, postMinute: 25, handoffHour: 0, handoffMinute: 45, start: "12:00 AM", end: "9:00 AM", next: "S1" },
 };
 
 const SHIFT_MATCHERS = [
@@ -75,7 +79,7 @@ const SHIFT_MATCHERS = [
   { code: "S3", patterns: [/^8:?00\s*am\s*-\s*5:?00\s*pm$/i, /^s3$/i] },
   { code: "S4", patterns: [/^11:?00\s*am\s*-\s*8:?00\s*pm$/i, /^s4$/i] },
   { code: "S5", patterns: [/^7:?00\s*pm\s*-\s*4:?00\s*am$/i, /^s5$/i] },
-  { code: "S6", patterns: [/^(11:?30\s*pm|12:?00\s*am)\s*-\s*(8:?30\s*am|9:?00\s*am)$/i, /^s6$/i] },
+  { code: "S6", patterns: [/^(12:?00\s*am\s*-\s*9:?00\s*am|12:?30\s*am\s*-\s*9:?30\s*am)$/i, /^s6$/i, /^s5\.1$/i] },
 ];
 
 export const FAIRNESS_SHIFT_GROUPS = [
@@ -98,6 +102,28 @@ export const FAIRNESS_SHIFT_GROUPS = [
     shiftLabels: ["8:00 AM – 5:00 PM", "11:00 AM – 8:00 PM"],
   },
 ];
+
+function parseServiceAccountJson() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_JSON. Add the Google service account JSON secret, then share the fairness sheet with that service account as an Editor.");
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON.");
+  }
+}
+
+function getSheetsClient() {
+  const credentials = parseServiceAccountJson();
+  const auth = new google.auth.GoogleAuth({
+    credentials,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+  return google.sheets({ version: "v4", auth });
+}
 
 function buildFairnessCsvUrl() {
   return `https://docs.google.com/spreadsheets/d/${WORK_ALLOTMENT_CONFIG.fairnessSpreadsheetId}/export?format=csv&gid=${WORK_ALLOTMENT_CONFIG.fairnessTabGid}`;
@@ -151,57 +177,33 @@ function parseFairnessHeaderToDateKey(header, targetMonthKey) {
 }
 
 async function readFairnessTrackerEntries(targetMonthKey) {
-  const response = await fetch(buildFairnessCsvUrl());
-  if (!response.ok) {
-    throw new Error(`Fairness tracker CSV error: ${response.status}`);
+  const { data, error } = await supabaseAdmin
+    .from("work_allotment_asrh_hours")
+    .select("member_name, date_key, month_key, hours")
+    .eq("month_key", targetMonthKey)
+    .order("date_key", { ascending: true })
+    .order("member_name", { ascending: true });
+
+  if (error) {
+    throw new Error(`AS&RH hours table load failed: ${error.message}`);
   }
-
-  const csv = await response.text();
-  const rows = csv
-    .replace(/^\uFEFF/, "")
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map(parseCsvLine);
-
-  const headerRow = rows[1] ?? [];
-  const dateColumns = headerRow
-    .map((header, index) => ({ index, dateKey: parseFairnessHeaderToDateKey(header, targetMonthKey) }))
-    .filter((entry) => entry.index > 0 && entry.dateKey);
 
   const entries = [];
-  for (const row of rows.slice(2)) {
-    const name = normalizeName(row[0]);
-    if (!name || EXCLUDED_FAIRNESS_MEMBERS.has(name)) continue;
-
-    for (const { index, dateKey } of dateColumns) {
-      const hours = Number(String(row[index] ?? "").trim());
-      if (!Number.isFinite(hours) || hours <= 0) continue;
-      entries.push({ name, dateKey, hours });
-    }
-  }
-
   const totalsByName = new Map();
-  const totalsHeaderIndex = rows.findIndex((row) => {
-    const first = normalizeCell(row[0]).toUpperCase();
-    const second = normalizeCell(row[1]).toUpperCase();
-    return first === "MEMBER NAME" && second.includes("TOTAL HOURS");
-  });
 
-  if (totalsHeaderIndex >= 0) {
-    for (const row of rows.slice(totalsHeaderIndex + 1)) {
-      const name = normalizeName(row[0]);
-      const hoursCell = normalizeCell(row[1]);
-      if (!name) continue;
-      if (name.toUpperCase() === "FAIRNESS SCORE CALCULATION") continue;
-      if (!hoursCell) break;
-      const hours = Number(hoursCell);
-      if (EXCLUDED_FAIRNESS_MEMBERS.has(name) || !Number.isFinite(hours) || hours < 0) continue;
-      totalsByName.set(name, hours);
-    }
+  for (const row of data ?? []) {
+    const name = normalizeName(row.member_name);
+    const dateKey = normalizeCell(row.date_key);
+    const hours = Number(row.hours ?? 0);
+    if (!name || EXCLUDED_FAIRNESS_MEMBERS.has(name)) continue;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) continue;
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    entries.push({ name, dateKey, hours });
+    totalsByName.set(name, Number(totalsByName.get(name) ?? 0) + hours);
   }
 
   return {
-    sheetTitle: WORK_ALLOTMENT_CONFIG.fairnessTabName,
+    sheetTitle: WORK_ALLOTMENT_CONFIG.fairnessTrackerName,
     spreadsheetUrl: WORK_ALLOTMENT_CONFIG.fairnessSpreadsheetUrl,
     entries,
     totalsByName,
@@ -239,6 +241,13 @@ function zonedParts(date) {
 function localDateKey(date) {
   const p = zonedParts(date);
   return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+function addDaysToDateKey(dateKey, deltaDays) {
+  const [year, month, day] = String(dateKey).split("-").map(Number);
+  const dt = new Date(Date.UTC(year, (month || 1) - 1, day || 1));
+  dt.setUTCDate(dt.getUTCDate() + Number(deltaDays || 0));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
 
 function monthKey(date) {
@@ -281,29 +290,101 @@ function shiftCodeFromWindow(shift) {
     S3: [[480, 1020]],
     S4: [[660, 1200]],
     S5: [[1140, 240]],
-    S6: [[1410, 510], [0, 540]],
+    S6: [[0, 540], [30, 570], [1410, 510]],
   };
   return Object.entries(windows).find(([, ranges]) =>
     ranges.some((values) => values[0] === start && values[1] === end)
   )?.[0] ?? null;
 }
 
+function inferShiftCodeFromWindow(shift) {
+  if (!shift) return null;
+  const exact = shiftCodeFromWindow(shift);
+  if (exact) return exact;
+  const start = Number(shift.start);
+  if (!Number.isFinite(start)) return null;
+  if (start >= 1410 || start < 180) return "S6";
+  if (start >= 1140) return "S5";
+  if (start >= 660) return "S4";
+  if (start >= 480) return "S3";
+  if (start >= 360) return "S2";
+  if (start >= 180) return "S1";
+  return null;
+}
+
+function parseTimeToMinutes(value) {
+  const text = normalizeCell(value);
+  const match = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return hour * 60 + minute;
+}
+
+function isMissingTableError(error) {
+  const message = String(error?.message ?? error ?? "");
+  return message.includes("schema cache") || message.includes("does not exist");
+}
+
+async function loadScheduleOverrides(targetDate) {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("break_schedules")
+      .select("employee_name, schedule_type, schedule_date, start_time, end_time, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+
+    const fixed = new Map();
+    const overrides = new Map();
+    for (const row of data ?? []) {
+      const key = normalizeName(row.employee_name);
+      if (!key) continue;
+      if (row.schedule_type === "override" && row.schedule_date === targetDate && !overrides.has(key)) {
+        overrides.set(key, row);
+      }
+      if (row.schedule_type === "fixed" && !fixed.has(key)) {
+        fixed.set(key, row);
+      }
+    }
+    return { fixed, overrides };
+  } catch (error) {
+    if (!isMissingTableError(error)) throw error;
+    return { fixed: new Map(), overrides: new Map() };
+  }
+}
+
+function scheduleWindowFromRow(row) {
+  if (!row) return null;
+  const start = parseTimeToMinutes(row.start_time);
+  const end = parseTimeToMinutes(row.end_time);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start === end) return null;
+  return { start, end };
+}
+
 /** Uses the same roster endpoint reader as Team Availability and Ticket Rebalancer. */
 export async function readRosterForDate(date) {
   const targetDate = localDateKey(date);
   const sharedRoster = await readRosterDailyEntries(targetDate);
+  const schedules = await loadScheduleOverrides(targetDate);
   const members = (sharedRoster.dailyEntries ?? []).map((entry) => {
     const name = normalizeName(entry.name);
     const rawValue = normalizeCell(entry.cell);
-    const offReason = entry.available ? null : (isOffStatus(rawValue) ? rawValue : (entry.status === "Other" || entry.status === "Blank" ? null : entry.status));
+    const scheduleOverride = schedules.overrides.get(name) ?? null;
+    const effectiveShiftWindow = scheduleWindowFromRow(scheduleOverride) ?? entry.shift ?? null;
+    const offReason = effectiveShiftWindow
+      ? null
+      : (entry.available ? null : (isOffStatus(rawValue) ? rawValue : (entry.status === "Other" || entry.status === "Blank" ? null : entry.status)));
+    const effectiveRawValue = scheduleOverride ? `${scheduleOverride.start_time}-${scheduleOverride.end_time}` : rawValue;
     return {
       name,
-      rawValue,
-      shiftCode: shiftCodeFromWindow(entry.shift) ?? parseShiftCode(rawValue),
+      rawValue: effectiveRawValue,
+      shiftCode: shiftCodeFromWindow(effectiveShiftWindow) ?? inferShiftCodeFromWindow(effectiveShiftWindow) ?? parseShiftCode(effectiveRawValue) ?? parseShiftCode(rawValue),
       offReason,
       isManager: MANAGERS.has(name),
-      asrhRestricted: RESTRICTED_ASRH.has(name),
-      shiftWindow: entry.shift ?? null,
+      asrhRestricted: RESTRICTED_ASRH.has(name) || isTempAsrhExcludedByName(name, targetDate),
+      shiftWindow: effectiveShiftWindow,
+      scheduleSource: scheduleOverride?.schedule_type ?? "roster",
     };
   }).filter((member) => member.name);
 
@@ -448,7 +529,10 @@ function buildRosterFairnessSummary({ monthRoster, memberNames = [], targetDateK
       const trackerHours = fairnessTotalsByName.has(row.name)
         ? Number(fairnessTotalsByName.get(row.name) ?? 0)
         : 0;
-      const fairnessUnits = workedDays + trackerHours;
+      // Fairness scoring must come strictly from the Google Sheet AS&RH hours.
+      // Worked days remain visible for context only and must not be added into
+      // the score/highest calculation.
+      const fairnessUnits = trackerHours;
       return {
         key: group.key,
         label: group.label,
@@ -546,12 +630,59 @@ export function detectDueShiftSlot(now = new Date()) {
   return match?.[0] ?? null;
 }
 
-function memberMapByShift(roster) {
+// S5 (7:00 PM – 4:00 AM) members never hand off tickets — exclude them from
+// "Ticket Ownership - Off Members" ownership assignments entirely.
+// When a member is off (WO/PTO), their roster cell contains the off reason (e.g. "WO"),
+// NOT their shift time, so shiftCode resolves to null. We use a name-based set
+// as the authoritative fallback for S5 members.
+const NO_TICKET_HANDOFF_SHIFTS = new Set(["S5"]);
+const S5_MEMBERS = new Set([
+  "Akram Ahmed",
+]);
+
+function isS5Member(member) {
+  return NO_TICKET_HANDOFF_SHIFTS.has(member.shiftCode) || S5_MEMBERS.has(member.name);
+}
+
+// Temporary date-based exclusions from Ticket Ownership – Off Members.
+// A member is excluded when the posting date is on or before `until` (YYYY-MM-DD, inclusive).
+// Remove or extend an entry once the exclusion period ends.
+const TEMP_HANDOFF_EXCLUSIONS = [
+  { name: "Kenya Gentry", until: "2026-09-20", reason: "Extended PTO — no tickets assigned" },
+  { name: "Hamza Rahmani", until: "2026-10-04", reason: "Leave through October 4 — no tickets assigned" },
+];
+
+const TEMP_ASRH_EXCLUSIONS = [
+  { name: "Kenya Gentry", until: "2026-09-30", reason: "Temporarily excluded from AS&RH assignment through September 30" },
+];
+
+export function isTempHandoffExcludedByName(name, dateKey) {
+  return TEMP_HANDOFF_EXCLUSIONS.some(
+    (entry) => entry.name === String(name ?? "").trim() && dateKey <= entry.until,
+  );
+}
+
+function isTempAsrhExcludedByName(name, dateKey) {
+  return TEMP_ASRH_EXCLUSIONS.some(
+    (entry) => entry.name === String(name ?? "").trim() && dateKey <= entry.until,
+  );
+}
+
+function isTempHandoffExcluded(member, dateKey) {
+  return isTempHandoffExcludedByName(member?.name, dateKey);
+}
+
+function memberMapByShift(roster, now = new Date()) {
+  const dateKey = localDateKey(now);
   const byShift = new Map();
   const offMembers = [];
   for (const member of roster.members) {
     if (member.isManager) continue;
     if (member.offReason) {
+      // Skip S5 (7 PM–4 AM) members — they don't hand off tickets
+      if (isS5Member(member)) continue;
+      // Skip members excluded for a fixed date range (e.g. extended PTO with no tickets)
+      if (isTempHandoffExcluded(member, dateKey)) continue;
       offMembers.push(member);
       continue;
     }
@@ -577,8 +708,9 @@ function eligibleShiftCodesForSlot(slot) {
 function asrhShiftCodesForSlot(slot) {
   if (slot === "S1") return ["S1", "S6"];
   if (slot === "S2") return ["S2", "S1", "S6"];
-  if (slot === "S3") return ["S3"];
-  if (slot === "S4") return ["S4"];
+  // When no native S3 is available, S2 and then S1 can cover until S4 becomes available.
+  if (slot === "S3") return ["S3", "S2", "S1"];
+  if (slot === "S4") return ["S4", "S2"];
   if (slot === "S4.1") return ["S4"];
   if (slot === "S4.2") return ["S4"];
   if (slot === "S5") return ["S5"];
@@ -614,6 +746,8 @@ function minutesSinceShiftStartAtSlot(member, slot) {
 
 function canReceiveAsrhWithinFirstHour(member, slot) {
   if (!member) return false;
+  // S3 may be covered by S1/S2 when there is no native S3 member available.
+  if (slot === "S3" && ["S1", "S2"].includes(member.shiftCode)) return true;
   if (!["S1", "S2", "S3"].includes(member.shiftCode)) return true;
   return minutesSinceShiftStartAtSlot(member, slot) <= 60;
 }
@@ -626,9 +760,13 @@ function getFairnessGroupKeyForSlot(slot) {
 function fairnessScoreFor(name, fairness, slot = null) {
   const member = fairness.byName.get(name);
   if (!member) return 0;
+  const total = Number(member.score ?? member.hours ?? 0);
   const groupKey = slot ? getFairnessGroupKeyForSlot(slot) : null;
-  if (groupKey) return Number(member.groupScores?.get(groupKey) ?? 0);
-  return Number(member.score ?? 0);
+  if (!groupKey) return total;
+  const groupScore = Number(member.groupScores?.get(groupKey) ?? 0);
+  // Never hide already-earned hours behind a different group's 0.
+  // Someone with 8h overnight must rank behind 0h S1/S2/S3/S6 peers.
+  return Math.max(groupScore, total);
 }
 
 function sortByFairness(members, fairness, slot = null) {
@@ -642,7 +780,7 @@ function sortByFairness(members, fairness, slot = null) {
 function allowedRollingSourcesForSlot(slot) {
   const allowedTransitions = {
     S2: ["S1", "S6"],
-    S3: ["S1", "S2"],
+    S3: ["S1", "S2", "S6"],
     S4: ["S1", "S2", "S3"],
     "S4.1": ["S2"],
     "S4.2": ["S3"],
@@ -669,15 +807,21 @@ function formatCarryPath(slot, previousSlot = null) {
 
 function preferredPrimaryPoolForSlot(slot, eligible) {
   if (slot === "S1") {
+    // Prefer S6 when they have equal or fewer AS&RH hours than native S1.
+    // Native S1 is only locked in when they are strictly behind S6 on fairness.
+    const s6Pool = eligible.filter((member) => member.shiftCode === "S6");
     const s1Pool = eligible.filter((member) => member.shiftCode === "S1");
-    return s1Pool.length > 0 ? s1Pool : eligible.filter((member) => member.shiftCode === "S6");
+    if (s6Pool.length > 0 && s1Pool.length > 0) return [...s6Pool, ...s1Pool];
+    if (s6Pool.length > 0) return s6Pool;
+    return s1Pool;
   }
   if (slot === "S2") {
     const s2Pool = eligible.filter((member) => member.shiftCode === "S2");
     if (s2Pool.length > 0) return s2Pool;
+    const s6Pool = eligible.filter((member) => member.shiftCode === "S6");
     const s1Pool = eligible.filter((member) => member.shiftCode === "S1");
-    if (s1Pool.length > 0) return s1Pool;
-    return eligible.filter((member) => member.shiftCode === "S6");
+    if (s6Pool.length > 0) return s6Pool;
+    return s1Pool;
   }
   if (slot === "S4.1") return eligible.filter((member) => member.shiftCode === "S4");
   if (slot === "S4.2") return eligible.filter((member) => member.shiftCode === "S4");
@@ -694,14 +838,17 @@ function chooseBackupForSlot(slot, eligible, primaryName) {
   }
 
   if (slot === "S2") {
-    return eligible
-      .filter((member) => member.name !== primaryName && (member.shiftCode === "S1" || member.shiftCode === "S2" || member.shiftCode === "S6"))
-      .map((member) => member.name);
+    const backup = eligible.find(
+      (member) => member.name !== primaryName && (member.shiftCode === "S1" || member.shiftCode === "S2" || member.shiftCode === "S6"),
+    )?.name ?? null;
+    return backup ? [backup] : [];
   }
 
   const backup = eligible.find((member) => member.name !== primaryName)?.name ?? null;
   return backup ? [backup] : [];
 }
+
+const S2_S6_CARRY_BLOCK_THRESHOLD = 16;
 
 function shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligible, fairness, slotIndex }) {
   if (!previousPrimary || !previousSlot || !isAllowedRollingHandoff(previousSlot, slot)) return false;
@@ -709,14 +856,65 @@ function shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligib
   if (!carriedMember) return false;
 
   if (slot === "S2") {
+    const nativeS2Pool = eligible.filter((member) => member.name !== previousPrimary && member.shiftCode === "S2");
+    if (nativeS2Pool.length > 0) {
+      const previousScore = Math.max(
+        fairnessScoreFor(previousPrimary, fairness, previousSlot),
+        fairnessScoreFor(previousPrimary, fairness, slot),
+        fairnessScoreFor(previousPrimary, fairness, null),
+      );
+      const bestCandidate = sortByFairness(nativeS2Pool, fairness, slot)[0];
+      const minScore = bestCandidate ? fairnessScoreFor(bestCandidate.name, fairness, slot) : Number.POSITIVE_INFINITY;
+      // Handoff to the S2 member whenever they are behind or tied on hours.
+      return previousScore < minScore;
+    }
+
     if (carriedMember.shiftCode === "S6") {
       const directHandoffPool = eligible.filter((member) => member.name !== previousPrimary && (member.shiftCode === "S1" || member.shiftCode === "S2"));
       return directHandoffPool.length === 0;
     }
-    return true;
+
+    const others = eligible.filter((member) => member.name !== previousPrimary);
+    if (others.length === 0) return true;
+    const previousScoreNoS2 = Math.max(
+      fairnessScoreFor(previousPrimary, fairness, previousSlot),
+      fairnessScoreFor(previousPrimary, fairness, slot),
+      fairnessScoreFor(previousPrimary, fairness, null),
+    );
+    const bestOther = sortByFairness(others, fairness, slot)[0];
+    const otherScore = bestOther ? fairnessScoreFor(bestOther.name, fairness, slot) : Number.POSITIVE_INFINITY;
+    return previousScoreNoS2 < otherScore;
   }
-  if (slot === "S3") return eligible.every((member) => member.shiftCode !== "S3");
-  if (slot === "S4") return previousSlot === "S2" || previousSlot === "S3";
+  if (slot === "S3") {
+    // Native S2 with fewer hours keeps an 8h block (6:45 AM → 2:45 PM) through S3.
+    if (carriedMember.shiftCode === "S2" || previousSlot === "S2") return true;
+
+    const nativeS3Pool = eligible.filter((member) => member.name !== previousPrimary && member.shiftCode === "S3");
+    const comparisonPool = nativeS3Pool.length > 0
+      ? nativeS3Pool
+      : eligible.filter((member) => member.name !== previousPrimary);
+
+    if (comparisonPool.length === 0) return true;
+
+    // Score the carried person on hours already earned, not a destination group of 0.
+    const previousScore = Math.max(
+      fairnessScoreFor(previousPrimary, fairness, previousSlot),
+      fairnessScoreFor(previousPrimary, fairness, slot),
+      fairnessScoreFor(previousPrimary, fairness, null),
+    );
+    const bestCandidate = sortByFairness(comparisonPool, fairness, slot)[0] ?? null;
+    const minScore = bestCandidate ? fairnessScoreFor(bestCandidate.name, fairness, slot) : Number.POSITIVE_INFINITY;
+    // Handoff to S3 (or next-best) whenever they are behind or tied. Never roll an 8h person onto 0h peers.
+    return previousScore < minScore;
+  }
+  if (slot === "S4") {
+    // Keep the S2 8h owner until the 2:45 PM (S4.1) handoff.
+    return carriedMember.shiftCode === "S2";
+  }
+  if (slot === "S4.1") {
+    // 2:45 PM: S2's 8h block ends. Native S4 (e.g. Lokesh) takes over.
+    return false;
+  }
 
   const primaryPool = preferredPrimaryPoolForSlot(slot, eligible);
   const comparisonPool = primaryPool.length > 0 ? primaryPool : eligible;
@@ -754,7 +952,11 @@ function choosePrimaryForSlot({
   }
 
   const slotPrimaryEligible = preferredPrimaryPoolForSlot(slot, eligible);
-  const primaryPool = slotPrimaryEligible.length > 0 ? slotPrimaryEligible : eligible;
+  const primaryPool = sortByFairness(
+    slotPrimaryEligible.length > 0 ? slotPrimaryEligible : eligible,
+    fairness,
+    slot,
+  );
   const primary = primaryPool[0]?.name ?? null;
   const backup = chooseBackupForSlot(slot, eligible, primary);
   return { primary, backup, carried: false };
@@ -770,14 +972,26 @@ function buildOffGroups(offMembers) {
   return Array.from(groups.entries()).map(([reason, names]) => `${reason}: ${names.join(", ")}`);
 }
 
+function normalizeHistoricalShiftLabel(slot) {
+  return slot === "S5.1" ? "S6" : slot;
+}
+
 function displayShiftLabel(slot) {
-  return slot === "S6" ? "S5.1" : slot;
+  return normalizeHistoricalShiftLabel(slot);
+}
+
+export function getDailyShiftOrderForDate(date = new Date()) {
+  const weekday = formatInZone(date, { weekday: "long" });
+  if (weekday === "Friday") return BASE_SHIFT_ORDER.filter((slot) => slot !== "S5" && slot !== "S6");
+  if (weekday === "Saturday") return [];
+  if (weekday === "Sunday") return ["S5", "S6"];
+  return [...BASE_SHIFT_ORDER];
 }
 
 function nextSlotInfo(date, slot) {
-  const order = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
+  const order = getDailyShiftOrderForDate(date);
   const idx = order.indexOf(slot);
-  const nextSlot = order[(idx + 1) % order.length] ?? "S1";
+  const nextSlot = idx >= 0 ? (order[(idx + 1) % order.length] ?? order[0] ?? "S1") : "S1";
   const nextDate = new Date(date);
   if (slot === "S6") nextDate.setUTCDate(nextDate.getUTCDate() + 1);
   return { slot: nextSlot, date: nextDate };
@@ -803,26 +1017,41 @@ function formatHandoffTime(slot) {
   return formatClockTime(def.handoffHour ?? def.postHour, def.handoffMinute ?? def.postMinute);
 }
 
-function roundRobinAssignments(offMembers, assignees) {
-  if (!offMembers.length || !assignees.length) return [];
-  return offMembers.map((member, index) => `• ${member.name} (${member.offReason}) → ${assignees[index % assignees.length]}`);
-}
+function buildDailyOffOwnershipAssignments(offMembers, byShift) {
+  if (!offMembers.length) return [];
 
-function getOffOwnershipAssignees(byShift, primary, fallbackAssignees = []) {
-  const coverageShiftCodes = ["S1", "S2", "S3", "S4"];
-  const pool = coverageShiftCodes
+  const coverageCandidates = ["S1", "S2", "S3", "S4"]
     .flatMap((code) => byShift.get(code) ?? [])
     .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
     .filter((member) => !member.asrhRestricted)
-    .map((member) => member.name)
-    .filter((name) => name !== primary);
+    .map((member) => ({
+      name: member.name,
+      shiftCode: member.shiftCode ?? null,
+    }));
 
-  const fallbackPool = fallbackAssignees.filter((name) => name !== primary);
-  return pool.length > 0 ? pool : fallbackPool;
+  if (coverageCandidates.length === 0) return [];
+
+  let cursor = 0;
+  return offMembers.map((member) => {
+    const eligibleCandidates = coverageCandidates.filter((candidate) => candidate.name !== member.name);
+    const selectionPool = eligibleCandidates.length > 0 ? eligibleCandidates : coverageCandidates;
+    const assignee = selectionPool[cursor % selectionPool.length] ?? null;
+    cursor += 1;
+    return {
+      offMemberName: member.name,
+      offReason: member.offReason,
+      assigneeName: assignee?.name ?? "",
+      assigneeShiftCode: assignee?.shiftCode ?? null,
+    };
+  }).filter((assignment) => assignment.assigneeName);
+}
+
+function formatOwnershipAssignments(assignments) {
+  return assignments.map((assignment) => `• ${assignment.offMemberName} (${assignment.offReason}) → ${assignment.assigneeName}`);
 }
 
 function previousPostedPrimary(scheduledPosts, dateKey, slot) {
-  const order = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
+  const order = BASE_SHIFT_ORDER;
   const currentRank = order.indexOf(slot);
   const prior = scheduledPosts
     .filter((row) => ["posted", "planned", "applied"].includes(row.status.toLowerCase()))
@@ -943,7 +1172,7 @@ function determineNextHandoffCandidates({ slot, primaryShiftCode, byShift, fairn
   return { pool, targetSlot: next.slot };
 }
 
-export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, slotIndex = 0, fixedOffAssignments = null, fixedOffGroups = null }) {
+export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, preferredPrimarySlot = null, slotIndex = 0, fixedOffAssignments = null, fixedOffOwnershipAssignments = null, fixedOffGroups = null, previousDayS5Members = [] }) {
   const slot = slotOverride ?? detectDueShiftSlot(now);
   if (!slot) return { status: "no_post", message: "NO_POST_REQUIRED" };
 
@@ -952,12 +1181,16 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     return { status: "no_post", slot, message: "NO_POST_REQUIRED", dateKey };
   }
 
-  const { byShift, offMembers } = memberMapByShift(roster);
+  const { byShift, offMembers } = memberMapByShift(roster, now);
   const previous = previousPostedPrimary(scheduledPosts, dateKey, slot);
   const carryPrimary = preferredPrimary ?? previous?.primary ?? null;
-  const carrySourceSlot = previous?.shift ?? null;
+  const carrySourceSlot = preferredPrimarySlot ?? previous?.shift ?? null;
 
-  const shiftPool = eligibleShiftCodesForSlot(slot).flatMap((code) => byShift.get(code) ?? []);
+  const nativeShiftPool = eligibleShiftCodesForSlot(slot).flatMap((code) => byShift.get(code) ?? []);
+  const usePreviousDayS5Pool = slot === "S6" && !preferredPrimary && !previous?.primary;
+  const shiftPool = usePreviousDayS5Pool
+    ? [...previousDayS5Members, ...nativeShiftPool]
+    : nativeShiftPool;
   const availableMembers = shiftPool
     .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
     .filter((member) => isAvailableLongEnoughForSlot(member, slot, 45));
@@ -978,8 +1211,10 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     ? availableMembers
     : [fallbackCarryMember];
 
-  const asrhMembers = asrhShiftCodesForSlot(slot)
-    .flatMap((code) => byShift.get(code) ?? [])
+  const asrhBasePool = slot === "S6"
+    ? shiftPool
+    : asrhShiftCodesForSlot(slot).flatMap((code) => byShift.get(code) ?? []);
+  const asrhMembers = asrhBasePool
     .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
     .filter((member) => isAvailableLongEnoughForSlot(member, slot, 45))
     .filter((member) => canReceiveAsrhWithinFirstHour(member, slot));
@@ -1056,12 +1291,15 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
   const nextPrimary = nextCandidates[0]?.name ?? carryPrimary ?? "next shift lead";
   const nextPostTime = formatPostTime(nextTargetSlot);
 
+  const effectiveCarrySourceSlot = preferredPrimary && preferredPrimary === primary
+    ? (preferredPrimarySlot ?? previous?.shift ?? null)
+    : (previous?.primary === primary ? (previous?.shift ?? null) : null);
   const continuingFrom = (
     primary
     && forcedCarrySelection.carried
-    && previous?.primary === primary
-    && isAllowedRollingHandoff(previous?.shift ?? null, slot)
-  ) ? (previous?.shift ?? null) : null;
+    && effectiveCarrySourceSlot
+    && isAllowedRollingHandoff(effectiveCarrySourceSlot, slot)
+  ) ? effectiveCarrySourceSlot : null;
   const carryPathUsed = continuingFrom ? formatCarryPath(slot, continuingFrom) : null;
   const carryPathRule = formatCarryPath(slot);
 
@@ -1081,8 +1319,8 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     }
   }
   const effectiveNtPrimary = ntPrimary.length > 0 ? ntPrimary : (primary ? [primary] : effectiveAvailableMembers.map((member) => member.name));
-  const offOwnershipAssignees = getOffOwnershipAssignees(byShift, primary, effectiveNtPrimary);
-  const offAssignments = fixedOffAssignments ?? roundRobinAssignments(offMembers, offOwnershipAssignees);
+  const offOwnershipAssignments = fixedOffOwnershipAssignments ?? buildDailyOffOwnershipAssignments(offMembers, byShift);
+  const offAssignments = fixedOffAssignments ?? formatOwnershipAssignments(offOwnershipAssignments);
   const offGroups = fixedOffGroups ?? buildOffGroups(offMembers);
 
   const message = formatMessage({
@@ -1108,6 +1346,7 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     ntPrimary: effectiveNtPrimary,
     message,
     offAssignments,
+    offOwnershipAssignments,
     offGroups,
     nextPrimary,
     nextPostTime,
@@ -1131,6 +1370,100 @@ function cloneFairnessSnapshot(fairness) {
   };
 }
 
+function handoffMinutesForSlot(slot) {
+  const def = SHIFT_DEFINITIONS[slot];
+  if (!def) return null;
+  return (Number(def.handoffHour) * 60) + Number(def.handoffMinute);
+}
+
+const OWNERSHIP_HOURS_BY_TRANSITION = {
+  "S1|S2": 3,
+  "S2|S3": 2,
+  "S2|S4.1": 8,
+  "S3|S4": 3,
+  "S3|S4.1": 6,
+  "S4|S4.1": 3,
+  "S4.1|S4.2": 2,
+  "S4.1|S5": 5,
+  "S4.2|S5": 3,
+  "S5|S6": 5,
+  "S6|S1": 3,
+};
+
+function ownershipHoursBetweenSlots(fromSlot, toSlot) {
+  const keyed = OWNERSHIP_HOURS_BY_TRANSITION[`${fromSlot}|${toSlot}`];
+  if (Number.isFinite(keyed)) return keyed;
+  const fromMinutes = handoffMinutesForSlot(fromSlot);
+  const toMinutes = handoffMinutesForSlot(toSlot);
+  if (!Number.isFinite(fromMinutes) || !Number.isFinite(toMinutes)) return 0;
+  let diff = toMinutes - fromMinutes;
+  if (diff <= 0) diff += 24 * 60;
+  return Math.round(diff / 60);
+}
+
+function isFridayNoS5S6Plan(shifts = [], referenceDate = new Date()) {
+  const weekday = formatInZone(referenceDate, { weekday: "long" });
+  if (weekday !== "Friday") return false;
+  const slots = new Set((shifts ?? []).filter((shift) => shift?.status === "ok").map((shift) => String(shift.slot ?? "")));
+  return !slots.has("S5") && !slots.has("S6");
+}
+
+function fridayEndHandoffHours(fromSlot) {
+  const fromMinutes = handoffMinutesForSlot(fromSlot);
+  const fridayNightHandoffMinutes = (19 * 60) + 45;
+  if (!Number.isFinite(fromMinutes)) return 0;
+  let diff = fridayNightHandoffMinutes - fromMinutes;
+  if (diff <= 0) diff += 24 * 60;
+  return Math.round(diff / 60);
+}
+
+function applyOwnershipFairnessHours(shifts, fairnessSnapshot, referenceDate = new Date()) {
+  const okIndexes = [];
+  const fridayNoS5S6Plan = isFridayNoS5S6Plan(shifts, referenceDate);
+  for (let index = 0; index < shifts.length; index += 1) {
+    if (shifts[index]?.status === "ok" && shifts[index].primary) okIndexes.push(index);
+  }
+
+  for (const index of okIndexes) {
+    shifts[index].fairnessDelta = 0;
+    shifts[index].fairnessBefore = fairnessScoreFor(shifts[index].primary, fairnessSnapshot, shifts[index].slot);
+    shifts[index].fairnessAfter = shifts[index].fairnessBefore;
+    shifts[index].fairnessChange = { before: Number(fairnessSnapshot.byName.get(shifts[index].primary)?.score ?? 0), after: Number(fairnessSnapshot.byName.get(shifts[index].primary)?.score ?? 0) };
+  }
+
+  for (let position = 0; position < okIndexes.length; position += 1) {
+    const index = okIndexes[position];
+    const shift = shifts[index];
+    const previousOk = position > 0 ? shifts[okIndexes[position - 1]] : null;
+    const isBlockStart = !previousOk || previousOk.primary !== shift.primary;
+    if (!isBlockStart) continue;
+
+    let endPosition = position;
+    while (
+      endPosition + 1 < okIndexes.length
+      && shifts[okIndexes[endPosition + 1]].primary === shift.primary
+    ) {
+      endPosition += 1;
+    }
+
+    const nextDifferent = okIndexes[endPosition + 1] != null ? shifts[okIndexes[endPosition + 1]] : null;
+    const terminalShift = shifts[okIndexes[endPosition]];
+    const nextSlot = nextDifferent?.slot
+      ?? SHIFT_DEFINITIONS[terminalShift.slot]?.next
+      ?? "S1";
+    const hours = fridayNoS5S6Plan && !nextDifferent
+      ? fridayEndHandoffHours(shift.slot)
+      : ownershipHoursBetweenSlots(shift.slot, nextSlot);
+    const fairnessBefore = fairnessScoreFor(shift.primary, fairnessSnapshot, shift.slot);
+    const fairnessChange = applyFairnessDelta(fairnessSnapshot, shift.primary, shift.slot, hours);
+    const fairnessAfter = fairnessScoreFor(shift.primary, fairnessSnapshot, shift.slot);
+    shift.fairnessDelta = hours;
+    shift.fairnessBefore = fairnessBefore;
+    shift.fairnessAfter = fairnessAfter;
+    shift.fairnessChange = fairnessChange;
+  }
+}
+
 function applyFairnessDelta(fairnessSnapshot, name, slot, delta = 0) {
   const current = fairnessSnapshot.byName.get(name) ?? { score: 0, hours: 0, groupScores: new Map(), row: null, column: null, sheetName: fairnessSnapshot.sheetName };
   const groupKey = getFairnessGroupKeyForSlot(slot);
@@ -1148,7 +1481,211 @@ function applyFairnessDelta(fairnessSnapshot, name, slot, delta = 0) {
   return { before: Number(current.score ?? 0), after: nextScore };
 }
 
-const DAILY_SHIFT_ORDER = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
+function dateFromDateKey(dateKey) {
+  const [year, month, day] = String(dateKey).split("-").map(Number);
+  if (!year || !month || !day) return new Date();
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function columnNumberToA1(index) {
+  let value = Number(index) + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label || "A";
+}
+
+function computeFairnessHoursFromJobs(jobs = [], operationalDate) {
+  const orderedSlots = getDailyShiftOrderForDate(dateFromDateKey(operationalDate));
+  const order = new Map(orderedSlots.map((slot, index) => [slot, index]));
+  const normalizedJobs = jobs
+    .filter((job) => String(job?.status ?? "") === "posted" && String(job?.primary ?? "").trim())
+    .sort((a, b) => (order.get(String(a.shift ?? "")) ?? 999) - (order.get(String(b.shift ?? "")) ?? 999));
+
+  const totals = new Map();
+  for (let index = 0; index < normalizedJobs.length; index += 1) {
+    const job = normalizedJobs[index];
+    const primary = String(job.primary ?? "").trim();
+    const previous = index > 0 ? normalizedJobs[index - 1] : null;
+    if (!primary) continue;
+    if (previous && String(previous.primary ?? "").trim() === primary) continue;
+
+    let endIndex = index;
+    while (endIndex + 1 < normalizedJobs.length && String(normalizedJobs[endIndex + 1]?.primary ?? "").trim() === primary) {
+      endIndex += 1;
+    }
+
+    const terminal = normalizedJobs[endIndex];
+    const nextDifferent = normalizedJobs[endIndex + 1] ?? null;
+    const nextSlot = String(nextDifferent?.shift ?? SHIFT_DEFINITIONS[String(terminal?.shift ?? "")]?.next ?? "S1");
+    const hours = ownershipHoursBetweenSlots(String(job.shift ?? ""), nextSlot);
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    totals.set(primary, Number(totals.get(primary) ?? 0) + Number(hours));
+  }
+
+  return {
+    totals,
+    coveredSlots: new Set(normalizedJobs.map((job) => String(job.shift ?? "").trim()).filter(Boolean)),
+  };
+}
+
+function weekendCoverageSlotsForDate(date, byShift) {
+  const weekday = formatInZone(date, { weekday: "long" });
+  const candidates = weekday === "Friday"
+    ? ["S5"]
+    : weekday === "Saturday"
+      ? ["S1", "S4", "S5"]
+      : weekday === "Sunday"
+        ? ["S1", "S4", "S5", "S6"]
+        : [];
+  return candidates.filter((slot) => (byShift.get(slot) ?? []).length > 0);
+}
+
+function mergeFairnessTotals(into, extra) {
+  for (const [name, hours] of extra.entries()) {
+    into.set(name, Number(into.get(name) ?? 0) + Number(hours ?? 0));
+  }
+  return into;
+}
+
+async function computeWeekendCoverageFairnessHours(date, coveredSlots = new Set()) {
+  const roster = await readRosterForDate(date);
+  const { byShift } = memberMapByShift(roster, date);
+  const activeSlots = weekendCoverageSlotsForDate(date, byShift).filter((slot) => !coveredSlots.has(slot));
+  if (activeSlots.length === 0) {
+    return { totals: new Map(), slots: [] };
+  }
+
+  const nextDate = new Date(date);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const nextRoster = await readRosterForDate(nextDate);
+  const { byShift: nextByShift } = memberMapByShift(nextRoster, nextDate);
+  const nextActiveSlots = weekendCoverageSlotsForDate(nextDate, nextByShift);
+
+  const totals = new Map();
+  for (let index = 0; index < activeSlots.length; index += 1) {
+    const slot = activeSlots[index];
+    const currentMembers = (byShift.get(slot) ?? []).filter((member) => !member.asrhRestricted);
+    const primary = String(currentMembers[0]?.name ?? "").trim();
+    if (!primary) continue;
+
+    const nextSlot = activeSlots[index + 1] ?? nextActiveSlots[0] ?? SHIFT_DEFINITIONS[slot]?.next ?? "S1";
+    const hours = ownershipHoursBetweenSlots(slot, nextSlot);
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    totals.set(primary, Number(totals.get(primary) ?? 0) + Number(hours));
+  }
+
+  return { totals, slots: activeSlots };
+}
+
+export async function syncFairnessSheetForOperationalDate({ operationalDate, jobs = [] } = {}) {
+  const dateKey = String(operationalDate ?? "").trim();
+  if (!dateKey) {
+    throw new Error("operationalDate is required for AS&RH hours sync.");
+  }
+
+  const syncDate = dateFromDateKey(dateKey);
+  const targetMonthKey = String(dateKey).slice(0, 7);
+  const { totals: jobTotals, coveredSlots } = computeFairnessHoursFromJobs(jobs, dateKey);
+  const { totals: weekendTotals, slots: weekendCoverageSlots } = await computeWeekendCoverageFairnessHours(syncDate, coveredSlots);
+  const totals = mergeFairnessTotals(new Map(jobTotals), weekendTotals);
+  if (totals.size === 0) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "no_fairness_hours",
+      operationalDate: dateKey,
+      updatedRows: 0,
+      unchangedRows: 0,
+      sources: {
+        postedJobSlots: Array.from(coveredSlots),
+        weekendCoverageSlots,
+      },
+    };
+  }
+
+  const memberNames = Array.from(totals.keys()).map((name) => normalizeName(name)).filter(Boolean);
+  const { data: existingRows, error: existingError } = await supabaseAdmin
+    .from("work_allotment_asrh_hours")
+    .select("id, member_name, date_key, hours")
+    .eq("month_key", targetMonthKey)
+    .eq("date_key", dateKey)
+    .in("member_name", memberNames);
+
+  if (existingError) {
+    throw new Error(`Failed to load existing AS&RH rows: ${existingError.message}`);
+  }
+
+  const existingByKey = new Map((existingRows ?? []).map((row) => [`${normalizeName(row.member_name)}|${normalizeCell(row.date_key)}`, row]));
+  const toInsert = [];
+  const toUpdate = [];
+  let unchangedRows = 0;
+
+  for (const [memberNameRaw, hoursRaw] of totals.entries()) {
+    const memberName = normalizeName(memberNameRaw);
+    const hours = Number(hoursRaw ?? 0);
+    if (!memberName || !Number.isFinite(hours) || hours <= 0) continue;
+    const key = `${memberName}|${dateKey}`;
+    const existing = existingByKey.get(key);
+    if (existing) {
+      if (Number(existing.hours ?? 0) === hours) {
+        unchangedRows += 1;
+      } else {
+        toUpdate.push({ id: existing.id, hours });
+      }
+      continue;
+    }
+    toInsert.push({
+      month_key: targetMonthKey,
+      date_key: dateKey,
+      member_name: memberName,
+      hours,
+      source: "generated",
+      notes: "Generated from posted work allotment coverage",
+      updated_by: "work_allotment_automation",
+    });
+  }
+
+  for (const row of toUpdate) {
+    const { error } = await supabaseAdmin
+      .from("work_allotment_asrh_hours")
+      .update({
+        hours: row.hours,
+        source: "generated",
+        notes: "Generated from posted work allotment coverage",
+        updated_by: "work_allotment_automation",
+      })
+      .eq("id", row.id);
+    if (error) {
+      throw new Error(`Failed to update AS&RH row: ${error.message}`);
+    }
+  }
+
+  if (toInsert.length > 0) {
+    const { error } = await supabaseAdmin
+      .from("work_allotment_asrh_hours")
+      .insert(toInsert);
+    if (error) {
+      throw new Error(`Failed to insert AS&RH rows: ${error.message}`);
+    }
+  }
+
+  return {
+    ok: true,
+    skipped: toInsert.length === 0 && toUpdate.length === 0,
+    reason: toInsert.length === 0 && toUpdate.length === 0 ? "already_synced" : "updated",
+    operationalDate: dateKey,
+    updatedRows: toInsert.length + toUpdate.length,
+    unchangedRows,
+    sources: {
+      postedJobSlots: Array.from(coveredSlots),
+      weekendCoverageSlots,
+    },
+  };
+}
 
 async function loadPlanningInputs(now = new Date(), tracker = {}) {
   const roster = await readRosterForDate(now);
@@ -1168,9 +1705,17 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
     fairnessTotalsByName,
     fairnessSheetTitle: fairnessTracker.sheetTitle,
   });
+  const previousDateKey = addDaysToDateKey(localDateKey(now), -1);
+  const previousDate = new Date(now);
+  previousDate.setUTCDate(previousDate.getUTCDate() - 1);
+  const previousRoster = await readRosterForDate(previousDate);
+  const { byShift: previousByShift } = memberMapByShift(previousRoster, previousDate);
+  const previousDayS5Members = previousByShift.get("S5") ?? [];
 
   return {
     roster,
+    previousRoster,
+    previousDayS5Members,
     monthRoster,
     fairness,
     scheduledPosts,
@@ -1179,12 +1724,13 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
     fairnessSpreadsheetUrl: fairnessTracker.spreadsheetUrl,
     memberNames,
     fairnessWarning: null,
+    previousDateKey,
   };
 }
 
 export async function generateDueWorkAllotment({ now = new Date(), slotOverride = null, tracker = {} } = {}) {
-  const { roster, fairness, scheduledPosts, fairnessWarning } = await loadPlanningInputs(now, tracker);
-  const result = generateWorkAllotmentFromData({ now, slotOverride, roster, fairness, scheduledPosts });
+  const { roster, fairness, scheduledPosts, fairnessWarning, previousDayS5Members } = await loadPlanningInputs(now, tracker);
+  const result = generateWorkAllotmentFromData({ now, slotOverride, roster, fairness, scheduledPosts, previousDayS5Members });
   return {
     ...result,
     rosterSheet: roster.sheetName,
@@ -1210,15 +1756,20 @@ export async function getReadOnlyFairnessSnapshot({ now = new Date(), tracker = 
 }
 
 export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} } = {}) {
-  const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster } = await loadPlanningInputs(now, tracker);
+  const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster, previousDayS5Members } = await loadPlanningInputs(now, tracker);
   const planningFairness = cloneFairnessSnapshot(fairness);
   const planningScheduledPosts = [...scheduledPosts];
   const shifts = [];
   let currentPrimary = null;
-  let sharedOffAssignments = null;
-  let sharedOffGroups = null;
+  let currentPrimarySlot = null;
+  const { byShift, offMembers } = memberMapByShift(roster, now);
+  const sharedOffOwnershipAssignments = buildDailyOffOwnershipAssignments(offMembers, byShift);
+  const sharedOffAssignments = formatOwnershipAssignments(sharedOffOwnershipAssignments);
+  const sharedOffGroups = buildOffGroups(offMembers);
 
-  for (const [slotIndex, slot] of DAILY_SHIFT_ORDER.entries()) {
+  const dailyShiftOrder = getDailyShiftOrderForDate(now);
+
+  for (const [slotIndex, slot] of dailyShiftOrder.entries()) {
     const result = generateWorkAllotmentFromData({
       now,
       slotOverride: slot,
@@ -1226,19 +1777,15 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
       fairness: planningFairness,
       scheduledPosts: planningScheduledPosts,
       preferredPrimary: currentPrimary,
+      preferredPrimarySlot: currentPrimarySlot,
       slotIndex,
       fixedOffAssignments: sharedOffAssignments,
+      fixedOffOwnershipAssignments: sharedOffOwnershipAssignments,
       fixedOffGroups: sharedOffGroups,
+      previousDayS5Members,
     });
 
     if (result.status === "ok") {
-      if (!sharedOffAssignments) sharedOffAssignments = [...result.offAssignments];
-      if (!sharedOffGroups) sharedOffGroups = [...result.offGroups];
-      const current = planningFairness.byName.get(result.primary) ?? { score: 0, hours: 0, groupScores: new Map(), row: null, column: null, sheetName: planningFairness.sheetName };
-      const fairnessBefore = fairnessScoreFor(result.primary, planningFairness, result.slot);
-      const fairnessDelta = slot === "S4.1" || slot === "S4.2" ? 5 : 8;
-      const fairnessChange = applyFairnessDelta(planningFairness, result.primary, result.slot, fairnessDelta);
-      const fairnessAfter = fairnessScoreFor(result.primary, planningFairness, result.slot);
       planningScheduledPosts.push({
         rowNumber: null,
         date: result.dateKey,
@@ -1249,13 +1796,17 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
         status: "planned",
         lastChecked: new Date().toISOString(),
       });
-      shifts.push({ ...result, fairnessBefore, fairnessAfter, fairnessDelta, fairnessChange });
+      shifts.push({ ...result, fairnessBefore: 0, fairnessAfter: 0, fairnessDelta: 0, fairnessChange: { before: 0, after: 0 } });
       currentPrimary = result.primary ?? currentPrimary;
+      currentPrimarySlot = result.primary ? result.slot : currentPrimarySlot;
     } else {
       shifts.push({ slot, status: result.status, message: result.message, dateKey: result.dateKey ?? localDateKey(now) });
       currentPrimary = null;
+      currentPrimarySlot = null;
     }
   }
+
+  applyOwnershipFairnessHours(shifts, planningFairness, now);
 
   for (let index = 0; index < shifts.length; index += 1) {
     const shift = shifts[index];

@@ -557,7 +557,7 @@ export function EmailAssistantWidget() {
     if (mergedContext.carrierTicket) lines.push(`Carrier ticket / circuit: ${mergedContext.carrierTicket}`);
     if (mergedContext.site) lines.push(`Site/location: ${mergedContext.site}`);
     if (mergedContext.eta) lines.push(`ETA: ${mergedContext.eta}`);
-    if (mergedContext.nextUpdate) lines.push(`Next update cadence: ${mergedContext.nextUpdate}`);
+    if (mergedContext.nextUpdate) lines.push(["Next update cadence: ", mergedContext.nextUpdate].join(""));
     if (mergedContext.impact) lines.push(`Customer impact: ${mergedContext.impact}`);
     if (mergedContext.serviceType) lines.push(`Service type: ${mergedContext.serviceType}`);
     if (mergedContext.ask) lines.push(`Concrete ask: ${mergedContext.ask}`);
@@ -778,7 +778,7 @@ export function EmailAssistantWidget() {
       `Desired tone: ${tone}`,
       `Desired length: ${length}`,
       mergedContext.impact ? `Impact: ${mergedContext.impact}` : "",
-      mergedContext.nextUpdate ? `Next update: ${mergedContext.nextUpdate}` : "",
+      mergedContext.nextUpdate ? ["Next update: ", mergedContext.nextUpdate].join("") : "", 
       mergedContext.ask ? `Key ask: ${mergedContext.ask}` : "",
       senderName ? `Sender: ${senderName}` : "",
       `Carrier-specific guidance: ${carrierStyleGuidance(carrierWithContacts?.carrier ?? carrierOverride ?? "Carrier")}`,

@@ -134,7 +134,7 @@ function parseMinutesLoose(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   const s = String(v).trim();
   if (!s) return null;
-  const hhmmss = /^(\d+):(\d{1,2})(?::(\d{1,2}))?$/.exec(s);
+  const hhmmss = s.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/);
   if (hhmmss) {
     const hours = Number(hhmmss[1] ?? 0);
     const minutes = Number(hhmmss[2] ?? 0);

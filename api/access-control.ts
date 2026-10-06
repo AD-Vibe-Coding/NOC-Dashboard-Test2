@@ -102,7 +102,7 @@ export default async function handler(req: any, res: any) {
     });
 
     // Counts
-    const counts = { manager: 0, tier3: 0, tier2: 0, tier1: 0 };
+    const counts = { manager: 0, customer_service_manager: 0, tier3: 0, tier2: 0, tier1: 0 };
     for (const m of members) {
       if (m.role in counts) (counts as any)[m.role]++;
     }
@@ -129,7 +129,7 @@ export default async function handler(req: any, res: any) {
     const role = String(body.role ?? "").trim();
 
     if (!name) return res.status(400).json({ error: "name is required." });
-    const validRoles = ["tier1", "tier2", "tier3", "manager"];
+    const validRoles = ["tier1", "tier2", "tier3", "manager", "customer_service_manager"];
     if (!validRoles.includes(role)) {
       return res.status(400).json({ error: `role must be one of: ${validRoles.join(", ")}` });
     }

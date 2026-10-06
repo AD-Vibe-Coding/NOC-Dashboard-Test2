@@ -34,7 +34,7 @@ import {
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
 import type { TileProps } from "../types";
-import { findTeamMember, isManager } from "./lib/team-config";
+import { findTeamMember, isManager, normalizeName } from "./lib/team-config";
 import { parseTicketFile, scoreTickets } from "./lib/parse-tickets";
 import { DEFAULT_OPTIONS, rebalance, rebalanceShiftHandoff, type RebalanceMode } from "./lib/rebalance";
 import { detectShift, SHIFT_TRANSITIONS } from "./lib/shifts";
@@ -99,11 +99,16 @@ type SharedRosterApiResponse = {
 };
 
 function mapSharedRosterEntries(entries: SharedRosterApiEntry[]): RosterEntry[] {
-  return entries.map((entry) => {
+  const deduped = new Map<string, RosterEntry>();
+
+  for (const entry of entries) {
     const member = findTeamMember(entry.name);
     const manager = isManager(entry.name);
-    return {
-      name: member?.name ?? entry.name,
+    const canonicalName = member?.name ?? entry.name;
+    const key = normalizeName(canonicalName);
+
+    const nextRow: RosterEntry = {
+      name: canonicalName,
       tier: member?.tier,
       isManager: manager,
       cellRaw: entry.cell,
@@ -112,7 +117,24 @@ function mapSharedRosterEntries(entries: SharedRosterApiEntry[]): RosterEntry[] 
       shiftId: entry.available ? detectShift(entry.cell) ?? undefined : undefined,
       available: entry.available && !manager,
     };
-  });
+
+    const existing = deduped.get(key);
+    if (!existing) {
+      deduped.set(key, nextRow);
+      continue;
+    }
+
+    const shouldReplace =
+      (!existing.available && nextRow.available)
+      || (existing.status === "Blank" && nextRow.status !== "Blank")
+      || (!existing.cellRaw && Boolean(nextRow.cellRaw));
+
+    if (shouldReplace) {
+      deduped.set(key, nextRow);
+    }
+  }
+
+  return Array.from(deduped.values());
 }
 
 export function TicketRebalancerTile({ onExpand }: TileProps) {

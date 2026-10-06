@@ -17,7 +17,6 @@ import {
   IconNotes,
   IconPhone,
   IconSchool,
-  IconReportAnalytics,
   IconShield,
   IconWorldPin,
   IconStar,
@@ -26,6 +25,7 @@ import {
   IconArrowsShuffle,
   IconBulb,
   IconGift,
+  IconBriefcase,
 } from "@tabler/icons-react";
 import { ZoomQueueWidget, ZoomQueueTile } from "./ZoomQueue";
 import { EscalationsWidget, EscalationsTile } from "./Escalations";
@@ -86,6 +86,7 @@ import {
 import { KudosBoardWidget, KudosBoardTile } from "./KudosBoard";
 import { EnhancementsWidget, EnhancementsTile } from "./Enhancements";
 import { TeamFeedbackTile, TeamFeedbackWidget } from "./TeamFeedback";
+import { FinanceCasesTile, FinanceCasesWidget } from "./FinanceCases";
 import { ShiftChecklistWidget, ShiftChecklistTile } from "./ShiftChecklist";
 import { KbGapFinderWidget, KbGapFinderTile } from "./KbGapFinder";
 import { AttendanceTrackerWidget, AttendanceTrackerTile } from "./AttendanceTracker";
@@ -132,7 +133,7 @@ export const WIDGETS: WidgetDefinition[] = [
     id: "performance-tracker",
     title: "Team Performance",
     description: "Excel-imported team metrics + per-member drill-down",
-    icon: IconReportAnalytics,
+    icon: IconChartBar,
     iconColor: "green",
     tileSize: "sm",
     Tile: PerformanceTrackerTile,
@@ -145,6 +146,7 @@ export const WIDGETS: WidgetDefinition[] = [
     icon: IconClockRecord,
     iconColor: "orange",
     tileSize: "sm",
+    roles: ["manager", "customer_service_manager", "tier1", "tier2", "tier3"],
     Tile: NocMttrReportTile,
     Full: NocMttrReportWidget,
   },
@@ -231,7 +233,7 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "meeting-notes",
-    title: "Meeting Notes",
+    title: "Notebook",
     description: "OneNote-style individual and management meeting notebooks",
     icon: IconNotes,
     iconColor: "grape",
@@ -280,6 +282,17 @@ export const WIDGETS: WidgetDefinition[] = [
     roles: ["manager"],
     Tile: AppUsageTile,
     Full: AppUsageWidget,
+  },
+  {
+    id: "finance-cases",
+    title: "Finance Cases",
+    description: "Monthly finance case number and comment log",
+    icon: IconBriefcase,
+    iconColor: "teal",
+    tileSize: "sm",
+    roles: ["manager"],
+    Tile: FinanceCasesTile,
+    Full: FinanceCasesWidget,
   },
   {
     id: "work-allotment-generator",

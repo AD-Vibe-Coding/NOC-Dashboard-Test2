@@ -10,6 +10,7 @@ export type AuthUser = {
   name: string | null;
   picture: string | null;
   provider: string;
+  role?: string | null;
 };
 
 export type AuthContextValue = {

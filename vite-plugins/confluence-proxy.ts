@@ -612,24 +612,21 @@ function cellText(html: string): string {
 function extractTables(html: string): ParsedTable[] {
   const tables: ParsedTable[] = [];
   const tableRe = /<table[^>]*>([\s\S]*?)<\/table>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = tableRe.exec(html)) !== null) {
+  for (const m of html.matchAll(tableRe)) {
     const tableHtml = m[1];
 
     // Optional caption
-    const capMatch = /<caption[^>]*>([\s\S]*?)<\/caption>/i.exec(tableHtml);
+    const capMatch = tableHtml.match(/<caption[^>]*>([\s\S]*?)<\/caption>/i);
     const caption = capMatch ? cellText(capMatch[1]) : undefined;
 
     // All rows
     const rowRe = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
     const allRows: string[][] = [];
-    let r: RegExpExecArray | null;
-    while ((r = rowRe.exec(tableHtml)) !== null) {
+    for (const r of tableHtml.matchAll(rowRe)) {
       const rowHtml = r[1];
       const cells: string[] = [];
       const cellRe = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
-      let c: RegExpExecArray | null;
-      while ((c = cellRe.exec(rowHtml)) !== null) {
+      for (const c of rowHtml.matchAll(cellRe)) {
         cells.push(cellText(c[1]));
       }
       if (cells.length > 0) allRows.push(cells);
@@ -655,14 +652,13 @@ function extractImages(html: string, baseUrl: string): ParsedImage[] {
   const out: ParsedImage[] = [];
   const seen = new Set<string>();
   const imgRe = /<img\b[^>]*>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = imgRe.exec(html)) !== null) {
+  for (const m of html.matchAll(imgRe)) {
     const tag = m[0];
     // Confluence body.view sometimes uses data-src for lazy-loaded images.
     const srcMatch =
-      /\bsrc=["']([^"']+)["']/i.exec(tag) ||
-      /\bdata-src=["']([^"']+)["']/i.exec(tag) ||
-      /\bdata-image-src=["']([^"']+)["']/i.exec(tag);
+      tag.match(/\bsrc=["']([^"']+)["']/i) ||
+      tag.match(/\bdata-src=["']([^"']+)["']/i) ||
+      tag.match(/\bdata-image-src=["']([^"']+)["']/i);
     if (!srcMatch) continue;
     let src = decodeHtmlEntities(srcMatch[1]);
     // Skip inline data: URIs (already an image, no need to fetch)
@@ -675,7 +671,7 @@ function extractImages(html: string, baseUrl: string): ParsedImage[] {
     if (seen.has(src)) continue;
     seen.add(src);
 
-    const altMatch = /\balt=["']([^"']*)["']/i.exec(tag);
+    const altMatch = tag.match(/\balt=["']([^"']*)["']/i);
     out.push({
       src,
       alt: altMatch ? decodeHtmlEntities(altMatch[1]) : undefined,
@@ -689,8 +685,7 @@ function extractLinks(html: string): ParsedLink[] {
   const seen = new Set<string>();
   const out: ParsedLink[] = [];
   const linkRe = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = linkRe.exec(html)) !== null) {
+  for (const m of html.matchAll(linkRe)) {
     const href = m[1].trim();
     if (!/^https?:\/\//i.test(href)) continue;
     if (seen.has(href)) continue;
@@ -727,8 +722,8 @@ function tablesToContacts(tables: ParsedTable[]): ParsedContact[] {
         i >= 0 && i < row.length ? row[i].trim() : "";
       const joined = row.join(" ");
 
-      const phone = pickCol(phoneCol) || (phoneRe.exec(joined)?.[1] ?? "");
-      const email = pickCol(emailCol) || (emailRe.exec(joined)?.[0] ?? "");
+      const phone = pickCol(phoneCol) || (joined.match(phoneRe)?.[1] ?? "");
+      const email = pickCol(emailCol) || (joined.match(emailRe)?.[0] ?? "");
       const name = pickCol(nameCol);
       const role = pickCol(roleCol);
       const level = pickCol(levelCol) || `Row ${r + 1}`;
@@ -753,9 +748,9 @@ function extractPrimary(text: string): {
   primary_phone?: string;
   primary_email?: string;
 } {
-  const emailMatch = /[\w.+-]+@[\w-]+\.[\w.-]+/.exec(text);
+  const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
   const phoneMatch =
-    /\b(?:1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/.exec(text);
+    text.match(/\b(?:1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/);
   return {
     primary_phone: phoneMatch ? phoneMatch[0].trim() : undefined,
     primary_email: emailMatch ? emailMatch[0].trim() : undefined,
@@ -1450,7 +1445,7 @@ function detectKindFromBytes(buf: Buffer, declaredMime?: string): ExtractableKin
 
 /** Parse a `data:<mime>;base64,...` URL into { mime, buffer }. */
 function parseDataUrl(dataUrl: string): { mime: string; buf: Buffer } | null {
-  const m = /^data:([^;,]+)(?:;base64)?,(.*)$/i.exec(dataUrl);
+  const m = dataUrl.match(/^data:([^;,]+)(?:;base64)?,(.*)$/i);
   if (!m) return null;
   const mime = m[1];
   const isB64 = /;base64/i.test(dataUrl.slice(0, dataUrl.indexOf(",")));
@@ -1537,8 +1532,7 @@ async function findPublicPdfUrlsOnPage(
     // generic page URLs (the AI prompt would not get useful data from those).
     const urls = new Set<string>();
     const re = /https?:\/\/[^\s"'<>)\\]+\.pdf(?:\?[^\s"'<>)\\]*)?/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(combined)) !== null) {
+    for (const m of combined.matchAll(re)) {
       // Filter out anything pointing back at appdirect.jira.com (those need
       // session cookie auth, which we don't have)
       if (m[0].includes("appdirect.jira.com")) continue;
@@ -1837,7 +1831,7 @@ async function extractContactsFromImages(
     parsed = JSON.parse(cleaned);
   } catch {
     // Try to find a JSON-shaped substring as a last resort
-    const m = /\{[\s\S]*\}/.exec(cleaned);
+    const m = cleaned.match(/\{[\s\S]*\}/);
     if (m) {
       try {
         parsed = JSON.parse(m[0]);
@@ -1994,7 +1988,7 @@ Return ONLY the JSON object. Start your response with "{" — no preamble.`;
   try {
     parsed = JSON.parse(cleaned);
   } catch {
-    const m = /\{[\s\S]*\}/.exec(cleaned);
+    const m = cleaned.match(/\{[\s\S]*\}/);
     if (m) {
       try {
         parsed = JSON.parse(m[0]);

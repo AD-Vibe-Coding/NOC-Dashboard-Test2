@@ -908,7 +908,7 @@ export function EnhancementsWidget() {
                       <Table.Tr key={row.id}>
                         {isManager && (
                           <Table.Td>
-                            <Checkbox checked={selectedIds.includes(row.id)} onChange={() => toggleSelection(row.id)} aria-label={`Select enhancement ${row.title}`} />
+                            <Checkbox checked={selectedIds.includes(row.id)} onChange={() => toggleSelection(row.id)} aria-label={["Select enhancement ", row.title].join("")} />
                           </Table.Td>
                         )}
                         <Table.Td style={{ width: 120, minWidth: 120, whiteSpace: "nowrap" }}>
@@ -1139,7 +1139,7 @@ export function EnhancementsWidget() {
       <Modal
         opened={Boolean(historyRow)}
         onClose={() => setHistoryRow(null)}
-        title={historyRow ? `Update history · ${historyRow.title}` : "Update history"}
+        title={historyRow ? ["Update history · ", historyRow.title].join("") : "Update history"}
         centered
         radius="lg"
         size="lg"

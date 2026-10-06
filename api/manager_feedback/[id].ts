@@ -1,21 +1,34 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
-import { getSession } from "../_lib/auth-middleware.js";
-import { defaultRoleFor, lookupByEmail } from "../_lib/roles.js";
+import { getAuthorizedIdentity } from "../_lib/authz.js";
+import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
 
 function send(res: VercelResponse, code: number, body: unknown) {
   return res.status(code).json(body);
 }
 
+function normalizePersonName(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+}
+
+function anonymizeRecipientRow<T extends Record<string, any>>(row: T, sessionName: string) {
+  return {
+    ...row,
+    feedback_from: "Anonymous",
+    submitted_by: null,
+    approved_by: null,
+    feedback_for: sessionName,
+    recipient_comment_by: row.recipient_comment_by ? sessionName : null,
+    recipient_acknowledged_by: row.recipient_acknowledged_by ? sessionName : null,
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  const session = getSession(req);
-  const role = session
-    ? session.role
-      ?? lookupByEmail(String(session.email ?? "").toLowerCase())?.role
-      ?? defaultRoleFor(String(session.name ?? ""))
-      ?? "anonymous"
-    : "anonymous";
-  const sessionName = String(session?.name ?? "").trim();
+  const session = await getAppBuilderSession(req);
+  const { role, name: sessionName } = await getAuthorizedIdentity(session);
   const id = Number(req.query.id);
 
   if (!sessionName) {
@@ -36,7 +49,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (error) {
         return send(res, 404, { error: error.message });
       }
-      return send(res, 200, data);
+      return send(
+        res,
+        200,
+        role === "manager" ? data : anonymizeRecipientRow(data, sessionName),
+      );
     }
 
     if (req.method === "PATCH") {
@@ -52,11 +69,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .from("manager_feedback")
           .select("id, feedback_for, approval_status")
           .eq("id", id)
-          .eq("feedback_for", sessionName)
           .eq("approval_status", "approved")
           .single();
 
-        if (existingError || !existing) {
+        if (
+          existingError
+          || !existing
+          || normalizePersonName(existing.feedback_for) !== normalizePersonName(sessionName)
+        ) {
           return send(res, 404, { error: "Feedback not found." });
         }
 

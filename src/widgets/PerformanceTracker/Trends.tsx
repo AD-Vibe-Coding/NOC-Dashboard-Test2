@@ -882,7 +882,7 @@ function DeltaPill({
 // =============================================================================
 
 function formatMonthLabel(yyyyMm: string): string {
-  const m = /^(\d{4})-(\d{2})$/.exec(yyyyMm);
+  const m = yyyyMm.match(/^(\d{4})-(\d{2})$/);
   if (!m) return yyyyMm;
   const date = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, 1);
   return date.toLocaleDateString(undefined, {

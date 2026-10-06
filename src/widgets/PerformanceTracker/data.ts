@@ -37,8 +37,30 @@ export function usePerformanceData() {
           }),
         ]);
         if (!cancelled) {
-          setMetrics(mResult.status === "fulfilled" ? mResult.value : []);
-          setImports(iResult.status === "fulfilled" ? iResult.value : []);
+          const allMetrics = mResult.status === "fulfilled" ? mResult.value : [];
+          const allImports = iResult.status === "fulfilled" ? iResult.value : [];
+
+          // Keep full import history for the History tab, but only surface the
+          // latest import per source type to the dashboard/trends. Re-importing
+          // a workbook should replace that source's active dataset rather than
+          // double-counting historical uploads.
+          const latestImportIdsBySource = new Map<string, number>();
+          for (const imp of allImports) {
+            const sourceType = String(imp.source_type ?? "").trim();
+            if (!sourceType || latestImportIdsBySource.has(sourceType)) continue;
+            latestImportIdsBySource.set(sourceType, imp.id);
+          }
+
+          const filteredMetrics = allMetrics.filter((metric) => {
+            if (metric.import_id == null || metric.import_id < 0) return true;
+            const sourceType = String(metric.source_type ?? "").trim();
+            if (!sourceType) return true;
+            const activeImportId = latestImportIdsBySource.get(sourceType);
+            return activeImportId == null || metric.import_id === activeImportId;
+          });
+
+          setMetrics(filteredMetrics);
+          setImports(allImports);
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -77,13 +99,60 @@ function sleep(ms: number) {
  * payload reasonable). Idempotent in the sense that calling it twice
  * creates two distinct imports (the user can roll back via History).
  */
+export interface ImportProgress {
+  stage: "preparing" | "sheet" | "batch" | "complete";
+  fileName: string;
+  totalSheets: number;
+  currentSheetIndex: number;
+  currentSheetName: string | null;
+  currentSheetSourceType: SourceType | null;
+  currentSheetRows: number;
+  currentSheetUploadedRows: number;
+  uploadedRows: number;
+  totalRows: number;
+  percent: number;
+  batchIndex: number;
+  batchCount: number;
+}
+
+function buildImportProgress(
+  result: ImportResult,
+  patch: Partial<ImportProgress>,
+): ImportProgress {
+  const totalRows = result.bySheet.reduce((sum, sheet) => sum + sheet.rows.length, 0);
+  const uploadedRows = Math.min(patch.uploadedRows ?? 0, totalRows);
+  const percent = totalRows === 0 ? 100 : Math.max(0, Math.min(100, Math.round((uploadedRows / totalRows) * 100)));
+  return {
+    stage: patch.stage ?? "preparing",
+    fileName: result.fileName,
+    totalSheets: result.bySheet.length,
+    currentSheetIndex: patch.currentSheetIndex ?? 0,
+    currentSheetName: patch.currentSheetName ?? null,
+    currentSheetSourceType: patch.currentSheetSourceType ?? null,
+    currentSheetRows: patch.currentSheetRows ?? 0,
+    currentSheetUploadedRows: patch.currentSheetUploadedRows ?? 0,
+    uploadedRows,
+    totalRows,
+    percent,
+    batchIndex: patch.batchIndex ?? 0,
+    batchCount: patch.batchCount ?? 0,
+  };
+}
+
 export async function persistImport(
   result: ImportResult,
   importedBy: string | null,
+  onProgress?: (progress: ImportProgress) => void,
 ): Promise<{ inserts: number; sheets: number }> {
   await dbReady;
   let totalInserts = 0;
-  for (const sheet of result.bySheet) {
+  onProgress?.(
+    buildImportProgress(result, {
+      stage: "preparing",
+      uploadedRows: 0,
+    }),
+  );
+  for (const [sheetIndex, sheet] of result.bySheet.entries()) {
     const inserted = await db.performance_imports.insert({
       file_name: result.fileName,
       imported_by: importedBy ?? null,
@@ -99,6 +168,18 @@ export async function persistImport(
         `Insert for sheet "${sheet.sheetName}" returned no row (was the table provisioned via Push to Supabase?)`,
       );
     }
+
+    onProgress?.(
+      buildImportProgress(result, {
+        stage: "sheet",
+        currentSheetIndex: sheetIndex + 1,
+        currentSheetName: sheet.sheetName,
+        currentSheetSourceType: sheet.sourceType,
+        currentSheetRows: sheet.rows.length,
+        currentSheetUploadedRows: 0,
+        uploadedRows: totalInserts,
+      }),
+    );
 
     if (sheet.rows.length === 0) continue;
 
@@ -122,6 +203,8 @@ export async function persistImport(
       raw_json: JSON.stringify(r.raw),
     }));
 
+    const batchCount = Math.max(1, Math.ceil(rows.length / INSERT_BATCH_SIZE));
+
     // Chunked inserts with per-batch retry + throttle. The retry handles
     // transient Supabase connection pool exhaustion; the delay between
     // batches prevents overwhelming the free-tier pool (max 15 connections).
@@ -132,6 +215,19 @@ export async function persistImport(
         try {
           await db.performance_metrics.insertBulk(batch);
           totalInserts += batch.length;
+          onProgress?.(
+            buildImportProgress(result, {
+              stage: "batch",
+              currentSheetIndex: sheetIndex + 1,
+              currentSheetName: sheet.sheetName,
+              currentSheetSourceType: sheet.sourceType,
+              currentSheetRows: rows.length,
+              currentSheetUploadedRows: Math.min(i + batch.length, rows.length),
+              uploadedRows: totalInserts,
+              batchIndex: Math.floor(i / INSERT_BATCH_SIZE) + 1,
+              batchCount,
+            }),
+          );
           lastErr = null;
           break; // success
         } catch (err) {
@@ -162,10 +258,23 @@ export async function persistImport(
       }
     }
   }
+  onProgress?.(
+    buildImportProgress(result, {
+      stage: "complete",
+      currentSheetIndex: result.bySheet.length,
+      currentSheetName: result.bySheet[result.bySheet.length - 1]?.sheetName ?? null,
+      currentSheetSourceType: (result.bySheet[result.bySheet.length - 1]?.sourceType as SourceType | undefined) ?? null,
+      currentSheetRows: result.bySheet[result.bySheet.length - 1]?.rows.length ?? 0,
+      currentSheetUploadedRows: result.bySheet[result.bySheet.length - 1]?.rows.length ?? 0,
+      uploadedRows: totalInserts,
+      batchIndex: 0,
+      batchCount: 0,
+    }),
+  );
   return { inserts: totalInserts, sheets: result.bySheet.length };
 }
 
-/** Delete a single import + all its metric rows. */
+/** Delete one saved import and its related metric rows. */
 export async function deleteImport(importId: number): Promise<void> {
   await dbReady;
   await db.performance_metrics.deleteWhere({ import_id: importId });

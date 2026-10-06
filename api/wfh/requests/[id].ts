@@ -5,7 +5,7 @@
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../../_lib/supabase-admin.js";
-import { getSession, requireManager } from "../../_lib/auth-middleware.js";
+import { getAppBuilderSession, requireManagerAppBuilder } from "../../_lib/appbuilder-auth.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -14,8 +14,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    if (!requireManager(req, res)) return;
-    const session = getSession(req)!;
+    const session = await requireManagerAppBuilder(req, res);
+    if (!session) return;
 
     const id = req.query.id as string;
     if (!id) return res.status(400).json({ error: "Missing request id" });

@@ -785,9 +785,9 @@ function renderCell(cell: string) {
   if (!cell || cell === "—") {
     return <Text size="xs" c="dimmed">—</Text>;
   }
-  const emailMatch = /[\w.+-]+@[\w-]+\.[\w.-]+/.exec(cell);
-  const phoneMatch = /\b(?:1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/.exec(
-    cell,
+  const emailMatch = cell.match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
+  const phoneMatch = cell.match(
+    /\b(?:1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b/,
   );
   if (emailMatch && emailMatch[0] === cell.trim()) {
     return (

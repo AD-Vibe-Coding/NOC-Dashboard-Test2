@@ -55,6 +55,7 @@ export const LOCKED_TEAM: TeamMember[] = [
   // ---- Automation entries ----
   { name: "Automation", tier: "tier1", team: "noc" },
   { name: "Automation - Failed", tier: "tier1", team: "noc" },
+  { name: "Maintenance Tickets", tier: "tier1", team: "noc" },
 ];
 
 export const LOCKED_TEAM_NAMES: string[] = LOCKED_TEAM.map((m) => m.name);
@@ -70,6 +71,7 @@ export const NON_PERSON_NAMES = new Set<string>([
   "NOC Seniors",
   "Automation",
   "Automation - Failed",
+  "Maintenance Tickets",
 ]);
 
 /**
@@ -131,7 +133,7 @@ function ckey(s: string): string {
  */
 function stripInitialsPrefix(key: string): string | null {
   // Match: 1-4 letters, optional separator (- | :), required whitespace, rest
-  const m = /^([a-z]{1,4})\s*(?:[-|:]\s*)?\s+(.+)$/.exec(key);
+  const m = key.match(/^([a-z]{1,4})\s*(?:[-|:]\s*)?\s+(.+)$/);
   if (!m) return null;
   const rest = m[2].trim();
   // Require the remainder to be a multi-word name so we don't strip the
@@ -347,7 +349,7 @@ export function resolveTeamMember(rawName: string | null | undefined): string | 
 
   // Step 5: if the export put an email address in the name field, try the
   // local part and common separators: first.last, first_last, flast, etc.
-  const emailMatch = /([a-z0-9._%+-]+)@[a-z0-9.-]+\.[a-z]{2,}/i.exec(String(rawName));
+  const emailMatch = String(rawName).match(/([a-z0-9._%+-]+)@[a-z0-9.-]+\.[a-z]{2,}/i);
   if (emailMatch) {
     const local = ckey(emailMatch[1].replace(/[._+-]+/g, " "));
     const retry = tryResolveKey(local);

@@ -13,6 +13,7 @@
  *      retry with name prefixed into the text body (graceful fallback)
  */
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { applyCors } from "../_lib/cors.js";
 
 const CHANNEL_ID   = process.env.SLACK_CHANNEL_ID   ?? "C09Q89PHN8M";
 const CHANNEL_NAME = process.env.SLACK_CHANNEL_NAME ?? "noc-team";
@@ -29,9 +30,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    return res.status(204).end();
+    const allowed = applyCors(req, res);
+    return allowed ? res.status(204).end() : res.status(403).json({ posted: false, error: "Origin not allowed" });
   }
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");

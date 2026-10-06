@@ -211,9 +211,8 @@ function extractJsonString(text: string): string | null {
 
   // Case 2 — find ALL fence pairs and try each one until JSON.parse succeeds.
   const fenceOpenRe = /```(?:json)?\s*\n/gi;
-  let match: RegExpExecArray | null;
-  while ((match = fenceOpenRe.exec(text)) !== null) {
-    const contentStart = match.index + match[0].length;
+  for (const match of text.matchAll(fenceOpenRe)) {
+    const contentStart = (match.index ?? 0) + match[0].length;
     const fenceEnd = text.indexOf("```", contentStart);
     if (fenceEnd === -1) {
       const json = firstToLast(text.slice(contentStart));

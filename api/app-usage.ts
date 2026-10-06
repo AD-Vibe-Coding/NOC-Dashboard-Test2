@@ -13,7 +13,7 @@
  * POST body: { event_type, widget_id?, widget_title? }
  */
 import { supabaseAdmin } from "./_lib/supabase-admin.js";
-import { getSession, requireManager } from "./_lib/auth-middleware.js";
+import { getAppBuilderSession, requireManagerAppBuilder } from "./_lib/appbuilder-auth.js";
 
 // Static roster for filling in users who haven't opened the app yet
 const EXCLUDED_WIDGET_IDS = new Set(["zoom-queue", "shift-checklist"]);
@@ -56,7 +56,7 @@ export default async function handler(req: any, res: any) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
 
-  const session = getSession(req);
+  const session = await getAppBuilderSession(req);
 
   // ── POST — record an event ─────────────────────────────────────────────────
   if (req.method === "POST") {
@@ -90,7 +90,8 @@ export default async function handler(req: any, res: any) {
 
   // ── GET — aggregated usage stats (manager only) ────────────────────────────
   if (!req.method || req.method === "GET") {
-    if (!requireManager(req, res)) return;
+    const managerSession = await requireManagerAppBuilder(req, res);
+    if (!managerSession) return;
 
     let events: any[] = [];
     let sessions: any[] = [];
@@ -243,7 +244,8 @@ export default async function handler(req: any, res: any) {
 
   // ── DELETE — wipe today's events (manager only) ───────────────────────────
   if (req.method === "DELETE") {
-    if (!requireManager(req, res)) return;
+    const managerSession = await requireManagerAppBuilder(req, res);
+    if (!managerSession) return;
     try {
       const { error } = await supabaseAdmin
         .from("app_events")

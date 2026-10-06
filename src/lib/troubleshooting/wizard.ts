@@ -165,11 +165,17 @@ export function generateSummary(state: WizardState): WizardState {
     "Issue isolated as device-related after completion of troubleshooting. Warranty replacement recommended if the carrier confirms no further network-side steps are required.";
 
   const summary = [
-    `Ticket Update — ${state.path.title}`,
-    `Carrier: ${CARRIER_LABELS[state.carrier]}`,
-    `Device: ${DEVICE_LABELS[state.device]}`,
+    ["Ticket Update — ", state.path.title].join(""),
+    ["Carrier: ", CARRIER_LABELS[state.carrier]].join(""),
+    ["Device: ", DEVICE_LABELS[state.device]].join(""),
     "",
-    `Runbook completed through ${currentStep(state).displayOrderLabel ?? String(state.currentStepIndex + 1)} (${currentStep(state).title}).`,
+    [
+      "Runbook completed through ",
+      currentStep(state).displayOrderLabel ?? String(state.currentStepIndex + 1),
+      " (",
+      currentStep(state).title,
+      ").",
+    ].join(""),
     "",
     "NOC actions completed:",
     completedTitles.length

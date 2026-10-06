@@ -98,6 +98,7 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
 
   return await new Promise<void>((resolve, reject) => {
     let receivedTerminalMessage = false;
+    let resolvedFromSessionPoll = false;
     const onMessage = async (event: MessageEvent) => {
       // Hard origin + source gate. Without it, ANY frame on the
       // page (a malicious ad, a sandboxed iframe of another origin
@@ -157,10 +158,36 @@ export async function signInWithPopup(providerId: string, scopes?: string): Prom
         reject(new Error(data.message ?? data.code ?? "Sign-in failed"));
       }
     };
-    const interval = window.setInterval(() => {
+    const interval = window.setInterval(async () => {
+      // Fallback for environments where the popup completes OAuth
+      // successfully but cannot postMessage back to the opener
+      // (for example because the browser/platform severs
+      // window.opener, or a popup gets promoted to a new tab).
+      // In first-party/top-level deployments the session cookie is
+      // already usable by this page, so a quick /api/auth/me poll
+      // lets the main app detect success even without the message
+      // handshake.
+      if (!resolvedFromSessionPoll) {
+        try {
+          const resp = await fetch("/api/auth/me", { credentials: "include" });
+          if (resp.ok) {
+            const json = await resp.json() as { user?: unknown };
+            if (json?.user) {
+              resolvedFromSessionPoll = true;
+              cleanup();
+              resolve();
+              return;
+            }
+          }
+        } catch {
+          // Ignore transient poll failures and keep waiting for
+          // either postMessage or the popup to close.
+        }
+      }
+
       if (popup.closed) {
         cleanup();
-        if (receivedTerminalMessage) {
+        if (receivedTerminalMessage || resolvedFromSessionPoll) {
           resolve();
           return;
         }

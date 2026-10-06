@@ -897,7 +897,7 @@ export function TrainingUpdatesWidget() {
           </Stack>
         </Modal>
 
-        <Modal opened={Boolean(updating)} onClose={() => setUpdating(null)} title={updating ? `Update progress · ${updating.title}` : "Update progress"}>
+        <Modal opened={Boolean(updating)} onClose={() => setUpdating(null)} title={updating ? ["Update progress · ", updating.title].join("") : "Update progress"}>
           <Stack>
             <Select
               label="Status"

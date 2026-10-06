@@ -18,7 +18,7 @@ export const PROVIDERS: Record<string, SandboxOAuthProvider> = {
     authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
     userInfoUrl: "https://openidconnect.googleapis.com/v1/userinfo",
-    defaultScopes: "openid email profile https://www.googleapis.com/auth/gmail.readonly",
+    defaultScopes: "openid email profile https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly",
     requestsRefreshToken: true,
     clientIdEnv: "GOOGLE_CLIENT_ID",
     clientSecretEnv: "GOOGLE_CLIENT_SECRET",

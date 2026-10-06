@@ -504,10 +504,24 @@ export function ZoomQueueWidget() {
     }
 
     try {
+      const existingActiveRows = await db.breaks.list({
+        filter: { employee_name: trimmed, is_active: true },
+        orderBy: { column: "start_time", ascending: false },
+      });
+      const nowIso = new Date().toISOString();
+      for (const row of existingActiveRows) {
+        const duration = Math.max(1, Math.round((new Date(nowIso).getTime() - new Date(row.start_time).getTime()) / 60000));
+        await db.breaks.updateById(row.id, {
+          end_time: nowIso,
+          duration_minutes: duration,
+          is_active: false,
+        });
+      }
+
       await db.breaks.insert({
         employee_name: trimmed,
         break_type: statusType,
-        start_time: new Date().toISOString(),
+        start_time: nowIso,
         is_active: true,
         slack_message_ts: slackTs,
         slack_posted: slackPosted,
@@ -576,13 +590,38 @@ export function ZoomQueueWidget() {
     }
   }
 
-  const activeStatusMap = new Map(
-    activeBreaks.flatMap((b) => {
-      const canonical = resolveTeamMember(b.employee_name) ?? b.employee_name;
-      const keys = new Set<string>([normName(canonical), normName(b.employee_name)]);
-      return [...keys].map((key) => [key, b] as const);
-    }),
-  );
+  const latestEndedStatusByName = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const row of breakHistory) {
+      if (!row.end_time) continue;
+      const endedAt = new Date(row.end_time).getTime();
+      const canonical = resolveTeamMember(row.employee_name) ?? row.employee_name;
+      for (const key of [normName(canonical), normName(row.employee_name)]) {
+        const current = map.get(key) ?? 0;
+        if (endedAt > current) map.set(key, endedAt);
+      }
+    }
+    return map;
+  }, [breakHistory]);
+
+  const activeStatusMap = useMemo(() => {
+    const map = new Map<string, ActiveStatusRow>();
+    for (const row of activeBreaks) {
+      const canonical = resolveTeamMember(row.employee_name) ?? row.employee_name;
+      const startedAt = new Date(row.start_time).getTime();
+      const keys = [normName(canonical), normName(row.employee_name)];
+
+      const isStale = keys.some((key) => (latestEndedStatusByName.get(key) ?? 0) > startedAt);
+      if (isStale) continue;
+
+      for (const key of keys) {
+        if (!map.has(key)) {
+          map.set(key, row);
+        }
+      }
+    }
+    return map;
+  }, [activeBreaks, latestEndedStatusByName]);
   const shiftWindowMap = useMemo(() => {
     const map = new Map<string, ShiftWindow>();
     for (const window of rosterData?.shiftWindows ?? []) {

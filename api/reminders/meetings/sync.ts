@@ -6,6 +6,8 @@ import {
   fetchCalendarEventsForUser,
   listTrackedGoogleAccounts,
 } from "../../_lib/reminder-service.js";
+import { lookupByEmail } from "../../_lib/roles.js";
+import { requireManager } from "../../_lib/auth-middleware.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
@@ -33,7 +35,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       try {
         const events = await fetchCalendarEventsForUser(account, 36);
         const email = String(account.email ?? "").trim().toLowerCase();
-        const name = String(account.name ?? email).trim();
+        const canonical = email ? lookupByEmail(email) : null;
+        const name = String(canonical?.name ?? account.name ?? email).trim();
         const nowIso = new Date().toISOString();
 
         await supabaseAdmin
@@ -48,22 +51,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             employee_email: email,
             calendar_event_id: String(event.id),
             title: String(event.summary || "Untitled event"),
+            description: event.description || null,
+            location: event.location || null,
             start_at: String(event.start?.dateTime),
             end_at: String(event.end?.dateTime || event.start?.dateTime),
-            timezone: event.start?.timeZone || event.end?.timeZone || null,
-            status: String(event.status || "confirmed"),
-            html_link: event.htmlLink || null,
             join_link: primary,
             provider,
-            location: event.location || null,
-            source_hash: JSON.stringify({
-              title: event.summary || "",
-              start: event.start?.dateTime || null,
-              end: event.end?.dateTime || null,
-              status: event.status || null,
-              join: primary,
+            status: String(event.status || "confirmed"),
+            raw_json: JSON.stringify({
+              ...event,
+              htmlLink: event.htmlLink || null,
+              timeZone: event.start?.timeZone || event.end?.timeZone || null,
             }),
-            last_synced_at: nowIso,
+            synced_at: nowIso,
           };
         });
 

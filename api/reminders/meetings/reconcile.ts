@@ -21,18 +21,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const now = Date.now();
-    const staleLockIso = new Date(now - 10 * 60 * 1000).toISOString();
+    const retryNowIso = new Date(now).toISOString();
     const endedIso = new Date(now - 15 * 60 * 1000).toISOString();
 
     await supabaseAdmin
       .from("meeting_reminder_jobs")
-      .update({ status: "failed", locked_at: null, locked_by: null, last_error: "Recovered stale sending lock", next_attempt_at: new Date().toISOString() })
-      .eq("status", "sending")
-      .lte("locked_at", staleLockIso);
+      .update({ status: "failed", last_error: "Recovered interrupted send attempt", scheduled_for: retryNowIso })
+      .eq("status", "sending");
 
     await supabaseAdmin
       .from("meeting_reminder_jobs")
-      .update({ status: "cancelled", locked_at: null, locked_by: null, last_error: "Meeting already ended before send" })
+      .update({ status: "cancelled", last_error: "Meeting already ended before send" })
       .in("status", ["pending", "failed", "sending"])
       .lte("meeting_start_at", endedIso);
 

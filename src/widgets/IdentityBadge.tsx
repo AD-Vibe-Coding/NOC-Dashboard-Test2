@@ -9,7 +9,6 @@ import {
   Group,
   Loader,
   Modal,
-  SegmentedControl,
   Select,
   Stack,
   Text,
@@ -27,7 +26,6 @@ import {
 import { useIdentity, type Identity } from "../lib/identity";
 import { BrandLogo } from "./BrandLogo";
 import {
-  ROLES,
   ROLE_COLORS,
   ROLE_DESCRIPTIONS,
   ROLE_LABELS,
@@ -39,9 +37,6 @@ import { NOC_ROSTER } from "../lib/roster";
 // ── Impersonation helpers ─────────────────────────────────────────────────────
 const IMPERSONATE_KEY = "noc_impersonate_original";
 
-function saveOriginalManager(name: string) {
-  localStorage.setItem(IMPERSONATE_KEY, name);
-}
 function getOriginalManager(): string | null {
   return localStorage.getItem(IMPERSONATE_KEY);
 }
@@ -257,11 +252,11 @@ function AccountModal({
   opened,
   onClose,
   identity,
-  setRole,
+  setRole: _setRole,
   signOut,
   isImpersonating,
   originalManager,
-  impersonate,
+  impersonate: _impersonate,
   returnToManager,
 }: {
   opened: boolean;
@@ -274,25 +269,6 @@ function AccountModal({
   impersonate: (name: string) => void;
   returnToManager: () => Promise<void>;
 }) {
-  const [role, setLocalRole] = useState<Role>(identity.role);
-  const [impersonateTarget, setImpersonateTarget] = useState<string | null>(null);
-
-  function handleImpersonate() {
-    if (!impersonateTarget) return;
-    // Save manager name before first switch
-    if (!isImpersonating) {
-      saveOriginalManager(identity.name);
-    }
-    impersonate(impersonateTarget);
-    setImpersonateTarget(null);
-    onClose();
-  }
-
-  function save() {
-    if (role !== identity.role) setRole(role);
-    onClose();
-  }
-
   return (
     <Modal
       opened={opened}
@@ -373,91 +349,29 @@ function AccountModal({
           </Alert>
         )}
 
-        {/* Login As — managers only */}
-        {(identity.role === "manager" || !!originalManager) && (
-          <Box>
-            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={6}>
-              Login as team member
-            </Text>
-            <Stack gap="xs">
-              <Select
-                placeholder="Select a team member…"
-                data={NOC_ROSTER.filter((n) => n !== (originalManager ?? identity.name))}
-                value={impersonateTarget}
-                onChange={setImpersonateTarget}
-                searchable
-                clearable
-                size="sm"
-                leftSection={<IconSwitch size={14} />}
-              />
-              <Button
-                size="xs"
-                color="orange"
-                variant="light"
-                leftSection={<IconSwitch size={13} />}
-                disabled={!impersonateTarget}
-                onClick={handleImpersonate}
-              >
-                Login as {impersonateTarget ?? "…"}
-              </Button>
-            </Stack>
-          </Box>
-        )}
-
         <Divider />
 
-        {/* Role display — managers can switch for demo; techs see read-only badge */}
-        {identity.role === "manager" ? (
-          <Box>
-            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={6}>
-              Role override (manager only)
+        {/* Role display */}
+        <Box
+          p="xs"
+          style={{
+            background: "var(--mantine-color-dark-7)",
+            borderRadius: 8,
+            borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[identity.role]}-6)`,
+          }}
+        >
+          <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={4}>
+            Access Level
+          </Text>
+          <Group gap="xs">
+            <Badge color={ROLE_COLORS[identity.role]} variant="light" size="sm">
+              {ROLE_LABELS[identity.role]}
+            </Badge>
+            <Text size="xs" c="dimmed">
+              {ROLE_DESCRIPTIONS[identity.role]}
             </Text>
-            <SegmentedControl
-              fullWidth
-              value={role}
-              onChange={(v) => setLocalRole(v as Role)}
-              data={ROLES.map((r) => ({
-                label: ROLE_SHORT_LABELS[r],
-                value: r,
-              }))}
-              size="sm"
-            />
-            <Box
-              mt={8}
-              p="xs"
-              style={{
-                background: "var(--mantine-color-dark-7)",
-                borderRadius: 6,
-                borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[role]}-6)`,
-              }}
-            >
-              <Text size="xs" c="dimmed">
-                {ROLE_DESCRIPTIONS[role]}
-              </Text>
-            </Box>
-          </Box>
-        ) : (
-          <Box
-            p="xs"
-            style={{
-              background: "var(--mantine-color-dark-7)",
-              borderRadius: 8,
-              borderLeft: `3px solid var(--mantine-color-${ROLE_COLORS[identity.role]}-6)`,
-            }}
-          >
-            <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={4}>
-              Access Level
-            </Text>
-            <Group gap="xs">
-              <Badge color={ROLE_COLORS[identity.role]} variant="light" size="sm">
-                {ROLE_LABELS[identity.role]}
-              </Badge>
-              <Text size="xs" c="dimmed">
-                {ROLE_DESCRIPTIONS[identity.role]}
-              </Text>
-            </Group>
-          </Box>
-        )}
+          </Group>
+        </Box>
 
         <Divider />
 
@@ -476,11 +390,6 @@ function AccountModal({
             <Button variant="default" size="xs" onClick={onClose}>
               Close
             </Button>
-            {identity.role === "manager" && (
-              <Button size="xs" color="appdirect" onClick={save}>
-                Save
-              </Button>
-            )}
           </Group>
         </Group>
       </Stack>

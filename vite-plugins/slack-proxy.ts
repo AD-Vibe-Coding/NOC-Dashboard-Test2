@@ -163,8 +163,8 @@ export function classifyAssignment(
   resolveMention: (id: string) => string | null,
 ): { ticket: string; priority?: string; to_user: string } | null {
   if (!text) return null;
-  const m1 = /\bassign(?:ing)?\b\s+(?:(P\d+)\s+)?(?:ticket\s+)?(\d{6,7})\s+to\s+(?:you\s+)?(.+)/i.exec(
-    text,
+  const m1 = text.match(
+    /\bassign(?:ing)?\b\s+(?:(P\d+)\s+)?(?:ticket\s+)?(\d{6,7})\s+to\s+(?:you\s+)?(.+)/i,
   );
   if (!m1) return null;
   const priority = m1[1] ? m1[1].toUpperCase() : undefined;
@@ -173,7 +173,7 @@ export function classifyAssignment(
 
   // Resolve @mention → display name. Falls back to the trailing display-name
   // text if the mention can't be resolved.
-  const mentionMatch = /<@(U[A-Z0-9]+)>/.exec(tail);
+  const mentionMatch = tail.match(/<@(U[A-Z0-9]+)>/);
   let to_user = "";
   if (mentionMatch) {
     to_user = resolveMention(mentionMatch[1]) ?? "";

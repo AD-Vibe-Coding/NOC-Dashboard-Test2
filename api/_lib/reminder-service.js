@@ -192,12 +192,21 @@ export async function getNotificationTarget(name, email) {
     ?? (data ?? []).find((row) => String(row.employee_name ?? "").trim() === employeeName)
     ?? null;
 
-  if (exact) return exact;
+  if (exact?.channel_type === "slack_dm" && exact?.slack_user_id) {
+    return exact;
+  }
 
   const fallbackSlack = defaultSlackUserIdFor(employeeName);
-  return fallbackSlack
-    ? { channel_type: "slack_dm", slack_user_id: fallbackSlack, enabled: true }
-    : null;
+  if (fallbackSlack) {
+    return {
+      channel_type: "slack_dm",
+      slack_user_id: fallbackSlack,
+      slack_channel_id: null,
+      enabled: true,
+    };
+  }
+
+  return null;
 }
 
 export async function getReminderPolicy(name, email) {

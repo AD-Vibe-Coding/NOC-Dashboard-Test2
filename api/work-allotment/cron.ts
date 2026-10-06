@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { WORK_ALLOTMENT_CONFIG } from "../_lib/google-sheets-work-allotment.js";
-import { ensureDailyWorkAllotmentJobs, postDueScheduledWorkAllotments, recordAutomationRun, runWorkAllotmentAutomation } from "../_lib/work-allotment-automation.js";
+import { dispatchDueOwnershipTaskReminders, ensureDailyWorkAllotmentJobs, postDueScheduledWorkAllotments, recordAutomationRun, runWorkAllotmentAutomation, syncWeekendFairnessIfDue } from "../_lib/work-allotment-automation.js";
 
 function cronAuthorized(req: VercelRequest) {
   const vercelCronHeader = req.headers["x-vercel-cron"];
@@ -54,17 +54,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === "post-due") {
       const result = await postDueScheduledWorkAllotments({ now });
+      const ownershipReminders = await dispatchDueOwnershipTaskReminders({ now });
+      const weekendFairness = await syncWeekendFairnessIfDue({ now });
       await recordAutomationRun({
         action,
         ran_at: now.toISOString(),
         generation_triggered: false,
         generation_skipped: true,
-        due_count: result.dueCount ?? 0,
-        posted_count: result.postedCount ?? 0,
-        failure_count: Array.isArray(result.failures) ? result.failures.length : 0,
-        note: "cron_post_due",
+        due_count: (result.dueCount ?? 0) + (ownershipReminders.processed ?? 0),
+        posted_count: (result.postedCount ?? 0) + (ownershipReminders.reminded ?? 0),
+        failure_count: (Array.isArray(result.failures) ? result.failures.length : 0) + (ownershipReminders.failed ?? 0),
+        note: `cron_post_due:${weekendFairness.reason ?? "weekend_sync"}`,
       });
-      return res.status(200).json({ ok: true, config: WORK_ALLOTMENT_CONFIG, action, result });
+      return res.status(200).json({ ok: true, config: WORK_ALLOTMENT_CONFIG, action, result: { ...result, ownershipReminders, weekendFairness } });
     }
 
     const result = await runWorkAllotmentAutomation({ now });

@@ -1,0 +1,5 @@
+import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { handleCollection } from "./_lib/crud.js";
+
+export default (req: VercelRequest, res: VercelResponse) =>
+  handleCollection("ownership_tasks", req, res);

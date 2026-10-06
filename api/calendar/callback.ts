@@ -5,6 +5,8 @@
  * postMessages success back to the opener and closes the popup.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { supabaseAdmin } from "../_lib/supabase-admin.js";
+import { lookupByEmail } from "../_lib/roles.js";
 
 const STATE_COOKIE   = "gcal_oauth_state";
 const PKCE_COOKIE    = "gcal_oauth_verifier";
@@ -46,6 +48,80 @@ function renderClose(res: ServerResponse, targetOrigin: string, success: boolean
 </body>`);
 }
 
+async function fetchGoogleProfile(accessToken: string) {
+  const response = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload?.sub || !payload?.email) {
+    throw new Error("Failed to load Google profile for reminder tracking.");
+  }
+  const email = String(payload.email).trim().toLowerCase();
+  const canonical = email ? lookupByEmail(email) : null;
+  return {
+    google_sub: String(payload.sub),
+    email,
+    name: canonical?.name ?? (typeof payload.name === "string" ? payload.name.trim() : ""),
+  };
+}
+
+async function persistGoogleAccountTokens(params: {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn: number;
+  tokenType?: string;
+  scope?: string;
+}) {
+  const profile = await fetchGoogleProfile(params.accessToken);
+  const expiresAt = new Date(Date.now() + Number(params.expiresIn || 3600) * 1000).toISOString();
+  const nowIso = new Date().toISOString();
+
+  const { data: existingRows, error: lookupError } = await supabaseAdmin
+    .from("google_account_tokens")
+    .select("id, refresh_token")
+    .eq("email", profile.email)
+    .order("updated_at", { ascending: false })
+    .limit(1);
+  if (lookupError) throw new Error(lookupError.message);
+
+  const existing = existingRows?.[0] ?? null;
+  const refreshToken = params.refreshToken || existing?.refresh_token || null;
+
+  if (existing?.id) {
+    const { error } = await supabaseAdmin
+      .from("google_account_tokens")
+      .update({
+        google_sub: profile.google_sub,
+        email: profile.email,
+        name: profile.name || profile.email,
+        access_token: params.accessToken,
+        refresh_token: refreshToken,
+        token_type: params.tokenType || null,
+        granted_scopes: params.scope || null,
+        expires_at: expiresAt,
+        updated_at: nowIso,
+      })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+    return;
+  }
+
+  const { error } = await supabaseAdmin
+    .from("google_account_tokens")
+    .insert({
+      google_sub: profile.google_sub,
+      email: profile.email,
+      name: profile.name || profile.email,
+      access_token: params.accessToken,
+      refresh_token: refreshToken,
+      token_type: params.tokenType || null,
+      granted_scopes: params.scope || null,
+      expires_at: expiresAt,
+      updated_at: nowIso,
+    });
+  if (error) throw new Error(error.message);
+}
+
 export default async function handler(req: IncomingMessage, res: ServerResponse) {
   const targetOrigin = getOrigin(req);
   const url   = new URL(`http://x${req.url ?? ""}`);
@@ -69,7 +145,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   const redirectUri = `${targetOrigin}/api/calendar/callback`;
 
-  let tokens: { access_token?: string; refresh_token?: string; expires_in?: number };
+  let tokens: { access_token?: string; refresh_token?: string; expires_in?: number; token_type?: string; scope?: string };
   try {
     const r = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -91,6 +167,18 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
 
   const expiresIn    = Number(tokens.expires_in ?? 3600);
   const accessMaxAge = expiresIn;
+
+  try {
+    await persistGoogleAccountTokens({
+      accessToken: tokens.access_token!,
+      refreshToken: tokens.refresh_token,
+      expiresIn,
+      tokenType: tokens.token_type,
+      scope: tokens.scope,
+    });
+  } catch (e) {
+    return renderClose(res, targetOrigin, false, (e as Error).message);
+  }
   // Refresh tokens are long-lived (keep 30 days)
   const clearOpts  = "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
   const accessOpts = `; Path=/; HttpOnly; Secure; SameSite=None; Partitioned; Max-Age=${accessMaxAge}`;

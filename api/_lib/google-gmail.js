@@ -1,7 +1,49 @@
 import { supabaseAdmin } from "./supabase-admin.js";
 
-const GMAIL_LABEL_QUERY = "label:gemini-notes";
+const GMAIL_LABEL_ROOT = "Gemini Notes";
 const GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+const APPROVED_TEAM_MEMBER_NAMES = [
+  "Karthik Radhakrishnan",
+  "Pranav Dandibhotla",
+  "Sriram Parisa",
+  "Lokesh Naik Banavath",
+  "Kenya Gentry",
+  "Mohammed Ashraf",
+  "Hamza Rahmani",
+  "Akash Hanvate",
+  "Otukho Olembo",
+  "Mohammed Zubairuddin",
+  "Karthik Damagalla",
+  "Abhishek Benarji",
+  "Akram Ahmed",
+  "Mahalakshmi Samiti",
+];
+const APPROVED_MY_NOTEBOOK_NAMES = [
+  "C3 & NOC Monthly Sync",
+  "Monthly Review - NOC",
+  "NOC & MOM Monthly Sync",
+  "NOC Management Meetings",
+  "Team Meetings",
+  "Matt - One on One",
+];
+
+function normalizeLabelName(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function isApprovedGeminiLabelName(name) {
+  const normalized = normalizeLabelName(name);
+  const leaf = normalized.split("/").pop()?.trim() ?? normalized;
+  const allowed = new Set([
+    ...APPROVED_TEAM_MEMBER_NAMES.map(normalizeLabelName),
+    ...APPROVED_MY_NOTEBOOK_NAMES.map(normalizeLabelName),
+  ]);
+  return allowed.has(leaf);
+}
 
 function normalizeEmail(value) {
   return String(value ?? "").trim().toLowerCase();
@@ -144,21 +186,40 @@ async function refreshAccessToken(row) {
   return updated.access_token;
 }
 
-export async function getValidGoogleAccessToken(email) {
+function hasRequiredGoogleScope(scopeText, requiredScope) {
+  if (!requiredScope) return true;
+  const normalized = String(scopeText ?? "").toLowerCase();
+  const required = String(requiredScope ?? "").trim().toLowerCase();
+  if (!required) return true;
+  return normalized.includes(required);
+}
+
+export async function getValidGoogleAccessToken(email, options = {}) {
+  const normalizedEmail = normalizeEmail(email);
+  const requiredScope = String(options.requiredScope ?? "gmail.readonly").trim();
+
   const { data, error } = await supabaseAdmin
     .from("google_account_tokens")
     .select("*")
-    .eq("email", email)
+    .eq("email", normalizedEmail)
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   if (error) throw new Error(normalizeSupabaseTableError(error, "google_account_tokens"));
-  if (!data) throw new Error("No Gmail connection found for this manager. Please sign out and sign in again after adding the Gmail scope.");
+  if (!data) {
+    if (requiredScope.toLowerCase().includes("calendar")) {
+      throw new Error("No Google Calendar connection found for this user. Please sign out and sign in again to grant Calendar access.");
+    }
+    throw new Error("No Gmail connection found for this user. Please sign out and sign in again after adding the Gmail scope.");
+  }
 
   const scopeText = String(data.granted_scopes ?? "");
-  if (!scopeText.includes("gmail.readonly")) {
-    throw new Error("This Google session does not include Gmail read access yet. Please sign out and sign in again.");
+  if (!hasRequiredGoogleScope(scopeText, requiredScope)) {
+    if (requiredScope.toLowerCase().includes("calendar")) {
+      throw new Error("This Google sign-in does not include Calendar access yet. Please sign out and sign in again.");
+    }
+    throw new Error("This Google sign-in does not include Gmail access yet. Please sign out and sign in again.");
   }
 
   if (data.access_token && data.expires_at && new Date(data.expires_at).getTime() > Date.now() + 60_000) {
@@ -166,6 +227,22 @@ export async function getValidGoogleAccessToken(email) {
   }
 
   return refreshAccessToken(data);
+}
+
+export async function listGmailLabels(email) {
+  const accessToken = await getValidGoogleAccessToken(email);
+  const response = await fetch(`${GMAIL_BASE}/labels`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error?.message || "Failed to load Gmail labels.");
+  return Array.isArray(payload.labels)
+    ? payload.labels.map((label) => ({
+        id: String(label.id ?? "").trim(),
+        name: String(label.name ?? "").trim(),
+        type: String(label.type ?? "user"),
+      })).filter((label) => label.id && label.name)
+    : [];
 }
 
 export async function listGeminiNoteMessages(email, maxResults = 5, startDate = null, endDate = null) {
@@ -179,35 +256,50 @@ export async function listGeminiNoteMessages(email, maxResults = 5, startDate = 
   const beforePart = beforeDate
     ? ` before:${beforeDate.toISOString().slice(0, 10).replaceAll("-", "/")}`
     : "";
-  const query = `${GMAIL_LABEL_QUERY}${afterPart}${beforePart}`.trim();
+  const dateQuery = `${afterPart}${beforePart}`.trim();
 
   const safeMaxResults = Math.max(1, Math.min(Number(maxResults) || 50, 500));
   const ids = [];
-  let pageToken = null;
+  const seenIds = new Set();
 
-  do {
-    const pageParams = new URLSearchParams({
-      maxResults: String(Math.min(100, safeMaxResults - ids.length || 100)),
-      q: query,
-    });
-    if (pageToken) pageParams.set("pageToken", pageToken);
+  const labels = await listGmailLabels(email);
+  const geminiLabels = labels.filter((label) => {
+    const name = String(label?.name ?? "").trim();
+    return (name === GMAIL_LABEL_ROOT || name.startsWith(`${GMAIL_LABEL_ROOT}/`)) && isApprovedGeminiLabelName(name);
+  });
 
-    const listResponse = await fetch(`${GMAIL_BASE}/messages?${pageParams.toString()}`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-    const listPayload = await listResponse.json().catch(() => ({}));
-    if (!listResponse.ok) throw new Error(listPayload.error?.message || "Failed to query Gmail.");
+  for (const label of geminiLabels) {
+    let pageToken = null;
+    do {
+      const pageParams = new URLSearchParams({
+        maxResults: String(Math.min(100, safeMaxResults)),
+      });
+      if (dateQuery) pageParams.set("q", dateQuery);
+      pageParams.append("labelIds", String(label.id));
+      if (pageToken) pageParams.set("pageToken", pageToken);
 
-    for (const message of listPayload.messages ?? []) {
-      if (message?.id) ids.push(message.id);
-      if (ids.length >= safeMaxResults) break;
-    }
-    pageToken = ids.length >= safeMaxResults ? null : (listPayload.nextPageToken ?? null);
-  } while (pageToken);
+      const listResponse = await fetch(`${GMAIL_BASE}/messages?${pageParams.toString()}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      const listPayload = await listResponse.json().catch(() => ({}));
+      if (!listResponse.ok) throw new Error(listPayload.error?.message || "Failed to query Gmail.");
+
+      for (const message of listPayload.messages ?? []) {
+        if (!message?.id || seenIds.has(message.id)) continue;
+        seenIds.add(message.id);
+        ids.push(message.id);
+        if (ids.length >= safeMaxResults) break;
+      }
+      pageToken = ids.length >= safeMaxResults ? null : (listPayload.nextPageToken ?? null);
+    } while (pageToken && ids.length < safeMaxResults);
+
+    if (ids.length >= safeMaxResults) break;
+  }
 
   if (ids.length === 0) return [];
 
   const importedLookup = new Set();
+  const labelLookup = new Map(labels.map((label) => [label.id, label.name]));
   const { data: existingRows } = await supabaseAdmin
     .from("one_on_one_notes")
     .select("source_message_id")
@@ -233,6 +325,9 @@ export async function listGeminiNoteMessages(email, maxResults = 5, startDate = 
       const date = headerValue(detail, "Date");
       const body = extractBody(detail);
 
+      const labelIds = Array.isArray(detail.labelIds) ? detail.labelIds.map(String).filter(Boolean) : [];
+      const labelNames = labelIds.map((labelId) => labelLookup.get(labelId)).filter(Boolean);
+
       return {
         id,
         threadId: detail.threadId ?? null,
@@ -243,7 +338,9 @@ export async function listGeminiNoteMessages(email, maxResults = 5, startDate = 
         body,
         imported: importedLookup.has(id),
         internalDate: detail.internalDate ? new Date(Number(detail.internalDate)).toISOString() : null,
-        labelQuery: query,
+        labelQuery: `${GMAIL_LABEL_ROOT}${dateQuery ? ` (${dateQuery})` : ""}`,
+        labelIds,
+        labelNames,
       };
     }));
 

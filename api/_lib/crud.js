@@ -22,6 +22,10 @@ const ALLOWED_TABLES = new Set([
   "breaks",
   "break_schedules",
   "reminder_events",
+  "calendar_meetings",
+  "meeting_reminder_jobs",
+  "notification_targets",
+  "reminder_policies",
   "punch_events",
   "one_on_one_notes",
   "notebook_section_preferences",
@@ -30,6 +34,8 @@ const ALLOWED_TABLES = new Set([
   "escalation_drafts",
   "shift_handovers",
   "work_allotment_jobs",
+  "work_allotment_asrh_hours",
+  "ownership_tasks",
   "polished_emails",
   "performance_imports",
   "performance_metrics",
@@ -41,6 +47,7 @@ const ALLOWED_TABLES = new Set([
   "manager_feedback",
   "metric_disputes",
   "noc_mttr_reports",
+  "finance_cases",
 ]);
 
 // Strip auto-managed columns from POST/PATCH payloads so callers can't

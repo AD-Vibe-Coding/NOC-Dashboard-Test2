@@ -7,6 +7,42 @@ import "dotenv/config";
 
 const CHANNEL_ID = process.env.SLACK_CHANNEL_ID || "C09Q89PHN8M";
 
+async function openDmChannel(token, userId) {
+  const response = await fetch("https://slack.com/api/conversations.open", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ users: userId }),
+  });
+  return response.json();
+}
+
+export async function deleteSlackMessage(ts, opts = {}) {
+  const token = process.env.SLACK_BOT_TOKEN ?? "";
+  if (!token || !token.startsWith("xoxb-")) {
+    return { ok: false, error: "missing_slack_bot_token" };
+  }
+
+  const channel = opts.channel || opts.channel_id || CHANNEL_ID;
+  if (!ts) {
+    return { ok: false, error: "missing_message_ts" };
+  }
+
+  try {
+    const response = await fetch("https://slack.com/api/chat.delete", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ channel, ts }),
+    });
+    const json = await response.json();
+    if (!json?.ok) {
+      return { ok: false, error: json?.error ?? "slack_delete_failed" };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message ?? "slack_delete_exception" };
+  }
+}
+
 export async function postSlackMessage(text, opts = {}) {
   const token = process.env.SLACK_BOT_TOKEN ?? "";
   if (!token || !token.startsWith("xoxb-")) {
@@ -14,11 +50,12 @@ export async function postSlackMessage(text, opts = {}) {
     return { posted: false, ts: null, demo: true };
   }
 
-  const channel = opts.channel || CHANNEL_ID;
+  const targetUserId = opts.target_user_id || null;
+  const explicitChannel = opts.channel || opts.channel_id || null;
   const wantCustomize = Boolean(opts.username || opts.icon_emoji);
   const fallbackText = opts.username ? `${opts.username}: ${text}` : text;
 
-  async function postOnce(withCustomize) {
+  async function postOnce(withCustomize, channel) {
     const payload = {
       channel,
       text: withCustomize ? text : fallbackText,
@@ -36,12 +73,21 @@ export async function postSlackMessage(text, opts = {}) {
   }
 
   try {
-    let j = await postOnce(wantCustomize);
+    let channel = explicitChannel || CHANNEL_ID;
+    if (targetUserId) {
+      const dm = await openDmChannel(token, targetUserId);
+      if (!dm?.ok || !dm?.channel?.id) {
+        return { posted: false, ts: null, error: dm?.error ?? "slack_dm_open_failed" };
+      }
+      channel = dm.channel.id;
+    }
+
+    let j = await postOnce(wantCustomize, channel);
     let customizeDenied = false;
 
     if (!j.ok && wantCustomize && (j.error === "missing_scope" || j.error === "not_allowed_token_type" || j.error === "invalid_arg_name" || j.error === "not_authed")) {
       customizeDenied = true;
-      j = await postOnce(false);
+      j = await postOnce(false, channel);
     }
 
     if (!j.ok) {

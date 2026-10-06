@@ -34,7 +34,6 @@ import {
   IconLayoutDashboard,
   IconMail,
   IconPhone,
-  IconReportAnalytics,
   IconSearch,
   IconShield,
   IconUsers,
@@ -53,7 +52,7 @@ const PILLARS = [
     desc: "See who is in queue vs out in real-time via Zoom Phone API. Break Tracker integration shows WHY an agent is out — coffee, lunch, restroom, or personal.",
   },
   {
-    icon: IconReportAnalytics,
+    icon: IconChartBar,
     color: "green",
     title: "Performance Management",
     desc: "Import Excel scorecards to track call metrics, ticket quality, and SLA adherence per agent. AI-powered ticket audits score quality automatically and push results to the tracker.",

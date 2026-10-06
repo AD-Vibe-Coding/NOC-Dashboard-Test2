@@ -14,6 +14,16 @@ import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
 
 type Kudos = Awaited<ReturnType<typeof db.kudos.list>>[number];
 
+type KudosGroup = {
+  ids: number[];
+  from_name: string;
+  to_names: string[];
+  message: string;
+  category: string;
+  is_pinned: boolean;
+  created_at: Date | string;
+};
+
 const CATEGORIES = [
   { value: "teamwork",         label: "🤝 Teamwork",           color: "blue" },
   { value: "problem-solving",  label: "🧠 Problem Solving",    color: "violet" },
@@ -52,6 +62,51 @@ function getErrorMessage(error: unknown) {
     }
   }
   return "Something went wrong";
+}
+
+function formatNames(names: string[]) {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} and ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
+}
+
+function groupKudosRows(rows: Kudos[]) {
+  const groups: KudosGroup[] = [];
+
+  for (const row of rows) {
+    const rowTime = new Date(row.created_at).getTime();
+    const existing = groups.find((group) => {
+      const groupTime = new Date(group.created_at).getTime();
+      return (
+        group.from_name === row.from_name &&
+        group.message === row.message &&
+        group.category === row.category &&
+        Math.abs(groupTime - rowTime) <= 5_000
+      );
+    });
+
+    if (existing) {
+      existing.ids.push(row.id);
+      existing.to_names.push(row.to_name);
+      existing.is_pinned = existing.is_pinned || row.is_pinned;
+      if (rowTime > new Date(existing.created_at).getTime()) {
+        existing.created_at = row.created_at;
+      }
+      continue;
+    }
+
+    groups.push({
+      ids: [row.id],
+      from_name: row.from_name,
+      to_names: [row.to_name],
+      message: row.message,
+      category: row.category,
+      is_pinned: row.is_pinned,
+      created_at: row.created_at,
+    });
+  }
+
+  return groups;
 }
 
 export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
@@ -102,13 +157,17 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
           is_pinned: false,
         })),
       );
-      const savedKudos = Array.isArray(inserted) ? inserted[0] : null;
+      const savedKudos = Array.isArray(inserted)
+        ? inserted.filter(Boolean)
+        : inserted
+          ? [inserted]
+          : [];
       setModalOpen(false);
       setToNames([]);
       setMessage("");
       setCategory("teamwork");
       await load();
-      if (savedKudos) {
+      if (savedKudos.length > 0) {
         window.dispatchEvent(new CustomEvent("kudos:posted", { detail: savedKudos }));
       }
     } catch (e) {
@@ -118,20 +177,20 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
     }
   }
 
-  async function togglePin(k: Kudos) {
+  async function togglePin(group: KudosGroup) {
     setError(null);
     try {
-      await db.kudos.updateById(k.id, { is_pinned: !k.is_pinned });
+      await Promise.all(group.ids.map((id) => db.kudos.updateById(id, { is_pinned: !group.is_pinned })));
       await load();
     } catch (e) {
       setError(getErrorMessage(e));
     }
   }
 
-  async function deleteKudos(k: Kudos) {
+  async function deleteKudos(group: KudosGroup) {
     setError(null);
     try {
-      await db.kudos.deleteById(k.id);
+      await Promise.all(group.ids.map((id) => db.kudos.deleteById(id)));
       await load();
     } catch (e) {
       setError(getErrorMessage(e));
@@ -141,8 +200,9 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const teamOptions = PERSON_TEAM_NAMES.map((n: string) => ({ value: n, label: n }));
 
-  const pinned = kudosList.filter(k => k.is_pinned);
-  const unpinned = kudosList.filter(k => !k.is_pinned);
+  const groupedKudos = groupKudosRows(kudosList);
+  const pinned = groupedKudos.filter((k) => k.is_pinned);
+  const unpinned = groupedKudos.filter((k) => !k.is_pinned);
   const filtered = [...pinned, ...unpinned];
 
   return (
@@ -183,21 +243,24 @@ export function KudosBoardWidget(_props: { onCollapse?: () => void }) {
           </Card>
         ) : (
           <Stack gap="sm">
-            {filtered.map(k => {
+            {filtered.map((k) => {
               const cat = catMeta(k.category);
+              const recipientLabel = k.to_names.length > 1 ? "Recipients" : "Recipient";
               return (
-                <Card key={k.id} withBorder radius="lg" p="md"
+                <Card key={k.ids.join("-")} withBorder radius="lg" p="md"
                   style={k.is_pinned ? { borderColor: "var(--mantine-color-yellow-6)", borderWidth: 2 } : undefined}>
                   <Group justify="space-between" align="flex-start" wrap="nowrap">
                     <Stack gap={4} style={{ flex: 1 }}>
                       <Group gap="xs" wrap="wrap">
                         <Badge color={cat.color} variant="light" size="sm">{cat.label}</Badge>
                         {k.is_pinned && <Badge color="yellow" variant="filled" size="xs">📌 Pinned</Badge>}
+                        {k.to_names.length > 1 && <Badge color="gray" variant="outline" size="xs">{k.to_names.length} recipients</Badge>}
                       </Group>
                       <Text fw={700} size="sm">
-                        <Text span c="yellow.4">✦ {k.to_name}</Text>
-                        <Text span c="dimmed"> from {k.from_name}</Text>
+                        <Text span c="dimmed">{recipientLabel}: </Text>
+                        <Text span c="yellow.4">✦ {formatNames(k.to_names)}</Text>
                       </Text>
+                      <Text size="sm" c="dimmed">from {k.from_name}</Text>
                       <Text size="sm" style={{ whiteSpace: "pre-wrap" }}>{k.message}</Text>
                       <Text size="xs" c="dimmed">{timeAgo(k.created_at)}</Text>
                     </Stack>

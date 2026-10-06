@@ -7,6 +7,9 @@ import {
   getReminderPolicy,
   reminderOffsetsFromPolicy,
 } from "../../_lib/reminder-service.js";
+import { requireManager } from "../../_lib/auth-middleware.js";
+
+const LATE_GRACE_MS = 2 * 60 * 1000;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
@@ -57,7 +60,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (policy.only_with_join_link && !meeting.join_link) continue;
 
       const target = await getNotificationTarget(meeting.employee_name, meeting.employee_email);
-      if (!target) continue;
+      if (!target?.slack_user_id) continue;
 
       const offsets = reminderOffsetsFromPolicy(policy);
       const startMs = new Date(meeting.start_at).getTime();
@@ -65,7 +68,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (Number.isNaN(startMs) || Number.isNaN(endMs) || endMs <= now) continue;
 
       for (const offset of offsets) {
-        const scheduledFor = new Date(startMs - offset * 60 * 1000).toISOString();
+        const scheduledForMs = startMs - offset * 60 * 1000;
+        if (scheduledForMs < (now - LATE_GRACE_MS)) continue;
+        const scheduledFor = new Date(scheduledForMs).toISOString();
         const dedupeKey = buildDedupeKey({
           employeeName: meeting.employee_name,
           calendarEventId: meeting.calendar_event_id,
@@ -84,17 +89,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           scheduled_for: scheduledFor,
           status: "pending",
           dedupe_key: dedupeKey,
-          slack_target_type: target.channel_type,
-          slack_target_id: target.slack_user_id || target.slack_channel_id || null,
           join_link: meeting.join_link,
           payload_json: JSON.stringify({
             title: meeting.title,
             provider: meeting.provider,
             timeLabel: new Date(meeting.start_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
-            htmlLink: meeting.html_link,
+            targetChannelType: "slack_dm",
+            targetSlackUserId: target.slack_user_id || null,
+            targetSlackChannelId: null,
           }),
           attempt_count: 0,
-          next_attempt_at: scheduledFor,
+          last_error: null,
+          sent_at: null,
         });
       }
     }

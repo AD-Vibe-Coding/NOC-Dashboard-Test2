@@ -27,7 +27,7 @@ export function splitSubjectBody(text: string) {
   let subjectLine = "";
   let bodyStart = 0;
   for (let i = 0; i < Math.min(lines.length, 5); i += 1) {
-    const match = /^\s*subject\s*[:\-—]\s*(.*)$/i.exec(lines[i]);
+    const match = lines[i].match(/^\s*subject\s*[:\-—]\s*(.*)$/i);
     if (match) {
       subjectLine = match[1].trim();
       bodyStart = i + 1;
@@ -66,7 +66,7 @@ export function normalizeSourceText(input: string) {
 
 function matchRegex(text: string, patterns: RegExp[]) {
   for (const pattern of patterns) {
-    const match = pattern.exec(text);
+    const match = text.match(pattern);
     if (match?.[1]) return match[1].trim();
   }
   return "";
@@ -96,8 +96,8 @@ export function extractStructuredContext(text: string): StructuredContext {
       /estimated\s*(?:time|repair)\s*[:\-]\s*([^\n]+)/i,
     ]),
     nextUpdate: matchRegex(text, [
-      /next\s*update\s*(?:by|at)?\s*[:\-]?\s*([^\n]+)/i,
-      /update\s*cadence\s*[:\-]\s*([^\n]+)/i,
+      new RegExp(String.raw`next\s*update\s*(?:by|at)?\s*[:\-]?\s*([^\n]+)`, "i"),
+      new RegExp(String.raw`update\s*cadence\s*[:\-]\s*([^\n]+)`, "i"),
     ]),
     impact: matchRegex(text, [
       /impact\s*[:\-]\s*([^\n]+)/i,

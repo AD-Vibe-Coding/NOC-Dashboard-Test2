@@ -347,9 +347,9 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 function parseChecklist(markdown: string) {
-  const reviewed = /All tickets reviewed.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
-  const pending = /Included all pending.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
-  const workAllotmentCompleted = /Completed all the tasks assigned in Work Allotment.*?:\s*(✓|✗)/i.exec(markdown)?.[1] === "✓";
+  const reviewed = markdown.match(/All tickets reviewed.*?:\s*(✓|✗)/i)?.[1] === "✓";
+  const pending = markdown.match(/Included all pending.*?:\s*(✓|✗)/i)?.[1] === "✓";
+  const workAllotmentCompleted = markdown.match(/Completed all the tasks assigned in Work Allotment.*?:\s*(✓|✗)/i)?.[1] === "✓";
   return { reviewed, pending, workAllotmentCompleted };
 }
 

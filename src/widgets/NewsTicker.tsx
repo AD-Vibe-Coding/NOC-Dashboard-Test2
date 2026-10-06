@@ -129,6 +129,7 @@ export function NewsTicker() {
   const [_loading, setLoading] = useState(true);
   const [postModalOpen, setPostModalOpen] = useState(false);
   const [manageModalOpen, setManageModalOpen] = useState(false);
+  const [allUpdatesOpen, setAllUpdatesOpen] = useState(false);
   const [celebrationKudos, setCelebrationKudos] = useState<KudosAnnouncement | null>(null);
   const [featuredKudos, setFeaturedKudos] = useState<KudosAnnouncement | null>(null);
   const [selectedKudos, setSelectedKudos] = useState<KudosAnnouncement | null>(null);
@@ -300,6 +301,7 @@ export function NewsTicker() {
     const shortMessage = k.message.length > 90 ? `${k.message.slice(0, 90).trim()}…` : k.message;
     return `🎉 HUGE CONGRATS 🎉 ${k.to_name} got kudos from ${k.from_name} — ${shortMessage} 🥳 🌟 🙌 💛`;
   });
+  const visibleUpdates = sorted.slice(0, 2);
 
   return (
     <>
@@ -593,7 +595,18 @@ export function NewsTicker() {
               </Badge>
             )}
           </Group>
-          <Group gap={4} wrap="nowrap">
+          <Group gap={6} wrap="nowrap">
+            {sorted.length > 2 && (
+              <Button
+                size="compact-xs"
+                variant="subtle"
+                color="gray"
+                onClick={() => setAllUpdatesOpen(true)}
+                styles={{ root: { fontWeight: 700 } }}
+              >
+                View all updates
+              </Button>
+            )}
             {isManager && (
               <>
                 <Tooltip label="Manage updates" withArrow>
@@ -624,18 +637,18 @@ export function NewsTicker() {
         {/* Static updates list */}
         {sorted.length > 0 ? (
           <Stack gap={0} style={{ padding: "6px 10px" }}>
-            {sorted.map((u, idx) => {
+            {visibleUpdates.map((u, idx) => {
               const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
               const Icon = cfg.icon;
               return (
                 <Group
-                  key={`update-${u.id}-${idx}`}
+                  key={["update-", u.id, "-", idx].join("")}
                   gap={8}
                   wrap="nowrap"
                   py={5}
                   onClick={() => setSelectedUpdate(u)}
                   style={{
-                    borderBottom: idx < sorted.length - 1
+                    borderBottom: idx < visibleUpdates.length - 1
                       ? "1px solid var(--mantine-color-dark-5)"
                       : undefined,
                     cursor: "pointer",
@@ -752,6 +765,82 @@ export function NewsTicker() {
             </Box>
           </Stack>
         )}
+      </Modal>
+
+      <Modal
+        opened={allUpdatesOpen}
+        onClose={() => setAllUpdatesOpen(false)}
+        title={
+          <Group gap={8}>
+            <ThemeIcon size="sm" radius="md" color="appdirect" variant="light">
+              <IconBell size={14} />
+            </ThemeIcon>
+            <Text fw={700}>All manager updates</Text>
+          </Group>
+        }
+        centered
+        size="xl"
+      >
+        <Stack gap={0}>
+          {sorted.map((u, idx) => {
+            const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
+            const Icon = cfg.icon;
+            return (
+              <Group
+                key={["all-update-", u.id, "-", idx].join("")}
+                gap={8}
+                wrap="nowrap"
+                py="sm"
+                onClick={() => {
+                  setAllUpdatesOpen(false);
+                  setSelectedUpdate(u);
+                }}
+                style={{
+                  borderBottom: idx < sorted.length - 1
+                    ? "1px solid var(--mantine-color-dark-5)"
+                    : undefined,
+                  cursor: "pointer",
+                }}
+              >
+                {u.pinned && (
+                  <IconPin
+                    size={11}
+                    style={{ color: "var(--mantine-color-appdirect-5)", flexShrink: 0 }}
+                  />
+                )}
+                <Icon
+                  size={13}
+                  style={{ color: `var(--mantine-color-${cfg.color}-5)`, flexShrink: 0 }}
+                />
+                <Text
+                  size="sm"
+                  fw={u.priority === "urgent" ? 700 : 500}
+                  c={u.priority === "urgent" ? "red" : undefined}
+                  style={{ flex: 1 }}
+                >
+                  {u.content}
+                </Text>
+                <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+                  <Text size="xs" c="dimmed" style={{ whiteSpace: "nowrap" }}>
+                    — {u.author_name}, {formatRelative(u.created_at)}
+                  </Text>
+                  <Button
+                    size="compact-xs"
+                    variant="subtle"
+                    color="gray"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setAllUpdatesOpen(false);
+                      setSelectedUpdate(u);
+                    }}
+                  >
+                    View full update
+                  </Button>
+                </Group>
+              </Group>
+            );
+          })}
+        </Stack>
       </Modal>
 
       <Modal
@@ -1041,7 +1130,7 @@ function ManageUpdatesModal({
           const cfg = PRIORITY_CONFIG[u.priority] || PRIORITY_CONFIG.info;
           return (
             <Box
-              key={`manager-update-${u.id}-${idx}`}
+              key={["manager-update-", u.id, "-", idx].join("")}
               p="sm"
               style={{
                 border: "1px solid var(--mantine-color-dark-4)",

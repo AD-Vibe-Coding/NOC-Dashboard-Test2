@@ -50,18 +50,16 @@ function startOfUtcWeek(date) {
 
 export function getPreviousWeekWindow(now = new Date()) {
   const currentWeekStart = startOfUtcWeek(now);
-  const previousWeekStart = new Date(currentWeekStart);
-  previousWeekStart.setUTCDate(previousWeekStart.getUTCDate() - 7);
-  const previousWeekEndExclusive = new Date(currentWeekStart);
-  const previousWeekEndInclusive = new Date(previousWeekEndExclusive);
-  previousWeekEndInclusive.setUTCDate(previousWeekEndInclusive.getUTCDate() - 1);
+  const currentDayStart = startOfUtcDay(now);
+  const currentDayEndExclusive = new Date(currentDayStart);
+  currentDayEndExclusive.setUTCDate(currentDayEndExclusive.getUTCDate() + 1);
 
   return {
-    start: previousWeekStart,
-    endExclusive: previousWeekEndExclusive,
-    endInclusive: previousWeekEndInclusive,
-    startDate: isoDate(previousWeekStart),
-    endDate: isoDate(previousWeekEndInclusive),
+    start: currentWeekStart,
+    endExclusive: currentDayEndExclusive,
+    endInclusive: currentDayStart,
+    startDate: isoDate(currentWeekStart),
+    endDate: isoDate(currentDayStart),
   };
 }
 
@@ -168,40 +166,47 @@ async function loadExistingSheetRows(sheets) {
   });
 
   const values = response.data.values ?? [];
-  return new Set(
-    values
-      .filter((row) => Array.isArray(row) && row.some((cell) => String(cell ?? "").trim().length > 0))
-      .filter((row) => String(row[0] ?? "").trim().toLowerCase() !== "member_email")
-      .map((row) => rowKey([
-        row[0] ?? "",
-        row[1] ?? "",
-        row[2] ?? "",
-        row[3] ?? "",
-        row[4] ?? "",
-        row[5] ?? "",
-        row[6] ?? "",
-      ])),
+  const populatedRows = values.filter(
+    (row) => Array.isArray(row) && row.some((cell) => String(cell ?? "").trim().length > 0),
   );
+
+  return {
+    existingKeys: new Set(
+      populatedRows
+        .filter((row) => String(row[0] ?? "").trim().toLowerCase() !== "member_email")
+        .map((row) => rowKey([
+          row[0] ?? "",
+          row[1] ?? "",
+          row[2] ?? "",
+          row[3] ?? "",
+          row[4] ?? "",
+          row[5] ?? "",
+          row[6] ?? "",
+        ])),
+    ),
+    nextEmptyRow: Math.max(1, populatedRows.length) + 1,
+  };
 }
 
 export async function syncWeeklyAppUsageToGoogleSheet(now = new Date()) {
   const window = getPreviousWeekWindow(now);
   const sheets = getSheetsClient();
-  const [events, emailByName, existingSheetKeys] = await Promise.all([
+  const [events, emailByName, sheetState] = await Promise.all([
     loadWeeklyWidgetEvents(window),
     loadEmailMap(),
     loadExistingSheetRows(sheets),
   ]);
 
   const preparedRows = buildUsageRows(events, emailByName);
-  const rowsToAppend = preparedRows.filter((row) => !existingSheetKeys.has(rowKey(row)));
+  const rowsToAppend = preparedRows.filter((row) => !sheetState.existingKeys.has(rowKey(row)));
 
   if (rowsToAppend.length > 0) {
-    await sheets.spreadsheets.values.append({
+    const startRow = sheetState.nextEmptyRow;
+    const endRow = startRow + rowsToAppend.length - 1;
+    await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: SHEET_RANGE,
+      range: `${SHEET_TAB_NAME}!A${startRow}:G${endRow}`,
       valueInputOption: "USER_ENTERED",
-      insertDataOption: "INSERT_ROWS",
       requestBody: {
         values: rowsToAppend,
       },
@@ -227,7 +232,7 @@ export function getAppUsageSheetConfig() {
   return {
     spreadsheetId: SPREADSHEET_ID,
     tabName: SHEET_TAB_NAME,
-    schedule: "Every Monday",
+    schedule: "Every Friday · 5:00 AM PT",
     source: "widget_open events from app_events",
     exactColumns: [
       "member_email",

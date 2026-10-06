@@ -20,7 +20,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!isAuthorizedCron(req)) {
     return res.status(401).json({
       error: "Unauthorized cron request.",
-      hint: "Set CRON_SECRET in project secrets so the Monday Vercel cron can call this route securely.",
+      hint: "Set CRON_SECRET in project secrets so the Friday 5:00 AM PT Vercel cron can call this route securely.",
     });
   }
 

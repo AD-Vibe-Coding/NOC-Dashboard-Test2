@@ -49,6 +49,7 @@ interface DayState {
 }
 
 type MeetingTask = Awaited<ReturnType<typeof db.personal_action_items.list>>[number];
+type OwnershipTask = Awaited<ReturnType<typeof db.ownership_tasks.list>>[number];
 
 interface CalendarEvent {
   id: string;
@@ -120,8 +121,15 @@ function loadMeetingPlan(name: string): number[] {
 function saveMeetingPlan(name: string, taskIds: number[]) {
   try { localStorage.setItem(meetingPlanKey(name), JSON.stringify(taskIds)); } catch {}
 }
+function normalizePersonName(value: string | null | undefined) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ");
+}
 function samePerson(a: string | null | undefined, b: string | null | undefined) {
-  return String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+  return normalizePersonName(a) === normalizePersonName(b);
 }
 function formatDueDate(value?: string | null) {
   if (!value) return "No due date";
@@ -130,6 +138,9 @@ function formatDueDate(value?: string | null) {
 }
 function meetingTaskSource(task: MeetingTask) {
   return task.details || task.section_name || task.notebook_group || "Meeting notes";
+}
+function ownershipTaskSource(task: OwnershipTask) {
+  return task.details || task.source_shift || "Work allotment";
 }
 function openCalendarPopup(): Promise<boolean> {
   return new Promise((resolve) => {
@@ -211,10 +222,20 @@ function isTodayLocal(event: CalendarEvent): boolean {
 }
 
 function CalendarSection({ result, loading, connecting, connect, disconnect, refresh }: ReturnType<typeof useCalendar>) {
+  const { identity } = useIdentity();
+
   if (loading) {
     return <Group gap="xs"><Loader size="xs" /><Text size="xs" c="dimmed">Loading calendar…</Text></Group>;
   }
   if (!result?.connected) {
+    const requiresReauth = String(result?.error ?? "").toLowerCase().includes("sign out and sign in again");
+    const description = identity
+      ? (requiresReauth
+        ? "Your existing Google sign-in needs one re-auth to include Calendar access."
+        : "Your Google sign-in will be used to show today’s meetings.")
+      : "Sign in with Google to show today’s meetings.";
+    const buttonLabel = requiresReauth ? "Re-authorize" : "Connect";
+
     return (
       <Card withBorder radius="md" p="sm" style={{ borderStyle: "dashed" }}>
         <Group justify="space-between" wrap="nowrap">
@@ -222,10 +243,10 @@ function CalendarSection({ result, loading, connecting, connect, disconnect, ref
             <ThemeIcon size="sm" variant="light" color="appdirect"><IconCalendar size={14} /></ThemeIcon>
             <Box>
               <Text size="sm" fw={600}>Google Calendar</Text>
-              <Text size="xs" c="dimmed">Connect to show today’s meetings</Text>
+              <Text size="xs" c="dimmed">{description}</Text>
             </Box>
           </Group>
-          <Button size="xs" variant="light" color="appdirect" loading={connecting} onClick={connect}>Connect</Button>
+          <Button size="xs" variant="light" color="appdirect" loading={connecting} onClick={connect}>{buttonLabel}</Button>
         </Group>
         {result?.error && <Alert mt="sm" p="xs" radius="md" color="yellow" icon={<IconAlertCircle size={14} />}><Text size="xs">{result.error}</Text></Alert>}
       </Card>
@@ -303,6 +324,8 @@ export function ManagerDayWidget() {
   const [newPriority, setNewPriority] = useState<Priority>("medium");
   const [newCategory, setNewCategory] = useState<Category>("other");
   const [meetingTasks, setMeetingTasks] = useState<MeetingTask[]>([]);
+  const [ownershipTasks, setOwnershipTasks] = useState<OwnershipTask[]>([]);
+  const [managerOwnershipTasks, setManagerOwnershipTasks] = useState<OwnershipTask[]>([]);
   const [plannedMeetingTaskIds, setPlannedMeetingTaskIds] = useState<number[]>(() => loadMeetingPlan(managerName));
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -321,13 +344,32 @@ export function ManagerDayWidget() {
   const loadMeetingTasks = useCallback(async () => {
     if (!identity?.name) {
       setMeetingTasks([]);
+      setOwnershipTasks([]);
+      setManagerOwnershipTasks([]);
       return;
     }
     try {
-      const rows = await db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
-      setMeetingTasks(rows.filter((task) => !!task.note_id && (samePerson(task.owner_name, identity.name) || samePerson(task.employee_name, identity.name))));
+      const requests = [
+        db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } }),
+        fetch("/api/my/ownership-tasks", { credentials: "include" }),
+        identity.role === "manager"
+          ? fetch("/api/manager/ownership-tasks", { credentials: "include" })
+          : Promise.resolve(null),
+      ] as const;
+      const [meetingRows, ownershipResponse, managerOwnershipResponse] = await Promise.all(requests);
+      const ownershipRows = ownershipResponse.ok
+        ? (await ownershipResponse.json() as OwnershipTask[])
+        : [];
+      const managerOwnershipRows = managerOwnershipResponse && managerOwnershipResponse.ok
+        ? (await managerOwnershipResponse.json() as OwnershipTask[])
+        : [];
+      setMeetingTasks(meetingRows.filter((task) => !!task.note_id && (samePerson(task.owner_name, identity.name) || samePerson(task.employee_name, identity.name))));
+      setOwnershipTasks(ownershipRows);
+      setManagerOwnershipTasks(managerOwnershipRows);
     } catch {
       setMeetingTasks([]);
+      setOwnershipTasks([]);
+      setManagerOwnershipTasks([]);
     }
   }, [identity?.name]);
   useEffect(() => { void loadMeetingTasks(); }, [loadMeetingTasks]);
@@ -337,6 +379,19 @@ export function ManagerDayWidget() {
     setMeetingTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, status, progress_percent: nextProgress } : item)));
     try {
       await db.personal_action_items.updateById(task.id, { status, progress_percent: nextProgress });
+    } finally {
+      await loadMeetingTasks();
+    }
+  }
+  async function completeOwnershipTask(task: OwnershipTask) {
+    setOwnershipTasks((prev) => prev.filter((item) => item.id !== task.id));
+    try {
+      await db.ownership_tasks.updateById(task.id, {
+        status: "completed",
+        completed_at: new Date().toISOString(),
+        next_reminder_at: null,
+        last_error: "",
+      });
     } finally {
       await loadMeetingTasks();
     }
@@ -370,11 +425,16 @@ export function ManagerDayWidget() {
   const meetingOpenTasks = useMemo(() => meetingTasks.filter((task) => task.status === "open"), [meetingTasks]);
   const meetingDoingTasks = useMemo(() => meetingTasks.filter((task) => task.status === "in_progress"), [meetingTasks]);
   const meetingBlockedTasks = useMemo(() => meetingTasks.filter((task) => task.status === "blocked"), [meetingTasks]);
+  const openOwnershipTasks = useMemo(() => ownershipTasks.filter((task) => String(task.status ?? "") !== "completed"), [ownershipTasks]);
+  const completedOwnershipTasks = useMemo(() => ownershipTasks.filter((task) => String(task.status ?? "") === "completed"), [ownershipTasks]);
+  const managerOpenOwnershipTasks = useMemo(() => managerOwnershipTasks.filter((task) => String(task.status ?? "") !== "completed"), [managerOwnershipTasks]);
+  const managerCompletedOwnershipTasks = useMemo(() => managerOwnershipTasks.filter((task) => String(task.status ?? "") === "completed"), [managerOwnershipTasks]);
+  const managerReminderTotal = useMemo(() => managerOwnershipTasks.reduce((sum, task) => sum + (Number(task.reminder_count) || 0), 0), [managerOwnershipTasks]);
   const pinnedToday = useMemo(() => meetingTasks.filter((task) => plannedMeetingTaskIds.includes(task.id) && task.status !== "done"), [meetingTasks, plannedMeetingTaskIds]);
   const isManager = identity?.role === "manager";
   const todayMeetings = (calendar.result?.events ?? []).filter((event) => event.status !== "cancelled" && isTodayLocal(event));
   const openPersonalTasks = personalTasks.filter((task) => !task.done);
-  const totalActionCount = openPersonalTasks.length + meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length;
+  const totalActionCount = openPersonalTasks.length + openOwnershipTasks.length + meetingOpenTasks.length + meetingDoingTasks.length + meetingBlockedTasks.length;
 
   return (
     <Stack gap="sm">
@@ -445,6 +505,14 @@ export function ManagerDayWidget() {
                 <Badge size="xs" variant="light" color="teal">{todayMeetings.length}</Badge>
               </Group>
             </Tabs.Tab>
+            {isManager ? (
+              <Tabs.Tab value="handoffs">
+                <Group gap={6} wrap="nowrap" justify="center">
+                  <Text size="sm" fw={700}>Handoffs</Text>
+                  <Badge size="xs" variant="light" color="orange">{managerOwnershipTasks.length}</Badge>
+                </Group>
+              </Tabs.Tab>
+            ) : null}
           </Tabs.List>
 
           <Tabs.Panel value="tasks">
@@ -459,6 +527,8 @@ export function ManagerDayWidget() {
                   </Text>
                 </Box>
                 <Group gap={6} wrap="wrap">
+                  {openOwnershipTasks.length > 0 && <Badge size="xs" color="orange" variant="light">Ownership {openOwnershipTasks.length}</Badge>}
+                  {completedOwnershipTasks.length > 0 && <Badge size="xs" color="green" variant="light">Completed ownership {completedOwnershipTasks.length}</Badge>}
                   {isManager && pinnedToday.length > 0 && <Badge size="xs" color="appdirect" variant="light">Pinned {pinnedToday.length}</Badge>}
                   {meetingDoingTasks.length > 0 && <Badge size="xs" color="blue" variant="light">Doing {meetingDoingTasks.length}</Badge>}
                 </Group>
@@ -466,6 +536,39 @@ export function ManagerDayWidget() {
 
               <ScrollArea.Autosize mah={420} offsetScrollbars>
                 <Stack gap={6}>
+                  {openOwnershipTasks.map((task) => (
+                    <Card key={`ownership-${task.id}`} withBorder radius="lg" p={8} style={{ borderColor: "color-mix(in srgb, var(--mantine-color-orange-6) 24%, transparent)" }}>
+                      <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
+                        <Box style={{ minWidth: 0, flex: 1 }}>
+                          <Group gap={6} mb={4} wrap="wrap">
+                            <Badge size="xs" variant="light" color="orange">Ownership</Badge>
+                            {task.source_shift ? <Badge size="xs" variant="dot" color="indigo">{task.source_shift}</Badge> : null}
+                            {task.reminder_count ? <Badge size="xs" variant="light" color="red">Reminders {task.reminder_count}</Badge> : null}
+                          </Group>
+                          <Text size="sm" fw={700} style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}>{task.title}</Text>
+                          <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>{ownershipTaskSource(task)} · {task.last_reminded_at ? `Last reminded ${formatDueDate(task.last_reminded_at)}` : "Reminder active until completed"}</Text>
+                        </Box>
+                        <Button size="compact-xs" radius="md" variant="light" color="green" onClick={() => void completeOwnershipTask(task)}>Completed</Button>
+                      </Group>
+                    </Card>
+                  ))}
+
+                  {completedOwnershipTasks.map((task) => (
+                    <Card key={`ownership-completed-${task.id}`} withBorder radius="lg" p={8} style={{ opacity: 0.78, borderColor: "color-mix(in srgb, var(--mantine-color-green-6) 20%, transparent)" }}>
+                      <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
+                        <Box style={{ minWidth: 0, flex: 1 }}>
+                          <Group gap={6} mb={4} wrap="wrap">
+                            <Badge size="xs" variant="light" color="green">Ownership</Badge>
+                            <Badge size="xs" variant="light" color="teal">Completed</Badge>
+                            {task.source_shift ? <Badge size="xs" variant="dot" color="indigo">{task.source_shift}</Badge> : null}
+                          </Group>
+                          <Text size="sm" fw={700} style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}>{task.title}</Text>
+                          <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>{ownershipTaskSource(task)} · {task.completed_at ? `Completed ${formatDueDate(task.completed_at)}` : "Completed today"}</Text>
+                        </Box>
+                      </Group>
+                    </Card>
+                  ))}
+
                   {pinnedToday.slice(0, 3).map((task) => (
                     <Card key={`pinned-${task.id}`} withBorder radius="lg" p={8} style={{ background: "color-mix(in srgb, var(--mantine-color-appdirect-9) 8%, var(--mantine-color-body))" }}>
                       <Group justify="space-between" wrap="nowrap" gap="xs" align="flex-start">
@@ -557,7 +660,7 @@ export function ManagerDayWidget() {
                     </Card>
                   ))}
 
-                  {pinnedToday.length === 0 && meetingBlockedTasks.length === 0 && meetingDoingTasks.length === 0 && meetingOpenTasks.length === 0 && openPersonalTasks.length === 0 ? (
+                  {openOwnershipTasks.length === 0 && pinnedToday.length === 0 && meetingBlockedTasks.length === 0 && meetingDoingTasks.length === 0 && meetingOpenTasks.length === 0 && openPersonalTasks.length === 0 ? (
                     <Text size="sm" c="dimmed">No action items right now.</Text>
                   ) : null}
                 </Stack>
@@ -574,6 +677,71 @@ export function ManagerDayWidget() {
               <CalendarSection {...calendar} />
             </Stack>
           </Tabs.Panel>
+
+          {isManager ? (
+            <Tabs.Panel value="handoffs">
+              <Stack gap={8}>
+                <Group justify="space-between" align="center" wrap="wrap" gap={6}>
+                  <Box>
+                    <Text size="10px" fw={800} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.12em", lineHeight: 1.1 }}>Ownership audit</Text>
+                    <Text size="md" fw={800} style={{ letterSpacing: "-0.02em", lineHeight: 1 }}>Today’s handoff tasks</Text>
+                  </Box>
+                  <Group gap={6} wrap="wrap">
+                    <Badge size="xs" color="orange" variant="light">Open {managerOpenOwnershipTasks.length}</Badge>
+                    <Badge size="xs" color="green" variant="light">Completed {managerCompletedOwnershipTasks.length}</Badge>
+                    <Badge size="xs" color="red" variant="light">Bot reminders {managerReminderTotal}</Badge>
+                  </Group>
+                </Group>
+
+                {managerOwnershipTasks.length === 0 ? (
+                  <Card withBorder radius="lg" p="md" style={{ borderStyle: "dashed" }}>
+                    <Text size="sm" fw={700}>No handoff tasks for today</Text>
+                    <Text size="xs" c="dimmed">Once work allotment ownership tasks are generated, they’ll appear here with assignee, status, shift coverage, and reminder totals.</Text>
+                  </Card>
+                ) : (
+                  <ScrollArea.Autosize mah={420} offsetScrollbars>
+                    <Stack gap={6}>
+                      {managerOwnershipTasks.map((task) => {
+                        const completed = String(task.status ?? "") === "completed";
+                        const reminderCount = Number(task.reminder_count) || 0;
+                        return (
+                          <Card
+                            key={`manager-handoff-${task.id}`}
+                            withBorder
+                            radius="lg"
+                            p={8}
+                            style={{
+                              opacity: completed ? 0.78 : 1,
+                              borderColor: completed
+                                ? "color-mix(in srgb, var(--mantine-color-green-6) 20%, transparent)"
+                                : "color-mix(in srgb, var(--mantine-color-orange-6) 24%, transparent)",
+                            }}
+                          >
+                            <Group justify="space-between" align="flex-start" wrap="nowrap" gap="xs">
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Group gap={6} mb={4} wrap="wrap">
+                                  <Badge size="xs" variant="light" color={completed ? "green" : "orange"}>{completed ? "Completed" : "Open"}</Badge>
+                                  <Badge size="xs" variant="light" color="blue">{task.assignee_name}</Badge>
+                                  {task.source_shift ? <Badge size="xs" variant="dot" color="indigo">{task.source_shift}</Badge> : null}
+                                  <Badge size="xs" variant="light" color={reminderCount > 0 ? "red" : "gray"}>Reminders {reminderCount}</Badge>
+                                </Group>
+                                <Text size="sm" fw={700} style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}>{task.title}</Text>
+                                <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>
+                                  {ownershipTaskSource(task)} · {completed
+                                    ? (task.completed_at ? `Completed ${formatDueDate(task.completed_at)}` : "Completed today")
+                                    : (task.last_reminded_at ? `Last reminded ${formatDueDate(task.last_reminded_at)}` : "No reminders sent yet")}
+                                </Text>
+                              </Box>
+                            </Group>
+                          </Card>
+                        );
+                      })}
+                    </Stack>
+                  </ScrollArea.Autosize>
+                )}
+              </Stack>
+            </Tabs.Panel>
+          ) : null}
         </Tabs>
       </Card>
     </Stack>

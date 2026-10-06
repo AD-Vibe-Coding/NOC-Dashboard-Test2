@@ -1,5 +1,5 @@
 import { Box, Divider, Group, Stack, Text, Title } from "@mantine/core";
-import { IconReportAnalytics, IconUpload, IconUsersGroup } from "@tabler/icons-react";
+import { IconChartBar, IconUpload, IconUsersGroup } from "@tabler/icons-react";
 import { WidgetTile } from "../WidgetTile";
 import { useIdentity } from "../../lib/identity";
 import { usePerformanceData, aggregateMetrics } from "./data";
@@ -61,7 +61,7 @@ export function PerformanceTrackerTile({ onExpand }: Props) {
     <WidgetTile
       title={isManager ? "Team Performance" : `${canonicalSelf ?? "My"} Metrics`}
       description={isManager ? "Team metrics + Excel import" : "Your metrics"}
-      icon={IconReportAnalytics}
+      icon={IconChartBar}
       iconColor="green"
       status={{
         label: isManager ? "manager" : "individual",

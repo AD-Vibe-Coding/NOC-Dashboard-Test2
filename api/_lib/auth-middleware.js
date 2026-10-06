@@ -14,7 +14,7 @@
 
 import "dotenv/config";
 import { verifyJwt } from "./jwt.js";
-import { defaultRoleFor, lookupByEmail } from "./roles.js";
+import { lookupByEmail } from "./roles.js";
 
 /**
  * Parse the session cookie and return the verified JWT payload.
@@ -45,25 +45,52 @@ export function getSession(req) {
  * Usage:
  *   if (!requireManager(req, res)) return;
  */
-export function requireManager(req, res) {
+function sendForbidden(res, error, hint) {
+  const send = typeof res.status === "function"
+    ? (code, body) => res.status(code).json(body)   // Vercel-style
+    : (code, body) => {                               // raw Node http
+        res.statusCode = code;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(body));
+      };
+  send(403, { error, hint });
+}
+
+function getEffectiveRole(req) {
   const session = getSession(req);
-  const fallbackRole = session
-    ? lookupByEmail(String(session.email ?? "").toLowerCase())?.role ?? defaultRoleFor(String(session.name ?? ""))
+  const rosterEntry = session?.email
+    ? lookupByEmail(String(session.email).toLowerCase())
     : null;
-  const effectiveRole = session?.role ?? fallbackRole;
+  return {
+    session,
+    effectiveRole: rosterEntry?.role ?? null,
+    canonicalName: rosterEntry?.name ?? null,
+  };
+}
+
+export function requireManager(req, res) {
+  const { session, effectiveRole } = getEffectiveRole(req);
 
   if (!session || effectiveRole !== "manager") {
-    const send = typeof res.status === "function"
-      ? (code, body) => res.status(code).json(body)   // Vercel-style
-      : (code, body) => {                               // raw Node http
-          res.statusCode = code;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(body));
-        };
-    send(403, {
-      error: "Manager access required.",
-      hint: "Sign in with a manager account to use this feature.",
-    });
+    sendForbidden(
+      res,
+      "Manager access required.",
+      "Sign in with a manager account to use this feature.",
+    );
+    return false;
+  }
+  return true;
+}
+
+export function requireManagerOrCustomerServiceManager(req, res) {
+  const { session, effectiveRole } = getEffectiveRole(req);
+
+  if (!session || (effectiveRole !== "manager" && effectiveRole !== "customer_service_manager")) {
+    sendForbidden(
+      res,
+      "Manager or Customer Service Manager access required.",
+      "Sign in with a manager or Customer Service Manager account to view this report.",
+    );
     return false;
   }
   return true;
@@ -74,13 +101,13 @@ export function requireManager(req, res) {
  * authenticated.
  */
 export function getRole(req) {
-  return getSession(req)?.role ?? "anonymous";
+  return getEffectiveRole(req).effectiveRole ?? "anonymous";
 }
 
 /**
- * Get the current user's canonical name from the session. Returns null if not
- * authenticated.
+ * Get the current user's canonical roster name from verified email. Returns
+ * null if not authenticated or not on the approved roster.
  */
 export function getSessionName(req) {
-  return getSession(req)?.name ?? null;
+  return getEffectiveRole(req).canonicalName ?? null;
 }

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireManager } from "../_lib/auth-middleware.js";
-import { ensureDailyWorkAllotmentJobs, postDueScheduledWorkAllotments, recordAutomationRun, runWorkAllotmentAutomation } from "../_lib/work-allotment-automation.js";
+import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
+import { dispatchDueOwnershipTaskReminders, ensureDailyWorkAllotmentJobs, postDueScheduledWorkAllotments, recordAutomationRun, reconcilePlannedWorkAllotmentJobs, syncWeekendFairnessIfDue } from "../_lib/work-allotment-automation.js";
 
 function parseNow(value: unknown) {
   if (!value) return new Date();
@@ -17,7 +17,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed." });
   }
 
-  if (!requireManager(req, res)) return;
+  const session = await getAppBuilderSession(req);
+  if (!session) {
+    return res.status(401).json({ error: "Sign in required." });
+  }
 
   try {
     const now = parseNow(req.body?.at);
@@ -40,29 +43,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === "post-due") {
       const result = await postDueScheduledWorkAllotments({ now });
+      const ownershipReminders = await dispatchDueOwnershipTaskReminders({ now });
+      const weekendFairness = await syncWeekendFairnessIfDue({ now });
       await recordAutomationRun({
         action: "manual-post-due",
         ran_at: now.toISOString(),
         generation_triggered: false,
         generation_skipped: true,
-        due_count: result.dueCount ?? 0,
-        posted_count: result.postedCount ?? 0,
-        failure_count: Array.isArray(result.failures) ? result.failures.length : 0,
-        note: "manual_post_due",
+        due_count: (result.dueCount ?? 0) + (ownershipReminders.processed ?? 0),
+        posted_count: (result.postedCount ?? 0) + (ownershipReminders.reminded ?? 0),
+        failure_count: (Array.isArray(result.failures) ? result.failures.length : 0) + (ownershipReminders.failed ?? 0),
+        note: `manual_post_due:${weekendFairness.reason ?? "weekend_sync"}`,
       });
-      return res.status(200).json({ ok: true, result });
+      return res.status(200).json({ ok: true, result: { ...result, ownershipReminders, weekendFairness } });
     }
 
-    const result = await runWorkAllotmentAutomation({ now });
+    const generation = await reconcilePlannedWorkAllotmentJobs({ now });
+    const posting = await postDueScheduledWorkAllotments({ now });
+    const ownershipReminders = await dispatchDueOwnershipTaskReminders({ now });
+    const weekendFairness = await syncWeekendFairnessIfDue({ now });
+    const result = {
+      ok: true,
+      ranAt: now.toISOString(),
+      generationWindow: false,
+      generation,
+      posting,
+      ownershipReminders,
+      weekendFairness,
+    };
     await recordAutomationRun({
       action: "manual-run",
       ran_at: now.toISOString(),
-      generation_triggered: !result.generation?.skipped,
-      generation_skipped: Boolean(result.generation?.skipped),
-      due_count: result.posting?.dueCount ?? 0,
-      posted_count: result.posting?.postedCount ?? 0,
-      failure_count: Array.isArray(result.posting?.failures) ? result.posting.failures.length : 0,
-      note: result.generation?.reason ?? "manual_run",
+      generation_triggered: true,
+      generation_skipped: false,
+      due_count: posting?.dueCount ?? 0,
+      posted_count: posting?.postedCount ?? 0,
+      failure_count: Array.isArray(posting?.failures) ? posting.failures.length : 0,
+      note: `manual_reconcile:${generation.updatedCount ?? 0}_updated:${generation.insertedCount ?? 0}_inserted:${weekendFairness.reason ?? "weekend_sync"}`,
     });
     return res.status(200).json({ ok: true, result });
   } catch (error) {

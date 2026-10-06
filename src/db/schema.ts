@@ -169,6 +169,18 @@ export const work_allotment_jobs = pgTable("work_allotment_jobs", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const work_allotment_asrh_hours = pgTable("work_allotment_asrh_hours", {
+  id: serial("id").primaryKey(),
+  month_key: text("month_key").notNull(),
+  date_key: text("date_key").notNull(),
+  member_name: text("member_name").notNull(),
+  hours: real("hours").notNull(),
+  source: text("source").notNull(), // manual | generated
+  notes: text("notes"),
+  updated_by: text("updated_by"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const work_allotment_automation_runs = pgTable("work_allotment_automation_runs", {
   id: serial("id").primaryKey(),
   action: text("action").notNull(), // generate | post-due | run
@@ -179,6 +191,29 @@ export const work_allotment_automation_runs = pgTable("work_allotment_automation
   posted_count: integer("posted_count"),
   failure_count: integer("failure_count"),
   note: text("note"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const ownership_tasks = pgTable("ownership_tasks", {
+  id: serial("id").primaryKey(),
+  task_type: text("task_type").notNull(), // work_allotment_off_members
+  dedupe_key: text("dedupe_key").notNull(),
+  operational_date: text("operational_date").notNull(),
+  assignee_name: text("assignee_name").notNull(),
+  title: text("title").notNull(),
+  details: text("details"),
+  source_shift: text("source_shift"),
+  off_members_json: text("off_members_json"),
+  status: text("status").notNull(), // open | completed
+  completed_at: text("completed_at"),
+  start_at: text("start_at"),
+  next_reminder_at: text("next_reminder_at"),
+  last_reminded_at: text("last_reminded_at"),
+  reminder_interval_minutes: integer("reminder_interval_minutes"),
+  reminder_count: integer("reminder_count"),
+  slack_user_id: text("slack_user_id"),
+  last_error: text("last_error"),
+  created_by: text("created_by").notNull(),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -767,6 +802,9 @@ export const manager_feedback = pgTable("manager_feedback", {
   feedback_from: text("feedback_from").notNull(),
   feedback_for: text("feedback_for").notNull(),
   ticket_number: text("ticket_number"),
+  screenshot_name: text("screenshot_name"),
+  screenshot_type: text("screenshot_type"),
+  screenshot_data_url: text("screenshot_data_url"),
   comment: text("comment").notNull(),
   recipient_comment: text("recipient_comment"),
   recipient_comment_by: text("recipient_comment_by"),
@@ -778,5 +816,15 @@ export const manager_feedback = pgTable("manager_feedback", {
   approved_by: text("approved_by"),
   approved_at: text("approved_at"),
   recipient_read_at: text("recipient_read_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const finance_cases = pgTable("finance_cases", {
+  id: serial("id").primaryKey(),
+  month_key: text("month_key").notNull(),
+  service: text("service").notNull().default("mobility"),
+  case_number: text("case_number").notNull(),
+  comment: text("comment").notNull(),
+  created_by: text("created_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });

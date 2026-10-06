@@ -179,7 +179,7 @@ export function matchCarrierFromNotes(
     if (re.test(text)) {
       const carrier = byName.get(c.canonical);
       if (!carrier) continue;
-      const match = re.exec(notes);
+      const match = notes.match(re);
       const matched_term =
         match?.[0]?.trim().replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, "") ?? c.term;
       hits.push({ candidate: c, carrier, matched_term });
@@ -223,7 +223,7 @@ function escapeRegex(s: string): string {
  * "M1" / unlabeled → 99 (sorts after numbered tiers)
  */
 export function tierOf(c: EscalationContact): number {
-  const m = /(\d+)/.exec(c.level ?? "");
+  const m = (c.level ?? "").match(/(\d+)/);
   return m ? parseInt(m[1], 10) : 99;
 }
 

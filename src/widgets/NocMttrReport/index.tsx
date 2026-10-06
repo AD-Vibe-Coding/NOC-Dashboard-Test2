@@ -7,8 +7,10 @@ import {
   Card,
   FileInput,
   Group,
+  Loader,
   Modal,
   MultiSelect,
+  Progress,
   ScrollArea,
   Select,
   SimpleGrid,
@@ -32,7 +34,9 @@ import {
   IconUpload,
 } from "@tabler/icons-react";
 import { db, schema } from "../../db";
+import { api } from "../../lib/api";
 import { useIdentity } from "../../lib/identity";
+import { effectiveRoleForIdentity } from "../../lib/roles";
 import vcomCoverBackground from "../../assets/ppt/vcom-cover-bg.png";
 import vcomOpsSupportLogo from "../../assets/ppt/vcom-ops-support-logo.png";
 import vcomThankYouBackground from "../../assets/ppt/vcom-thankyou-bg.png";
@@ -65,6 +69,9 @@ interface ParsedWorkbook {
 }
 
 type SavedMttrReportRecord = typeof schema.noc_mttr_reports.$inferSelect;
+type SavedMttrReportSummary = Omit<SavedMttrReportRecord, "parsed_json"> & {
+  parsed_json?: string | null;
+};
 
 type MatrixSection = {
   title: string;
@@ -273,7 +280,52 @@ const TICKET_VOLUME_DYNAMIC_PALETTE = [
 ] as const;
 
 const PREFERRED_TREND_SHEET_NAME = "NOC MTTR Report";
-const FIXED_TREND_CUSTOMER_COLUMN_INDEX = 2;
+
+/** Zero-based indexes matching the current NOC MTTR workbook (A–AR). */
+const COL = {
+  troubleId: 0,          // A  trouble_id
+  month: 1,              // B  month
+  customer: 2,           // C  customer
+  account: 3,            // D  account
+  circuitId: 4,          // E  regarding          (was: circuit ID)
+  carrier: 5,            // F  carrier_desc        (was: Carrier Name)
+  type: 6,               // G  type
+  issue: 7,              // H  issue
+  priority: 9,           // J  priority
+  nextStep: 14,          // O  next_step
+  resolution: 16,        // Q  resolution
+  openedBy: 17,          // R  opened_by_name
+  timeToCarrier: 22,     // W  time_to_carrier_ticket
+  mttr: 23,              // X  mttr
+  firstTouch: 25,        // Z  first_touch
+  ticketOwner: 26,       // AA first_contact_name
+  reportedVia: 27,       // AB reported_via  ("NOC" = Network ticket, "Mobility" = Mobility ticket)
+  channel: 28,           // AC channel
+  yearOpened: 29,        // AD year_opened
+  firstTouchBucket: 39,  // AN first_touch_bucket
+  timeIntervalBucket: 40,// AO time_interval_bucket
+  consolidateResolution: 41, // AP consolidate_resolution
+  monthLabel: 42,        // AQ month_label
+  consolidatedIssue: 43, // AR consolidated_issue
+} as const;
+
+const FIXED_TREND_CUSTOMER_COLUMN_INDEX = COL.customer;
+const REQUIRED_MTTR_COLUMN_INDEXES = [
+  COL.troubleId,
+  COL.month,
+  COL.customer,
+  COL.account,
+  COL.circuitId,
+  COL.carrier,
+  COL.mttr,
+  COL.firstTouch,
+  COL.reportedVia,
+  COL.channel,
+  COL.firstTouchBucket,
+  COL.timeIntervalBucket,
+  COL.consolidateResolution,
+  COL.consolidatedIssue,
+] as const;
 
 function detectHeader(headers: string[], patterns: RegExp[]): string | null {
   for (const pattern of patterns) {
@@ -348,8 +400,8 @@ function toMonthKey(value: unknown): string | null {
     return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, "0")}`;
   }
 
-  const monthMatch = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i.exec(normalized);
-  const yearMatch = /(20\d{2}|19\d{2})/.exec(normalized);
+  const monthMatch = normalized.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i);
+  const yearMatch = normalized.match(/(20\d{2}|19\d{2})/);
   if (monthMatch && yearMatch) {
     const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
     const month = monthNames.indexOf(monthMatch[1].slice(0, 3).toLowerCase()) + 1;
@@ -378,8 +430,8 @@ function toMinutes(value: unknown): number | null {
   }
 
   const normalized = text.toLowerCase();
-  const hoursMatch = /(\d+(?:\.\d+)?)\s*h/.exec(normalized);
-  const minutesMatch = /(\d+(?:\.\d+)?)\s*m/.exec(normalized);
+  const hoursMatch = normalized.match(/(\d+(?:\.\d+)?)\s*h/);
+  const minutesMatch = normalized.match(/(\d+(?:\.\d+)?)\s*m/);
   if (hoursMatch || minutesMatch) {
     const hours = hoursMatch ? Number(hoursMatch[1]) : 0;
     const minutes = minutesMatch ? Number(minutesMatch[1]) : 0;
@@ -399,6 +451,29 @@ function makeUniqueHeaders(headers: string[]) {
     counts.set(base, seen + 1);
     return seen === 0 ? base : `${base} (${seen + 1})`;
   });
+}
+
+function projectStructuredRowsToRequiredMttrColumns(
+  structured: { headers: string[]; rows: Record<string, unknown>[] },
+) {
+  const requiredHeaders = REQUIRED_MTTR_COLUMN_INDEXES
+    .map((index) => structured.headers[index] ?? null)
+    .filter((header): header is string => Boolean(header));
+
+  if (requiredHeaders.length === 0) {
+    return structured;
+  }
+
+  return {
+    headers: structured.headers,
+    rows: structured.rows.map((row) => {
+      const nextRow: Record<string, unknown> = {};
+      requiredHeaders.forEach((header) => {
+        nextRow[header] = row[header] ?? null;
+      });
+      return nextRow;
+    }),
+  };
 }
 
 function parseSheetToStructuredRows(worksheet: XLSX.WorkSheet) {
@@ -465,8 +540,12 @@ function parseWorkbook(file: File): Promise<ParsedWorkbook> {
     const sheets = limitedSheetNames.map((sheetName) => {
       const worksheet = workbook.Sheets[sheetName];
       const structured = parseSheetToStructuredRows(worksheet);
-      const allRows = structured.rows;
-      const headers = structured.headers;
+      const isPreferredTrendSheet = normalizeSheetName(sheetName) === normalizeSheetName(PREFERRED_TREND_SHEET_NAME);
+      const projected = isPreferredTrendSheet
+        ? projectStructuredRowsToRequiredMttrColumns(structured)
+        : structured;
+      const allRows = projected.rows;
+      const headers = projected.headers;
 
       return {
         name: sheetName,
@@ -474,9 +553,12 @@ function parseWorkbook(file: File): Promise<ParsedWorkbook> {
         rows: allRows,
         totalRows: allRows.length,
         truncated: false,
-        detectedCustomerColumn: detectHeader(headers, CUSTOMER_COLUMN_PATTERNS),
-        detectedMonthColumn: detectHeader(headers, MONTH_COLUMN_PATTERNS),
-        detectedMttrColumn: detectHeader(headers, MTTR_COLUMN_PATTERNS),
+        detectedCustomerColumn: headers[COL.customer]
+          ?? detectHeader(headers, CUSTOMER_COLUMN_PATTERNS),
+        detectedMonthColumn: headers[COL.month]
+          ?? detectHeader(headers, MONTH_COLUMN_PATTERNS),
+        detectedMttrColumn: headers[COL.mttr]
+          ?? detectHeader(headers, MTTR_COLUMN_PATTERNS),
       };
     });
 
@@ -495,11 +577,170 @@ function parseWorkbook(file: File): Promise<ParsedWorkbook> {
   });
 }
 
+type CompactSavedWorkbook = {
+  version: 2 | 3;
+  fileName: string;
+  fileSizeBytes?: number;
+  truncated?: boolean;
+  truncationNotice?: string | null;
+  sheets: Array<{
+    name: string;
+    headers: string[];
+    column_indexes?: number[];
+    full_header_length?: number;
+    rows: unknown[][];
+    totalRows: number;
+    truncated: boolean;
+    detectedCustomerColumn: string | null;
+    detectedMonthColumn: string | null;
+    detectedMttrColumn: string | null;
+  }>;
+};
+
+const LOCAL_MTTR_REPORT_KEY_PREFIX = "noc-mttr-report";
+
+function serializeWorkbookForSave(parsed: ParsedWorkbook, preferredSheetName?: string | null): string {
+  const selectedSheet = preferredSheetName
+    ? parsed.sheets.find((sheet) => sheet.name === preferredSheetName) ?? null
+    : null;
+  const sheetsToPersist = selectedSheet ? [selectedSheet] : parsed.sheets;
+
+  const compact: CompactSavedWorkbook = {
+    version: 3,
+    fileName: parsed.fileName,
+    fileSizeBytes: parsed.fileSizeBytes,
+    truncated: parsed.truncated,
+    truncationNotice: parsed.truncationNotice,
+    sheets: sheetsToPersist.map((sheet) => {
+      const persistableIndexes = sheet.name && normalizeSheetName(sheet.name) === normalizeSheetName(PREFERRED_TREND_SHEET_NAME)
+        ? REQUIRED_MTTR_COLUMN_INDEXES.filter((index) => Boolean(sheet.headers[index]))
+        : sheet.headers.map((_, index) => index);
+      const persistableHeaders = persistableIndexes.map((index) => sheet.headers[index] ?? `Column ${index + 1}`);
+
+      return {
+        name: sheet.name,
+        headers: persistableHeaders,
+        column_indexes: persistableIndexes,
+        full_header_length: sheet.headers.length,
+        rows: sheet.rows.map((row) => persistableHeaders.map((header) => row[header] ?? null)),
+        totalRows: sheet.totalRows,
+        truncated: sheet.truncated,
+        detectedCustomerColumn: sheet.detectedCustomerColumn,
+        detectedMonthColumn: sheet.detectedMonthColumn,
+        detectedMttrColumn: sheet.detectedMttrColumn,
+      };
+    }),
+  };
+
+  return JSON.stringify(compact);
+}
+
+function mttrReportCacheKey(reportId: number | string) {
+  return `${LOCAL_MTTR_REPORT_KEY_PREFIX}:${reportId}`;
+}
+
+function readCachedMttrReport(reportId: number | string): ParsedWorkbook | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(mttrReportCacheKey(reportId));
+    return raw ? parseSavedWorkbook(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedMttrReport(reportId: number | string, serialized: string) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(mttrReportCacheKey(reportId), serialized);
+  } catch {
+    // Ignore browser storage failures; server persistence is still primary.
+  }
+}
+
+function resolveSavedReportColumns(
+  savedParsed: ParsedWorkbook,
+  fullReport: Pick<SavedMttrReportRecord, "selected_sheet_name" | "selected_customer_column" | "selected_month_column" | "selected_mttr_column">,
+) {
+  const restoredSheet = fullReport.selected_sheet_name
+    ? savedParsed.sheets.find((sheet) => sheet.name === fullReport.selected_sheet_name) ?? null
+    : null;
+  const preferredTrendSheet = restoredSheet
+    ?? findPreferredSheet(savedParsed, PREFERRED_TREND_SHEET_NAME)
+    ?? savedParsed.sheets[0]
+    ?? null;
+  const resolvedSheetName = fullReport.selected_sheet_name ?? preferredTrendSheet?.name ?? null;
+  const resolvedCustomerColumn = getLockedTrendCustomerColumn(
+    preferredTrendSheet,
+    fullReport.selected_customer_column ?? preferredTrendSheet?.detectedCustomerColumn ?? preferredTrendSheet?.headers[0] ?? null,
+  );
+  const resolvedMonthColumn = fullReport.selected_month_column ?? preferredTrendSheet?.detectedMonthColumn ?? preferredTrendSheet?.headers[1] ?? null;
+  const resolvedMttrColumn = fullReport.selected_mttr_column ?? preferredTrendSheet?.detectedMttrColumn ?? preferredTrendSheet?.headers[2] ?? null;
+
+  return {
+    restoredSheet,
+    preferredTrendSheet,
+    resolvedSheetName,
+    resolvedCustomerColumn,
+    resolvedMonthColumn,
+    resolvedMttrColumn,
+    validRowCount: buildRows(savedParsed, resolvedSheetName, resolvedCustomerColumn, resolvedMonthColumn, resolvedMttrColumn).length,
+  };
+}
+
 function parseSavedWorkbook(value: string): ParsedWorkbook | null {
   try {
-    const parsed = JSON.parse(value) as ParsedWorkbook;
+    const parsed = JSON.parse(value) as ParsedWorkbook | CompactSavedWorkbook;
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.sheets)) return null;
-    return parsed;
+
+    if ((parsed as CompactSavedWorkbook).version === 2 || (parsed as CompactSavedWorkbook).version === 3) {
+      const compact = parsed as CompactSavedWorkbook;
+      return {
+        fileName: compact.fileName,
+        fileSizeBytes: compact.fileSizeBytes,
+        truncated: compact.truncated,
+        truncationNotice: compact.truncationNotice ?? null,
+        sheets: compact.sheets.map((sheet) => {
+          const compactHeaders = Array.isArray(sheet.headers) ? sheet.headers : [];
+          const compactIndexes = Array.isArray(sheet.column_indexes) ? sheet.column_indexes : null;
+          const restoredHeaderLength = compactIndexes && compactIndexes.length > 0
+            ? Math.max(sheet.full_header_length ?? 0, Math.max(...compactIndexes) + 1)
+            : compactHeaders.length;
+          const restoredHeaders = compactIndexes && compactIndexes.length === compactHeaders.length
+            ? Array.from({ length: restoredHeaderLength }, (_, index) => {
+                const compactIndex = compactIndexes.indexOf(index);
+                return compactIndex >= 0 ? compactHeaders[compactIndex] ?? `Column ${index + 1}` : `Column ${index + 1}`;
+              })
+            : compactHeaders;
+
+          return {
+            name: sheet.name,
+            headers: restoredHeaders,
+            rows: Array.isArray(sheet.rows)
+              ? sheet.rows.map((row) => {
+                  const values = Array.isArray(row) ? row : [];
+                  if (compactIndexes && compactIndexes.length === compactHeaders.length) {
+                    const nextRow: Record<string, unknown> = {};
+                    compactIndexes.forEach((headerIndex, compactIndex) => {
+                      const header = restoredHeaders[headerIndex] ?? compactHeaders[compactIndex] ?? `Column ${headerIndex + 1}`;
+                      nextRow[header] = values[compactIndex] ?? null;
+                    });
+                    return nextRow;
+                  }
+                  return Object.fromEntries(restoredHeaders.map((header, index) => [header, values[index] ?? null]));
+                })
+              : [],
+            totalRows: sheet.totalRows,
+            truncated: sheet.truncated,
+            detectedCustomerColumn: sheet.detectedCustomerColumn,
+            detectedMonthColumn: sheet.detectedMonthColumn,
+            detectedMttrColumn: sheet.detectedMttrColumn,
+          };
+        }),
+      };
+    }
+
+    return parsed as ParsedWorkbook;
   } catch {
     return null;
   }
@@ -767,8 +1008,8 @@ function parseMetricNumber(value: unknown): number | null {
   }
 
   const normalized = text.toLowerCase();
-  const hoursMatch = /(\d+(?:\.\d+)?)\s*h/.exec(normalized);
-  const minutesMatch = /(\d+(?:\.\d+)?)\s*m/.exec(normalized);
+  const hoursMatch = normalized.match(/(\d+(?:\.\d+)?)\s*h/);
+  const minutesMatch = normalized.match(/(\d+(?:\.\d+)?)\s*m/);
   if (hoursMatch || minutesMatch) {
     const hours = hoursMatch ? Number(hoursMatch[1]) : 0;
     const minutes = minutesMatch ? Number(minutesMatch[1]) : 0;
@@ -830,10 +1071,10 @@ function rowMatchesOperationalFilters(
   sheet: ParsedWorkbook["sheets"][number] | null,
   filters: OperationalFilters,
 ) {
-  const customerColumn = getFixedColumnName(sheet, 2);
-  const reportedViaColumn = getFixedColumnName(sheet, 21);
-  const channelColumn = getFixedColumnName(sheet, 22);
-  const issueTypeColumn = getFixedColumnName(sheet, 37);
+  const customerColumn = getFixedColumnName(sheet, COL.customer);
+  const reportedViaColumn = getFixedColumnName(sheet, COL.reportedVia);
+  const channelColumn = getFixedColumnName(sheet, COL.channel);
+  const issueTypeColumn = getFixedColumnName(sheet, COL.consolidatedIssue);
   return matchesCustomerFilter(customerColumn ? row[customerColumn] : null, filters.customers)
     && matchesReportedViaFilter(reportedViaColumn ? row[reportedViaColumn] : null, filters.reportedVia)
     && matchesChannelFilter(channelColumn ? row[channelColumn] : null, filters.channel)
@@ -870,10 +1111,10 @@ function buildChronicCircuitTableData(
     return { monthKeys: [], monthLabels: [], rows: [] };
   }
 
-  const accountColumn = getFixedColumnName(filteredSheet, 3);
-  const circuitIdColumn = getFixedColumnName(filteredSheet, 4);
-  const carrierColumn = getFixedColumnName(filteredSheet, 5);
-  const monthColumn = getFixedColumnName(filteredSheet, 1);
+  const accountColumn = getFixedColumnName(filteredSheet, COL.account);
+  const circuitIdColumn = getFixedColumnName(filteredSheet, COL.circuitId);
+  const carrierColumn = getFixedColumnName(filteredSheet, COL.carrier);
+  const monthColumn = getFixedColumnName(filteredSheet, COL.month);
 
   if (!accountColumn || !circuitIdColumn || !carrierColumn || !monthColumn) {
     return { monthKeys: [], monthLabels: [], rows: [] };
@@ -982,10 +1223,10 @@ function buildChronicCircuitTableData(
 }
 
 function getTopCarrierNames(sheet: ParsedWorkbook["sheets"][number] | null, limit = 15) {
-  if (!sheet || sheet.headers.length < 6) return [];
+  if (!sheet || sheet.headers.length <= COL.carrier) return [];
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const carrierColumn = sheet.headers[5] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const carrierColumn = sheet.headers[COL.carrier] ?? null;
   if (!ticketIdColumn || !carrierColumn) return [];
 
   const countsByCarrier = new Map<string, number>();
@@ -1003,11 +1244,10 @@ function getTopCarrierNames(sheet: ParsedWorkbook["sheets"][number] | null, limi
 }
 
 function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 2) return null;
+  if (!sheet || sheet.headers.length <= COL.month) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const reportedViaColumn = sheet.headers[21] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
   if (!ticketIdColumn || !monthSourceColumn) return null;
 
   const totalByPeriod = new Map<string, number>();
@@ -1022,14 +1262,16 @@ function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][numb
     const periodKey = toPeriodKey(monthKey, timeGrouping);
     totalByPeriod.set(periodKey, (totalByPeriod.get(periodKey) ?? 0) + 1);
 
-    const reportedVia = reportedViaColumn ? normalizeHeaderValue(row[reportedViaColumn]) : null;
+    // Read column AB (index 27) positionally — avoids any header-name mismatch.
+    const rowValues = Object.values(row);
+    const reportedVia = normalizeHeaderValue(rowValues[COL.reportedVia]);
     if (!reportedVia) continue;
 
-    if (/^noc$/i.test(reportedVia)) {
+    // "NOC" → Network ticket.  "Mobility" → Mobility ticket.
+    if (/\bnoc\b/i.test(reportedVia)) {
       networkByPeriod.set(periodKey, (networkByPeriod.get(periodKey) ?? 0) + 1);
     }
-
-    if (/^mobility$/i.test(reportedVia)) {
+    if (/\bmobility\b/i.test(reportedVia)) {
       mobilityByPeriod.set(periodKey, (mobilityByPeriod.get(periodKey) ?? 0) + 1);
     }
   }
@@ -1092,12 +1334,12 @@ function buildCalculatedTicketVolumeSection(sheet: ParsedWorkbook["sheets"][numb
 }
 
 function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 34) return null;
+  if (!sheet || sheet.headers.length <= COL.firstTouchBucket) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const avgAckColumn = sheet.headers[18] ?? null;
-  const bucketColumn = sheet.headers[33] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const avgAckColumn = sheet.headers[COL.firstTouch] ?? null;
+  const bucketColumn = sheet.headers[COL.firstTouchBucket] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !bucketColumn) return null;
 
   const totalByPeriod = new Map<string, number>();
@@ -1211,11 +1453,11 @@ function buildCalculatedFirstTouchDistributionSection(sheet: ParsedWorkbook["she
 }
 
 function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 35) return null;
+  if (!sheet || sheet.headers.length <= COL.timeIntervalBucket) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const bucketColumn = sheet.headers[34] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const bucketColumn = sheet.headers[COL.timeIntervalBucket] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !bucketColumn) return null;
 
   const under15ByPeriod = new Map<string, number>();
@@ -1304,11 +1546,11 @@ function buildCalculatedTimeToCarrierTicketSection(sheet: ParsedWorkbook["sheets
 }
 
 function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 36) return null;
+  if (!sheet || sheet.headers.length <= COL.consolidateResolution) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const resolutionColumn = sheet.headers[35] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const resolutionColumn = sheet.headers[COL.consolidateResolution] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !resolutionColumn) return null;
 
   const countsByResolution = new Map<string, Map<string, number>>();
@@ -1364,11 +1606,11 @@ function buildCalculatedTicketResolutionsSection(sheet: ParsedWorkbook["sheets"]
 }
 
 function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 38) return null;
+  if (!sheet || sheet.headers.length <= COL.consolidatedIssue) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const issueTypeColumn = sheet.headers[37] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const issueTypeColumn = sheet.headers[COL.consolidatedIssue] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !issueTypeColumn) return null;
 
   const countsByIssueType = new Map<string, Map<string, number>>();
@@ -1444,11 +1686,11 @@ function buildCalculatedTopIssueTypesSection(sheet: ParsedWorkbook["sheets"][num
 }
 
 function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 6) return null;
+  if (!sheet || sheet.headers.length <= COL.carrier) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const carrierColumn = sheet.headers[5] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const carrierColumn = sheet.headers[COL.carrier] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !carrierColumn) return null;
 
   const countsByCarrier = new Map<string, Map<string, number>>();
@@ -1498,12 +1740,12 @@ function buildCalculatedTopCarriersSection(sheet: ParsedWorkbook["sheets"][numbe
 }
 
 function buildCalculatedAvgMttrSection(sheet: ParsedWorkbook["sheets"][number] | null, timeGrouping: TimeGrouping): WorkbookTrendSection | null {
-  if (!sheet || sheet.headers.length < 16) return null;
+  if (!sheet || sheet.headers.length <= COL.mttr) return null;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const carrierColumn = sheet.headers[5] ?? null;
-  const mttrColumn = sheet.headers[15] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const carrierColumn = sheet.headers[COL.carrier] ?? null;
+  const mttrColumn = sheet.headers[COL.mttr] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !carrierColumn || !mttrColumn) return null;
 
   const topCarrierNames = getTopCarrierNames(sheet, 15);
@@ -1596,14 +1838,14 @@ function getTopMttrTicketsForMonth(
   timeGrouping: TimeGrouping = "monthly",
 ): ExtendedMttrTicket[] {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
-  if (!sheet || sheet.headers.length < 38) return [];
+  if (!sheet || sheet.headers.length <= COL.consolidatedIssue) return [];
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const carrierColumn = sheet.headers[5] ?? null;
-  const mttrColumn = sheet.headers[15] ?? null;
-  const resolutionColumn = sheet.headers[35] ?? null;
-  const issueTypeColumn = sheet.headers[37] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const carrierColumn = sheet.headers[COL.carrier] ?? null;
+  const mttrColumn = sheet.headers[COL.mttr] ?? null;
+  const resolutionColumn = sheet.headers[COL.consolidateResolution] ?? null;
+  const issueTypeColumn = sheet.headers[COL.consolidatedIssue] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !carrierColumn || !mttrColumn) return [];
 
   const bestByTicketId = new Map<string, ExtendedMttrTicket>();
@@ -1651,11 +1893,11 @@ function getMttrTicketCountForMonth(
   timeGrouping: TimeGrouping = "monthly",
 ): number {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
-  if (!sheet || sheet.headers.length < 16) return 0;
+  if (!sheet || sheet.headers.length <= COL.mttr) return 0;
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const mttrColumn = sheet.headers[15] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const mttrColumn = sheet.headers[COL.mttr] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !mttrColumn) return 0;
 
   let count = 0;
@@ -1686,14 +1928,14 @@ function getIssueTypeOpenPercentagesForMonth(
     return { customerOpenedPercent: "0%", vcomOpenedPercent: "0%" };
   }
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
   if (!ticketIdColumn || !monthSourceColumn) {
     return { customerOpenedPercent: "0%", vcomOpenedPercent: "0%" };
   }
 
-  const mobilityOpenedByColumn = sheet.headers[12] ?? null;
-  const issueTypeColumn = sheet.headers[37] ?? null;
+  const mobilityOpenedByColumn = sheet.headers[COL.openedBy] ?? null;
+  const issueTypeColumn = sheet.headers[COL.consolidatedIssue] ?? null;
   const isMobility = filters.reportedVia === "mobility";
   const mobilityVcomOpenedByNames = new Set([
     "karthik radhakrishnan",
@@ -1770,7 +2012,7 @@ function getResolutionBucketPercentagesForMonth(
   timeGrouping: TimeGrouping = "monthly",
 ): ResolutionBucketPercentages {
   const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
-  if (!sheet || sheet.headers.length < 36) {
+  if (!sheet || sheet.headers.length <= COL.consolidateResolution) {
     return {
       carrierNetworkIssuePercent: "0%",
       customerIssuePercent: "0%",
@@ -1779,9 +2021,9 @@ function getResolutionBucketPercentagesForMonth(
     };
   }
 
-  const ticketIdColumn = sheet.headers[0] ?? null;
-  const monthSourceColumn = sheet.headers[1] ?? null;
-  const resolutionColumn = sheet.headers[35] ?? null;
+  const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+  const monthSourceColumn = sheet.headers[COL.month] ?? null;
+  const resolutionColumn = sheet.headers[COL.consolidateResolution] ?? null;
   if (!ticketIdColumn || !monthSourceColumn || !resolutionColumn) {
     return {
       carrierNetworkIssuePercent: "0%",
@@ -1841,7 +2083,7 @@ function getResolutionSummaryRowsForMonth(
 ): ResolutionSummaryRow[] {
   if (filters.reportedVia === "mobility") {
     const sheet = parsed?.sheets.find((entry) => entry.name === sheetName) ?? null;
-    if (!sheet || sheet.headers.length < 36) {
+    if (!sheet || sheet.headers.length <= COL.consolidateResolution) {
       return [
         { label: "Activation Assistance", value: "0%" },
         { label: "eSIM Re-Provisioned", value: "0%" },
@@ -1850,9 +2092,9 @@ function getResolutionSummaryRowsForMonth(
       ];
     }
 
-    const ticketIdColumn = sheet.headers[0] ?? null;
-    const monthSourceColumn = sheet.headers[1] ?? null;
-    const resolutionColumn = sheet.headers[35] ?? null;
+    const ticketIdColumn = sheet.headers[COL.troubleId] ?? null;
+    const monthSourceColumn = sheet.headers[COL.month] ?? null;
+    const resolutionColumn = sheet.headers[COL.consolidateResolution] ?? null;
     if (!ticketIdColumn || !monthSourceColumn || !resolutionColumn) {
       return [
         { label: "Activation Assistance", value: "0%" },
@@ -3758,7 +4000,9 @@ function buildWorkbookTrendSections(
 
 export function NocMttrReportWidget() {
   const { identity } = useIdentity();
-  const [activeTab, setActiveTab] = useState<string>("saved");
+  const effectiveRole = effectiveRoleForIdentity(identity);
+  const isCustomerServiceManager = effectiveRole === "customer_service_manager";
+  const [activeTab, setActiveTab] = useState<string>(isCustomerServiceManager ? "trends" : "saved");
   const [mttrFile, setMttrFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<ParsedWorkbook | null>(null);
   const [loading, setLoading] = useState(false);
@@ -3766,17 +4010,21 @@ export function NocMttrReportWidget() {
   const [savingReport, setSavingReport] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
-  const [savedReports, setSavedReports] = useState<SavedMttrReportRecord[]>([]);
+  const [savedReports, setSavedReports] = useState<SavedMttrReportSummary[]>([]);
   const [activeReportId, setActiveReportId] = useState<number | null>(null);
   const [deletingReportId, setDeletingReportId] = useState<number | null>(null);
   const [deletingAllReports, setDeletingAllReports] = useState(false);
-  const [pendingDeleteReport, setPendingDeleteReport] = useState<SavedMttrReportRecord | null>(null);
+  const [pendingDeleteReport, setPendingDeleteReport] = useState<SavedMttrReportSummary | null>(null);
   const [pendingDeleteAll, setPendingDeleteAll] = useState(false);
   const [sheetName, setSheetName] = useState<string | null>(null);
   const [customerColumn, setCustomerColumn] = useState<string | null>(null);
   const [monthColumn, setMonthColumn] = useState<string | null>(null);
   const [mttrColumn, setMttrColumn] = useState<string | null>(null);
   const [selectedCustomers, setSelectedCustomers] = useState<string[]>([]);
+  const [customerPickerOpened, setCustomerPickerOpened] = useState(false);
+  const [customerPickerValue, setCustomerPickerValue] = useState<string | null>(null);
+  const [initialLoadProgress, setInitialLoadProgress] = useState(5);
+  const [initialLoadStage, setInitialLoadStage] = useState("Starting NOC MTTR workspace…");
   const [reportedViaFilter, setReportedViaFilter] = useState<ReportedViaFilter>("both");
   const [maintenanceFilter, setMaintenanceFilter] = useState<MaintenanceFilter>("include");
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("both");
@@ -3796,42 +4044,154 @@ export function NocMttrReportWidget() {
   const brandedCoverSlideRef = useRef<HTMLDivElement | null>(null);
   const chronicCircuitsRef = useRef<HTMLDivElement | null>(null);
   const brandedThankYouSlideRef = useRef<HTMLDivElement | null>(null);
+  const lastPersistedMappingRef = useRef<string | null>(null);
 
-  function applySavedReport(report: SavedMttrReportRecord) {
-    const savedParsed = parseSavedWorkbook(report.parsed_json);
-    if (!savedParsed) {
-      setError(`Saved report \"${report.file_name}\" could not be loaded.`);
-      return;
+  async function applySavedReport(report: SavedMttrReportSummary) {
+    try {
+      if (isCustomerServiceManager) {
+        setInitialLoadStage(`Opening ${report.file_name}…`);
+        setInitialLoadProgress(55);
+      }
+      const fullReport = report.parsed_json
+        ? report
+        : await api.get<SavedMttrReportRecord>(`/api/noc_mttr_reports/${report.id}`);
+
+      let savedParsed = fullReport.parsed_json ? parseSavedWorkbook(fullReport.parsed_json) : null;
+      let loadedFromCache = false;
+      let resolvedState = savedParsed ? resolveSavedReportColumns(savedParsed, fullReport) : null;
+
+      if ((!savedParsed || (resolvedState && resolvedState.validRowCount === 0))) {
+        const cachedParsed = readCachedMttrReport(report.id);
+        if (cachedParsed) {
+          const cachedState = resolveSavedReportColumns(cachedParsed, fullReport);
+          if (cachedState.validRowCount > 0) {
+            savedParsed = cachedParsed;
+            resolvedState = cachedState;
+            loadedFromCache = true;
+          }
+        }
+      }
+
+      if (!savedParsed || !resolvedState || resolvedState.validRowCount === 0) {
+        setError(`Saved report "${fullReport.file_name}" loaded, but no valid MTTR rows could be restored from the saved payload.`);
+        return;
+      }
+
+      if (fullReport.parsed_json && !loadedFromCache) {
+        writeCachedMttrReport(report.id, fullReport.parsed_json);
+      }
+
+      setMttrFile(null);
+      setParsed(savedParsed);
+      setActiveReportId(fullReport.id);
+      setSheetName(resolvedState.resolvedSheetName);
+      setCustomerColumn(resolvedState.resolvedCustomerColumn);
+      setMonthColumn(resolvedState.resolvedMonthColumn);
+      setMttrColumn(resolvedState.resolvedMttrColumn);
+      setSelectedCustomers([]);
+      setReportedViaFilter("both");
+      setMaintenanceFilter("include");
+      setChannelFilter("both");
+      lastPersistedMappingRef.current = JSON.stringify({
+        id: fullReport.id,
+        selected_sheet_name: fullReport.selected_sheet_name ?? null,
+        selected_customer_column: fullReport.selected_customer_column ?? null,
+        selected_month_column: fullReport.selected_month_column ?? null,
+        selected_mttr_column: fullReport.selected_mttr_column ?? null,
+        row_count: fullReport.row_count ?? null,
+      });
+      setSaveNotice(loadedFromCache
+        ? `Loaded saved report from local cache: ${fullReport.file_name}`
+        : `Loaded saved report: ${fullReport.file_name}`);
+      if (isCustomerServiceManager) {
+        setInitialLoadStage("Preparing customer list…");
+        setInitialLoadProgress(85);
+      }
+      setActiveTab("trends");
+    } catch (err) {
+      const cachedParsed = readCachedMttrReport(report.id);
+      if (cachedParsed) {
+        const cachedState = resolveSavedReportColumns(cachedParsed, report as SavedMttrReportRecord);
+        if (cachedState.validRowCount > 0) {
+          setMttrFile(null);
+          setParsed(cachedParsed);
+          setActiveReportId(report.id);
+          setSheetName(cachedState.resolvedSheetName);
+          setCustomerColumn(cachedState.resolvedCustomerColumn);
+          setMonthColumn(cachedState.resolvedMonthColumn);
+          setMttrColumn(cachedState.resolvedMttrColumn);
+          setSelectedCustomers([]);
+          setReportedViaFilter("both");
+          setMaintenanceFilter("include");
+          setChannelFilter("both");
+          setSaveNotice(`Loaded saved report from local cache: ${report.file_name}`);
+          setActiveTab("trends");
+          return;
+        }
+      }
+
+      setError(err instanceof Error ? err.message : `Saved report \"${report.file_name}\" could not be loaded.`);
     }
-
-    const preferredTrendSheet = findPreferredSheet(savedParsed, PREFERRED_TREND_SHEET_NAME) ?? savedParsed.sheets[0] ?? null;
-
-    setMttrFile(null);
-    setParsed(savedParsed);
-    setActiveReportId(report.id);
-    setSheetName(preferredTrendSheet?.name ?? report.selected_sheet_name ?? null);
-    setCustomerColumn(getLockedTrendCustomerColumn(preferredTrendSheet, report.selected_customer_column ?? preferredTrendSheet?.detectedCustomerColumn ?? preferredTrendSheet?.headers[0] ?? null));
-    setMonthColumn(report.selected_month_column ?? preferredTrendSheet?.detectedMonthColumn ?? preferredTrendSheet?.headers[1] ?? null);
-    setMttrColumn(report.selected_mttr_column ?? preferredTrendSheet?.detectedMttrColumn ?? preferredTrendSheet?.headers[2] ?? null);
-    setSelectedCustomers([]);
-    setReportedViaFilter("both");
-    setMaintenanceFilter("include");
-    setChannelFilter("both");
-    setSaveNotice(`Loaded saved report: ${report.file_name}`);
-    setActiveTab("trends");
   }
 
   async function loadSavedReports(reportIdToOpen?: number | null) {
     setLoadingSavedReports(true);
+    if (isCustomerServiceManager) {
+      setInitialLoadStage("Loading saved MTTR reports…");
+      setInitialLoadProgress(20);
+      setCustomerPickerOpened(true);
+    }
     try {
-      const reports = await db.noc_mttr_reports.list({ orderBy: { column: "created_at", ascending: false }, limit: 25 });
+      const reports = await api.get<SavedMttrReportSummary[]>("/api/noc_mttr_reports?limit=25&orderDir=desc");
       setSavedReports(reports);
 
-      const targetReport = reportIdToOpen != null ? reports.find((report) => report.id === reportIdToOpen) ?? reports[0] ?? null : reports[0] ?? null;
-      if (targetReport) applySavedReport(targetReport);
+      if (reports.length === 0) {
+        if (isCustomerServiceManager) {
+          setInitialLoadStage("No saved MTTR reports found.");
+          setInitialLoadProgress(100);
+        }
+        return;
+      }
+
+      if (reportIdToOpen != null) {
+        const targetReport = reports.find((report) => report.id === reportIdToOpen) ?? reports[0] ?? null;
+        if (targetReport) {
+          if (isCustomerServiceManager) {
+            setInitialLoadStage(`Loading ${targetReport.file_name}…`);
+            setInitialLoadProgress(40);
+          }
+          await applySavedReport(targetReport);
+        }
+        return;
+      }
+
+      if (activeReportId != null) {
+        const currentReport = reports.find((report) => report.id === activeReportId) ?? null;
+        if (currentReport) {
+          if (isCustomerServiceManager) {
+            setInitialLoadStage(`Refreshing ${currentReport.file_name}…`);
+            setInitialLoadProgress(40);
+          }
+          await applySavedReport(currentReport);
+        }
+        return;
+      }
+
+      const newestReport = reports[0] ?? null;
+      if (newestReport) {
+        if (isCustomerServiceManager) {
+          setInitialLoadStage(`Opening latest report: ${newestReport.file_name}`);
+          setInitialLoadProgress(40);
+        }
+        await applySavedReport(newestReport);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load saved MTTR reports.");
     } finally {
+      if (isCustomerServiceManager) {
+        setInitialLoadStage("Customer list ready.");
+        setInitialLoadProgress(100);
+      }
       setLoadingSavedReports(false);
     }
   }
@@ -3840,6 +4200,13 @@ export function NocMttrReportWidget() {
     void loadSavedReports();
   }, []);
 
+  useEffect(() => {
+    if (isCustomerServiceManager) {
+      setActiveTab("trends");
+      setCustomerPickerOpened(true);
+    }
+  }, [isCustomerServiceManager]);
+
   async function handleFileUpload(nextFile: File | null) {
     setError(null);
     setSaveNotice(null);
@@ -3847,15 +4214,11 @@ export function NocMttrReportWidget() {
     setSelectedCustomers([]);
 
     if (!nextFile) {
-      setParsed(null);
-      setActiveReportId(null);
-      setSheetName(null);
-      setCustomerColumn(null);
-      setMonthColumn(null);
-      setMttrColumn(null);
-      setReportedViaFilter("both");
-      setMaintenanceFilter("include");
-      setChannelFilter("both");
+      setMttrFile(null);
+      // Some browsers/components emit a transient null change after a file is
+      // selected or when the input UI resets. Do not wipe the already parsed
+      // workbook/trends state here; clearing the picker should only clear the
+      // picker itself.
       return;
     }
 
@@ -3882,31 +4245,53 @@ export function NocMttrReportWidget() {
       if (mergedParsed.truncationNotice) setSaveNotice(mergedParsed.truncationNotice);
 
       setSavingReport(true);
-      const inserted = await db.noc_mttr_reports.insert({
-        file_name: isAppendingToExisting ? `${mergedParsed.fileName}` : nextFile.name,
-        file_size_bytes: mergedParsed.fileSizeBytes ?? nextFile.size,
-        uploaded_by: identity?.name ?? "Unknown",
-        selected_sheet_name: nextSheetName,
-        selected_customer_column: nextCustomerColumn,
-        selected_month_column: nextMonthColumn,
-        selected_mttr_column: nextMttrColumn,
-        parsed_json: JSON.stringify(mergedParsed),
-        row_count: nextRows.length,
-      });
+      const serializedWorkbook = serializeWorkbookForSave(mergedParsed, nextSheetName);
 
-      const saved = inserted[0] ?? null;
-      if (saved) {
-        setActiveReportId(saved.id);
-        setSaveNotice(
-          mergedParsed.truncationNotice
-            ? `${isAppendingToExisting ? `Added ${nextFile.name} to the existing MTTR dataset` : `Saved MTTR report ${nextFile.name} to the database`}. ${mergedParsed.truncationNotice}`
-            : isAppendingToExisting
-              ? `Added ${nextFile.name} to the existing MTTR dataset.`
-              : `Saved MTTR report ${nextFile.name} to the database.`,
-        );
-        await loadSavedReports(saved.id);
-        setActiveTab("trends");
+      const insertedReports = await db.noc_mttr_reports.insert([
+        {
+          file_name: isAppendingToExisting ? `${mergedParsed.fileName}` : nextFile.name,
+          file_size_bytes: mergedParsed.fileSizeBytes ?? nextFile.size,
+          uploaded_by: identity?.name ?? "Unknown",
+          selected_sheet_name: nextSheetName,
+          selected_customer_column: nextCustomerColumn,
+          selected_month_column: nextMonthColumn,
+          selected_mttr_column: nextMttrColumn,
+          parsed_json: serializedWorkbook,
+          row_count: nextRows.length,
+        },
+      ]);
+      const insertedReport = insertedReports[0] ?? null;
+
+      setSaveNotice(
+        mergedParsed.truncationNotice
+          ? `${isAppendingToExisting ? `Added ${nextFile.name} to the existing MTTR dataset` : `Saved MTTR report ${nextFile.name} to the database`}. ${mergedParsed.truncationNotice}`
+          : isAppendingToExisting
+            ? `Added ${nextFile.name} to the existing MTTR dataset.`
+            : `Saved MTTR report ${nextFile.name} to the database.`,
+      );
+      setActiveTab("trends");
+
+      if (insertedReport) {
+        setActiveReportId(insertedReport.id);
+        writeCachedMttrReport(insertedReport.id, serializedWorkbook);
+        lastPersistedMappingRef.current = JSON.stringify({
+          id: insertedReport.id,
+          selected_sheet_name: nextSheetName,
+          selected_customer_column: nextCustomerColumn,
+          selected_month_column: nextMonthColumn,
+          selected_mttr_column: nextMttrColumn,
+          row_count: nextRows.length,
+        });
       }
+
+      void api.get<SavedMttrReportSummary[]>("/api/noc_mttr_reports?limit=25&orderDir=desc").then((reports) => {
+        setSavedReports(reports);
+      }).catch(() => {
+        if (insertedReport) {
+          setSavedReports((prev) => [insertedReport as SavedMttrReportSummary, ...prev.filter((entry) => entry.id !== insertedReport.id)]);
+        }
+        // Keep the uploaded workbook visible even if the saved-reports refresh fails.
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to read MTTR workbook.");
     } finally {
@@ -3916,6 +4301,7 @@ export function NocMttrReportWidget() {
   }
 
   function clearActiveReportState() {
+    lastPersistedMappingRef.current = null;
     setMttrFile(null);
     setParsed(null);
     setActiveReportId(null);
@@ -3930,7 +4316,7 @@ export function NocMttrReportWidget() {
     setActiveTab("saved");
   }
 
-  async function handleDeleteReport(report: SavedMttrReportRecord) {
+  async function handleDeleteReport(report: SavedMttrReportSummary) {
     setDeletingReportId(report.id);
     setError(null);
     setSaveNotice(null);
@@ -3980,13 +4366,27 @@ export function NocMttrReportWidget() {
 
   useEffect(() => {
     if (!activeReportId || !parsed) return;
+
+    const nextMapping = {
+      id: activeReportId,
+      selected_sheet_name: sheetName ?? null,
+      selected_customer_column: customerColumn ?? null,
+      selected_month_column: monthColumn ?? null,
+      selected_mttr_column: mttrColumn ?? null,
+      row_count: buildRows(parsed, sheetName, customerColumn, monthColumn, mttrColumn).length,
+    };
+    const nextMappingKey = JSON.stringify(nextMapping);
+    if (lastPersistedMappingRef.current === nextMappingKey) return;
+
     const timeout = window.setTimeout(() => {
       void db.noc_mttr_reports.updateById(activeReportId, {
-        selected_sheet_name: sheetName,
-        selected_customer_column: customerColumn,
-        selected_month_column: monthColumn,
-        selected_mttr_column: mttrColumn,
-        row_count: buildRows(parsed, sheetName, customerColumn, monthColumn, mttrColumn).length,
+        selected_sheet_name: nextMapping.selected_sheet_name,
+        selected_customer_column: nextMapping.selected_customer_column,
+        selected_month_column: nextMapping.selected_month_column,
+        selected_mttr_column: nextMapping.selected_mttr_column,
+        row_count: nextMapping.row_count,
+      }).then(() => {
+        lastPersistedMappingRef.current = nextMappingKey;
       }).catch(() => {
         // Keep the current analysis view usable even if the mapping update fails.
       });
@@ -4023,6 +4423,20 @@ export function NocMttrReportWidget() {
       .sort((a, b) => a.localeCompare(b))
       .map((customer) => ({ value: customer, label: customer }));
   }, [activeSheet, customerColumn]);
+
+  useEffect(() => {
+    if (!isCustomerServiceManager) return;
+    if (loadingSavedReports) return;
+    if (selectedCustomers.length > 0) {
+      setCustomerPickerValue(selectedCustomers[0] ?? null);
+      setCustomerPickerOpened(false);
+      return;
+    }
+    if (customerOptions.length > 0) {
+      setCustomerPickerValue((current) => current && customerOptions.some((option) => option.value === current) ? current : null);
+      setCustomerPickerOpened(true);
+    }
+  }, [isCustomerServiceManager, loadingSavedReports, selectedCustomers, customerOptions]);
 
   const operationalFilters = useMemo<OperationalFilters>(
     () => ({ reportedVia: reportedViaFilter, maintenance: maintenanceFilter, channel: channelFilter, customers: selectedCustomers }),
@@ -4448,7 +4862,9 @@ export function NocMttrReportWidget() {
   return (
     <WidgetFrame
       title="NOC MTTR Report"
-      subtitle="Upload files as saved reports, then review them in a month-by-month dashboard layout"
+      subtitle={isCustomerServiceManager
+        ? "Select a customer from the list to review MTTR trends month by month."
+        : "Upload files as saved reports, then review them in a month-by-month dashboard layout"}
       icon={IconClock}
       iconColor="orange"
       loading={loading || loadingSavedReports || savingReport}
@@ -4456,6 +4872,67 @@ export function NocMttrReportWidget() {
         void loadSavedReports(activeReportId);
       }}
     >
+      <Modal
+        opened={isCustomerServiceManager && customerPickerOpened}
+        onClose={() => {
+          if (selectedCustomers.length > 0) {
+            setCustomerPickerOpened(false);
+          }
+        }}
+        title="Select customer"
+        centered
+        closeOnClickOutside={selectedCustomers.length > 0}
+        closeOnEscape={selectedCustomers.length > 0}
+        withCloseButton={selectedCustomers.length > 0}
+      >
+        <Stack gap="md">
+          {(loadingSavedReports || initialLoadProgress < 100) && customerOptions.length === 0 ? (
+            <Card withBorder radius="md" p="md">
+              <Stack gap="sm" align="center">
+                <Loader color="orange" size="lg" />
+                <Stack gap={4} align="stretch" w="100%">
+                  <Text ta="center" fw={600}>{initialLoadStage}</Text>
+                  <Progress value={initialLoadProgress} color="orange" radius="xl" />
+                  <Text size="xs" c="dimmed" ta="center">{initialLoadProgress}%</Text>
+                </Stack>
+              </Stack>
+            </Card>
+          ) : customerOptions.length > 0 ? (
+            <>
+              <Text size="sm" c="dimmed">
+                Start typing a customer name, then select it to open the Trends page already filtered for that customer.
+              </Text>
+              <Select
+                label="Customer"
+                placeholder="Start typing a customer name"
+                searchable
+                data={customerOptions}
+                value={customerPickerValue}
+                onChange={setCustomerPickerValue}
+                nothingFoundMessage="No matching customers"
+                autoFocus
+              />
+              <Group justify="flex-end">
+                <Button
+                  color="orange"
+                  disabled={!customerPickerValue}
+                  onClick={() => {
+                    if (!customerPickerValue) return;
+                    setSelectedCustomers([customerPickerValue]);
+                    setCustomerPickerOpened(false);
+                  }}
+                >
+                  Open trends
+                </Button>
+              </Group>
+            </>
+          ) : (
+            <Alert color="yellow" variant="light" icon={<IconAlertCircle size={16} />}>
+              No customer list is available yet. Please upload or save an MTTR report first.
+            </Alert>
+          )}
+        </Stack>
+      </Modal>
       <Modal
         opened={monthDetailModal != null}
         onClose={() => setMonthDetailModal(null)}
@@ -4556,10 +5033,11 @@ export function NocMttrReportWidget() {
           <Tabs.List grow>
             <Tabs.Tab value="trends" leftSection={<IconChartLine size={16} />}>Trends</Tabs.Tab>
             <Tabs.Tab value="charts" leftSection={<IconChartBar size={16} />}>Charts</Tabs.Tab>
-            <Tabs.Tab value="saved" leftSection={<IconDatabase size={16} />}>Saved Reports</Tabs.Tab>
-            <Tabs.Tab value="upload" leftSection={<IconUpload size={16} />}>Upload File</Tabs.Tab>
+            {!isCustomerServiceManager ? <Tabs.Tab value="saved" leftSection={<IconDatabase size={16} />}>Saved Reports</Tabs.Tab> : null}
+            {!isCustomerServiceManager ? <Tabs.Tab value="upload" leftSection={<IconUpload size={16} />}>Upload File</Tabs.Tab> : null}
           </Tabs.List>
 
+          {!isCustomerServiceManager ? <>
           <Tabs.Panel value="saved" pt="md">
             <Card withBorder radius="md" p="md">
               <Stack gap="md">
@@ -4590,7 +5068,7 @@ export function NocMttrReportWidget() {
                     <Stack gap="sm">
                       <Text size="sm">
                         {pendingDeleteAll
-                          ? `Delete all ${savedReports.length} saved MTTR reports? This cannot be undone.`
+                          ? ["Delete all ", savedReports.length, " saved MTTR reports? This cannot be undone."].join("")
                           : `Delete the saved report "${pendingDeleteReport?.file_name ?? ""}"? This cannot be undone.`}
                       </Text>
                       <Group justify="flex-end">
@@ -4754,6 +5232,7 @@ export function NocMttrReportWidget() {
               </Stack>
             </Card>
           </Tabs.Panel>
+          </> : null}
 
           <Tabs.Panel value="charts" pt="md">
             {parsed ? (
@@ -4768,40 +5247,44 @@ export function NocMttrReportWidget() {
                       <Group gap="xs" align="center">
                         <Badge color="orange" variant="light">NOC only</Badge>
                         <Badge color="blue" variant="light">Mobility only</Badge>
-                        <Select
-                          data={copyPanelOptions.map(({ value, label }) => ({ value, label }))}
-                          value={selectedPanelToCopy}
-                          onChange={setSelectedPanelToCopy}
-                          placeholder="Choose panel"
-                          w={280}
-                          disabled={!parsed}
-                        />
-                        <Button
-                          variant="light"
-                          color="blue"
-                          leftSection={<IconCopy size={16} />}
-                          onClick={() => {
-                            const selectedPanel = copyPanelOptions.find((panel) => panel.value === selectedPanelToCopy);
-                            if (selectedPanel) {
-                              void handleCopyPanel(selectedPanel.label, selectedPanel.element);
-                            }
-                          }}
-                          loading={copyingPanelTitle != null}
-                          disabled={!parsed || !selectedPanelToCopy}
-                        >
-                          Copy Panel Image
-                        </Button>
-                        <Button
-                          color="orange"
-                          leftSection={<IconPresentation size={16} />}
-                          onClick={() => {
-                            void handleExportPowerPoint();
-                          }}
-                          loading={exportingPowerPoint}
-                          disabled={!parsed}
-                        >
-                          Generate PowerPoint
-                        </Button>
+                        {!isCustomerServiceManager ? (
+                          <>
+                            <Select
+                              data={copyPanelOptions.map(({ value, label }) => ({ value, label }))}
+                              value={selectedPanelToCopy}
+                              onChange={setSelectedPanelToCopy}
+                              placeholder="Choose panel"
+                              w={280}
+                              disabled={!parsed}
+                            />
+                            <Button
+                              variant="light"
+                              color="blue"
+                              leftSection={<IconCopy size={16} />}
+                              onClick={() => {
+                                const selectedPanel = copyPanelOptions.find((panel) => panel.value === selectedPanelToCopy);
+                                if (selectedPanel) {
+                                  void handleCopyPanel(selectedPanel.label, selectedPanel.element);
+                                }
+                              }}
+                              loading={copyingPanelTitle != null}
+                              disabled={!parsed || !selectedPanelToCopy}
+                            >
+                              Copy Panel Image
+                            </Button>
+                            <Button
+                              color="orange"
+                              leftSection={<IconPresentation size={16} />}
+                              onClick={() => {
+                                void handleExportPowerPoint();
+                              }}
+                              loading={exportingPowerPoint}
+                              disabled={!parsed}
+                            >
+                              Generate PowerPoint
+                            </Button>
+                          </>
+                        ) : null}
                       </Group>
                     </Group>
                   </Stack>
@@ -5211,6 +5694,12 @@ export function NocMttrReportWidget() {
           <Tabs.Panel value="trends" pt="md">
             {parsed ? (
               <Stack gap="md">
+                {isCustomerServiceManager && selectedCustomers.length === 0 ? (
+                  <Alert color="orange" variant="light" icon={<IconFilter size={16} />}>
+                    Please select a customer from the list below to view that customer's MTTR trends.
+                  </Alert>
+                ) : null}
+
                 <Card withBorder radius="md" p="md">
                   <Stack gap="md">
                     <Group justify="space-between" align="end">
@@ -5219,6 +5708,16 @@ export function NocMttrReportWidget() {
                         <Text size="sm" c="dimmed">These filters apply to the calculated trend sections below.</Text>
                       </Stack>
                       <Group gap="sm" align="center">
+                        {isCustomerServiceManager ? (
+                          <Button
+                            variant="light"
+                            color="orange"
+                            onClick={() => setCustomerPickerOpened(true)}
+                            disabled={customerOptions.length === 0}
+                          >
+                            Change customer
+                          </Button>
+                        ) : null}
                         <Button variant="light" color="gray" onClick={clearAllFilters} disabled={!hasActiveFilters}>Clear all filters</Button>
                         <ThemeIcon variant="light" color="orange" size="lg">
                           <IconFilter size={18} />
@@ -5229,11 +5728,13 @@ export function NocMttrReportWidget() {
                       <MultiSelect
                         label="Customer"
                         placeholder="Start typing a customer name"
+                        description={isCustomerServiceManager ? "Customer Service Managers can review one customer at a time." : undefined}
                         value={selectedCustomers}
-                        onChange={setSelectedCustomers}
+                        onChange={(values) => setSelectedCustomers(isCustomerServiceManager ? values.slice(-1) : values)}
                         searchable
                         clearable
                         hidePickedOptions
+                        maxValues={isCustomerServiceManager ? 1 : undefined}
                         maxDropdownHeight={280}
                         limit={25}
                         data={customerOptions}
@@ -5390,7 +5891,7 @@ export function NocMttrReportWidget() {
                                         {section.displayColumns.map((column) => {
                                           const value = row.values[column] ?? "—";
                                           const resolutionMatch = section.title === "Ticket Resolutions"
-                                            ? /^(.*)\s\(([^)]+)\)$/.exec(value)
+                                            ? value.match(/^(.*)\s\(([^)]+)\)$/)
                                             : null;
                                           const volumeParts = section.title === "Ticket Volume" ? value.split("||") : null;
 

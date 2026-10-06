@@ -285,7 +285,7 @@ export function AppUsageWidget() {
                 <Box>
                   <Text fw={700}>Weekly Google Sheet sync</Text>
                   <Text size="sm" c="dimmed">
-                    Auto-appends widget-open usage rows to the <strong>{sheetConfig.config.tabName}</strong> tab every Monday.
+                    Auto-appends widget-open usage rows to the <strong>{sheetConfig.config.tabName}</strong> tab every Friday at 5:00 AM PT.
                   </Text>
                 </Box>
                 <Badge color="teal" variant="light">{sheetConfig.config.schedule}</Badge>
@@ -297,7 +297,7 @@ export function AppUsageWidget() {
                   <Text size="xs" c="dimmed" mt={2}>{sheetConfig.config.spreadsheetId}</Text>
                 </Card>
                 <Card withBorder radius="md" p="sm">
-                  <Text size="xs" tt="uppercase" fw={700} c="dimmed">Next manual sync window</Text>
+                  <Text size="xs" tt="uppercase" fw={700} c="dimmed">Current sync window</Text>
                   <Text size="sm" mt={4}>{sheetConfig.next_manual_sync_window.weekStart} → {sheetConfig.next_manual_sync_window.weekEnd}</Text>
                   <Text size="xs" c="dimmed" mt={2}>{sheetConfig.config.source}</Text>
                 </Card>
@@ -307,7 +307,7 @@ export function AppUsageWidget() {
                   Columns: {sheetConfig.config.exactColumns.join(", ")}
                 </Text>
                 <Button color="teal" variant="light" onClick={syncLastWeekToSheet} loading={syncingSheet}>
-                  Sync last week now
+                  Sync this week now
                 </Button>
               </Group>
             </Stack>

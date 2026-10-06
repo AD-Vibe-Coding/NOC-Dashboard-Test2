@@ -6,9 +6,9 @@
  * → optionally pushes to performance_metrics as source_type="audit"
  *
  * Three tabs:
- *   1. Upload & Analyze  — drag-drop MHTML, stream AI results, review + save
+ *   1. Upload & Analyze  — drag-drop MHTML, stream AI results, then review and save
  *   2. Audit History     — table of all saved audits with scores
- *   3. Push to Metrics   — select audits → push scores to Performance Tracker
+ *   3. Push to Metrics   — select audits, then send scores to Performance Tracker
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1429,7 +1429,7 @@ function PushToMetricsTab({ audits, onPushed, onDelete }: { audits: TicketAudit[
                     checked={filteredUnpushed.length > 0 && selectedInFilter === filteredUnpushed.length}
                     indeterminate={selectedInFilter > 0 && selectedInFilter < filteredUnpushed.length}
                     onChange={toggleAll}
-                    label={`Select all in filter (${filteredUnpushed.length})`}
+                    label={["Select all in filter (", filteredUnpushed.length, ")"].join("")}
                   />
                   <Text size="xs" c="dimmed">{selectedInFilter} selected in current filter</Text>
                 </Group>
@@ -1497,7 +1497,7 @@ function PushToMetricsTab({ audits, onPushed, onDelete }: { audits: TicketAudit[
                             color="red"
                             loading={deleting === a.id}
                             onClick={() => handleDelete(a.id)}
-                            aria-label={`Delete audit ${a.id}`}
+                            aria-label={["Delete audit ", a.id].join("")}
                           >
                             <IconTrash size={14} />
                           </ActionIcon>

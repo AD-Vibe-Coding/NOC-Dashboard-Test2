@@ -1,12 +1,13 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { requireManager } from "../_lib/auth-middleware.js";
+import { requireManagerAppBuilder } from "../_lib/appbuilder-auth.js";
 import { getAppUsageSheetConfig, getPreviousWeekWindow, syncWeeklyAppUsageToGoogleSheet } from "../_lib/google-sheets-app-usage.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
 
-  if (!requireManager(req, res)) return;
+  const managerSession = await requireManagerAppBuilder(req, res);
+  if (!managerSession) return;
 
   if (req.method === "GET") {
     const window = getPreviousWeekWindow();

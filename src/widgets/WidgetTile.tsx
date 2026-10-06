@@ -119,7 +119,7 @@ export function WidgetTile({
             <Box
               style={{
                 position: "relative",
-                filter: `drop-shadow(0 0 10px color-mix(in srgb, ${accentVar} 35%, transparent))`,
+                filter: ["drop-shadow(0 0 10px color-mix(in srgb, ", accentVar, " 35%, transparent))"].join(""),
               }}
             >
               <ThemeIcon

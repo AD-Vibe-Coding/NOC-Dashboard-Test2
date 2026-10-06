@@ -35,7 +35,7 @@ type PolicyRow = Awaited<ReturnType<typeof db.reminder_policies.list>>[number];
 type MeetingRow = Awaited<ReturnType<typeof db.calendar_meetings.list>>[number];
 type EventRow = Awaited<ReturnType<typeof db.reminder_events.list>>[number];
 
-type CronAction = "sync" | "plan" | "dispatch" | "reconcile";
+type CronAction = "run" | "sync" | "plan" | "dispatch" | "reconcile";
 
 const EMPTY_TARGET = { employee_name: "", employee_email: "", slack_user_id: "", enabled: true };
 
@@ -88,7 +88,13 @@ export function ReminderQueueWidget() {
     setRunning(action);
     setError(null);
     try {
-      const response = await fetch(`/api/reminders/meetings/${action}`, { method: "POST" });
+      const endpoint = action === "run" ? "/api/reminders/meetings/automation" : `/api/reminders/meetings/${action}`;
+      const body = action === "run" ? JSON.stringify({ action: "run" }) : undefined;
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body,
+      });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         throw new Error(payload?.error ?? `Failed to run ${action}`);
@@ -145,7 +151,7 @@ export function ReminderQueueWidget() {
       icon={IconBellRinging}
       iconColor="orange"
       loading={loading}
-      onRefresh={load}
+      onRefresh={() => void runAction("run")}
       status={{
         label: counts.failed > 0 ? "Attention needed" : "Cron ready",
         color: counts.failed > 0 ? "red" : "green",
@@ -168,18 +174,30 @@ export function ReminderQueueWidget() {
 
         <Card withBorder radius="lg" p="lg">
           <Stack gap="md">
+            <Alert icon={<IconAlertCircle size={16} />} color="blue" variant="light">
+              Use <strong>Refresh</strong> or <strong>Run automation</strong> to execute the full reminder pipeline in preview/dev, just like Work Allotment. Production Vercel Cron can still run the same steps automatically on a deployed URL.
+            </Alert>
             <Group justify="space-between" align="center">
               <div>
                 <Text fw={700}>Manual server actions</Text>
                 <Text size="sm" c="dimmed">Run the same server-side steps that Vercel Cron runs in production.</Text>
               </div>
               <Group gap="xs">
-                {(["sync", "plan", "dispatch", "reconcile"] as CronAction[]).map((action) => (
+                <Button
+                  variant="filled"
+                  color="orange"
+                  leftSection={<IconPlayerPlay size={16} />}
+                  loading={running === "run"}
+                  onClick={() => void runAction("run")}
+                >
+                  Run automation
+                </Button>
+                {(["sync", "plan", "dispatch", "reconcile"] as Exclude<CronAction, "run">[]).map((action) => (
                   <Button
                     key={action}
-                    variant={action === "dispatch" ? "filled" : "light"}
-                    color={action === "dispatch" ? "orange" : "gray"}
-                    leftSection={action === "dispatch" ? <IconPlayerPlay size={16} /> : <IconRefresh size={16} />}
+                    variant="light"
+                    color="gray"
+                    leftSection={<IconRefresh size={16} />}
                     loading={running === action}
                     onClick={() => void runAction(action)}
                   >

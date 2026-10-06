@@ -7,5 +7,18 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
     .split(",")
     .map((d: string) => d.trim().toLowerCase())
     .filter(Boolean);
-  return res.status(200).json({ google_sso: googleSso, allowed_domains: allowedDomains });
+
+  const deploymentHost = process.env.VERCEL_PROJECT_PRODUCTION_URL
+    || process.env.VERCEL_BRANCH_URL
+    || process.env.VERCEL_URL
+    || null;
+  const deploymentUrl = deploymentHost
+    ? `https://${deploymentHost.replace(/^https?:\/\//, "")}`
+    : null;
+
+  return res.status(200).json({
+    google_sso: googleSso,
+    allowed_domains: allowedDomains,
+    deployment_url: deploymentUrl,
+  });
 }

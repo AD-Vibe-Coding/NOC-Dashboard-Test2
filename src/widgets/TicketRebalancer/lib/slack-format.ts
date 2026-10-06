@@ -35,8 +35,8 @@ export function formatForSlack(result: RebalanceResult): string {
 
   // Per-agent load table
   lines.push(result.shiftTransition ? "*Eligible-pool load*" : "*Per-agent load*");
-  // "Hot" = stage Pending Carrier Action / Update + priority Critical or High
-  // "Hot" = stage Pending Carrier Action / Update + priority Critical or High
+  // "Hot" means carrier-action/update stage with Critical or High priority.
+  // This mirrors the same hot-ticket rule used by the balancing engine.
   const loadHeaders = ["Agent", "Tier", "Avail", "Tix", "Hot", "PendCust", "DueToday", "Age>10", "Age>30", "Weight", "Δ", "Band"];
   const loadRows = result.agentLoads
     .slice()

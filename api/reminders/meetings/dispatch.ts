@@ -1,7 +1,8 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../../_lib/supabase-admin.js";
 import { postSlackMessage } from "../../_lib/slack.js";
-import { buildDedupeKey, cronAuthorized, reminderMessageForJob } from "../../_lib/reminder-service.js";
+import { buildDedupeKey, cronAuthorized, defaultSlackUserIdFor, reminderMessageForJob } from "../../_lib/reminder-service.js";
+import { requireManager } from "../../_lib/auth-middleware.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
@@ -21,12 +22,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const nowIso = new Date().toISOString();
-    const workerId = `vercel-${Date.now()}`;
     const { data: jobs, error } = await supabaseAdmin
       .from("meeting_reminder_jobs")
       .select("*")
       .in("status", ["pending", "failed"])
-      .lte("next_attempt_at", nowIso)
+      .lte("scheduled_for", nowIso)
       .order("scheduled_for", { ascending: true })
       .limit(25);
     if (error) throw error;
@@ -35,16 +35,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let failed = 0;
 
     for (const job of jobs ?? []) {
-      await supabaseAdmin
+      const claim = await supabaseAdmin
         .from("meeting_reminder_jobs")
-        .update({ status: "sending", locked_at: nowIso, locked_by: workerId })
+        .update({ status: "sending" })
         .eq("id", job.id)
-        .in("status", ["pending", "failed"]);
+        .in("status", ["pending", "failed"])
+        .select("id, payload_json")
+        .single();
+
+      if (claim.error || !claim.data) {
+        continue;
+      }
 
       try {
+        const payload = typeof job.payload_json === "string" ? JSON.parse(job.payload_json || "{}") : (job.payload_json ?? {});
+        const targetSlackUserId = payload.targetSlackUserId || defaultSlackUserIdFor(job.employee_name);
+        if (!targetSlackUserId) {
+          throw new Error(`No Slack DM target configured for ${job.employee_name}`);
+        }
         const text = reminderMessageForJob(job);
         const result = await postSlackMessage(text, {
-          target_user_id: job.slack_target_type === "slack_dm" ? job.slack_target_id : undefined,
+          target_user_id: targetSlackUserId,
           username: "Meeting Reminder",
           icon_emoji: Number(job.reminder_offset_minutes) === 5 ? ":rotating_light:" : ":spiral_calendar_pad:",
         });
@@ -57,8 +68,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: "sent",
           sent_at: new Date().toISOString(),
           last_error: null,
-          locked_at: null,
-          locked_by: null,
           attempt_count: Number(job.attempt_count ?? 0) + 1,
         }).eq("id", job.id);
 
@@ -83,9 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           status: nextAttemptCount >= 5 ? "dead_letter" : "failed",
           last_error: sendError instanceof Error ? sendError.message : String(sendError),
           attempt_count: nextAttemptCount,
-          next_attempt_at: nextAttemptCount >= 5 ? null : nextAttemptAt,
-          locked_at: null,
-          locked_by: null,
+          scheduled_for: nextAttemptCount >= 5 ? job.scheduled_for : nextAttemptAt,
         }).eq("id", job.id);
         failed += 1;
       }

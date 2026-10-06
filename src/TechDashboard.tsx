@@ -44,7 +44,7 @@ import {
   IconMailForward,
   IconMoon,
   IconNotes,
-  IconReportAnalytics,
+  IconChartBar,
   IconSearch,
   IconStar,
   IconBook,
@@ -67,7 +67,7 @@ import {
   useDashboardPreferences,
 } from "./lib/dashboard-preferences";
 import { useIdentity } from "./lib/identity";
-import { canAccess, ROLE_COLORS, ROLE_LABELS } from "./lib/roles";
+import { canAccess, effectiveRoleForIdentity, ROLE_COLORS, ROLE_LABELS } from "./lib/roles";
 import { trackWidgetOpen } from "./lib/track";
 import { useTrainingNotifications } from "./lib/training-notifications";
 import { useWindowManager } from "./lib/window-manager";
@@ -96,8 +96,8 @@ const NAV_SECTIONS: NavSection[] = [
     title: "My Work",
     items: [
       { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets & calls" },
-      { id: "meeting-notes", label: "Meeting Notes", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
-      { id: "performance-tracker", label: "My Metrics", icon: IconReportAnalytics, color: "green", description: "Performance & disputes" },
+      { id: "meeting-notes", label: "Notebook", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
+      { id: "performance-tracker", label: "My Metrics", icon: IconChartBar, color: "green", description: "Performance & disputes" },
       { id: "noc-mttr-report", label: "NOC MTTR Report", icon: IconClock, color: "orange", description: "Upload MTTR Excel and trend by month" },
       { id: "break-tracker", label: "Breaks", icon: IconCoffee, color: "orange", description: "Start & track breaks" },
     ],
@@ -150,6 +150,7 @@ const NAV_SECTIONS: NavSection[] = [
       { id: "celebrations-tracker", label: "Celebrations Tracker", icon: IconGift, color: "pink", description: "Birthdays, work anniversaries, and marriage anniversaries" },
       { id: "enhancement-tracker", label: "Enhancement Tracker", icon: IconBulb, color: "yellow", description: "Submit and review team improvement ideas" },
       { id: "shift-checklist", label: "Shift Checklist", icon: IconClipboardList, color: "teal", description: "End-of-shift handover checklist" },
+      { id: "work-allotment-generator", label: "Work Allotment Generator", icon: IconClipboardList, color: "indigo", description: "View NOC shift assignments" },
       { id: "kb-gap-finder", label: "KB Gap Finder", icon: IconBook, color: "indigo", description: "Ask questions · Flag missing docs" },
     ],
   },
@@ -170,14 +171,18 @@ export default function TechDashboard() {
   const canonicalSelf = identity ? resolveTeamMember(identity.name) : null;
   const displayName = canonicalSelf ?? identity?.name ?? "Tech";
   const firstName = displayName.split(" ")[0];
+  const effectiveRole = effectiveRoleForIdentity(identity);
 
   const visibleWidgets = useMemo(() => {
     if (!identity) return WIDGETS;
-    return WIDGETS.filter((w) => canAccess(identity.role, w.roles));
-  }, [identity]);
+    if (effectiveRole === "customer_service_manager") {
+      return WIDGETS.filter((w) => w.id === "noc-mttr-report");
+    }
+    return WIDGETS.filter((w) => canAccess(effectiveRole, w.roles));
+  }, [effectiveRole, identity]);
 
   const { pendingCount: trainingNotificationCount } = useTrainingNotifications();
-  const accentColor = identity ? ROLE_COLORS[identity.role] : "appdirect";
+  const accentColor = effectiveRole ? ROLE_COLORS[effectiveRole] : "appdirect";
 
   function expand(id: string) {
     const widget = visibleWidgets.find((w) => w.id === id);
@@ -267,7 +272,7 @@ export default function TechDashboard() {
               <Box
                 style={{
                   position: "relative",
-                  filter: `drop-shadow(0 0 16px var(--mantine-color-${accentColor}-6))`,
+                  filter: ["drop-shadow(0 0 16px var(--mantine-color-", accentColor, "-6))"].join(""),
                 }}
               >
                 <BrandLogo size={32} glowColor={`var(--mantine-color-${accentColor}-6)`} />
@@ -529,7 +534,7 @@ function NavButton({
             color={item.color}
             style={{
               flexShrink: 0,
-              filter: `drop-shadow(0 0 8px color-mix(in srgb, ${accentVar} 30%, transparent))`,
+              filter: ["drop-shadow(0 0 8px color-mix(in srgb, ", accentVar, " 30%, transparent))"].join(""),
             }}
           >
             <item.icon size={20} />

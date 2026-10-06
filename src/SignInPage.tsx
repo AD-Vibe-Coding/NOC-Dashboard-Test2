@@ -37,6 +37,7 @@ import {
   IconChevronUp,
   IconCopy,
   IconExternalLink,
+  IconLink,
   IconLogin,
   IconMoon,
   IconSettings,
@@ -61,12 +62,14 @@ const AUTH_ERROR_MESSAGES: Record<string, string> = {
 // AppDirect brand colors
 const APPDIRECT_BRAND_PRIMARY = "#006080";
 const APPDIRECT_BRAND_ACCENT = "#0080a6";
+const FALLBACK_DEPLOYMENT_URL = "https://sb-48rvj5c9ycdl.vercel.run/";
 
 export default function SignInPage() {
   const { ssoEnabled, signIn, devSignIn } = useIdentity();
   const [devModalOpened, setDevModalOpened] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [redirectUri, setRedirectUri] = useState<string | null>(null);
+  const [deploymentUrl, setDeploymentUrl] = useState<string | null>(null);
   const [showSetup, setShowSetup] = useState(false);
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
@@ -74,6 +77,17 @@ export default function SignInPage() {
   });
   const isDark = computedColorScheme === "dark";
   const toggleColorScheme = () => setColorScheme(isDark ? "light" : "dark");
+  const previewParams = typeof window !== "undefined"
+    ? new URLSearchParams(window.location.search)
+    : null;
+  const isEmbeddedPreview = typeof window !== "undefined"
+    && (window.self !== window.top
+      || previewParams?.has("appBuilderParentOrigin")
+      || previewParams?.has("authPreview"));
+  const isVercelDeployment = typeof window !== "undefined"
+    && /(?:^|\.)vercel\.(?:app|run)$/i.test(window.location.hostname);
+  const effectiveDeploymentUrl = deploymentUrl ?? FALLBACK_DEPLOYMENT_URL;
+  const shouldShowPreviewInstructions = ssoEnabled && (isEmbeddedPreview || !isVercelDeployment);
 
   // Fetch the exact redirect URI the server generates
   useEffect(() => {
@@ -81,6 +95,13 @@ export default function SignInPage() {
       .then((r) => r.json())
       .then((d) => setRedirectUri(d.google ?? null))
       .catch(() => null);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/config")
+      .then((r) => r.json())
+      .then((d) => setDeploymentUrl(d.deployment_url ?? FALLBACK_DEPLOYMENT_URL))
+      .catch(() => setDeploymentUrl(FALLBACK_DEPLOYMENT_URL));
   }, []);
 
   // Parse auth_error from URL on mount, then strip it from the URL
@@ -158,14 +179,16 @@ export default function SignInPage() {
 
       {/* Main content */}
       <Center style={{ minHeight: "100vh", position: "relative", zIndex: 1 }}>
-        <Container size="xs" px="md">
+        <Container size={shouldShowPreviewInstructions ? "lg" : "xs"} px="md">
           <Stack align="center" gap="xl">
             {/* Logo */}
             <Box
               style={{
-                filter: `drop-shadow(0 0 40px ${
-                  isDark ? "rgba(0,128,166,0.4)" : "rgba(0,96,128,0.2)"
-                })`,
+                filter: [
+                  "drop-shadow(0 0 40px ",
+                  isDark ? "rgba(0,128,166,0.4)" : "rgba(0,96,128,0.2)",
+                  ")",
+                ].join(""),
               }}
             >
               <BrandLogo size={64} glowColor="var(--mantine-color-appdirect-6)" />
@@ -207,7 +230,7 @@ export default function SignInPage() {
               radius="lg"
               p="xl"
               w="100%"
-              maw={420}
+              maw={shouldShowPreviewInstructions ? 840 : 420}
               style={{
                 background: isDark
                   ? "rgba(15, 22, 36, 0.8)"
@@ -216,7 +239,97 @@ export default function SignInPage() {
               }}
             >
               <Stack gap="md">
-                {ssoEnabled ? (
+                {shouldShowPreviewInstructions ? (
+                  <Stack gap="xl">
+                    <Alert
+                      icon={<IconShieldCheck size={24} />}
+                      color="blue"
+                      radius="md"
+                      variant="light"
+                      styles={{
+                        root: { padding: 24 },
+                        message: { fontSize: 24, lineHeight: 1.6 },
+                        icon: { alignSelf: "flex-start", marginTop: 6 },
+                      }}
+                    >
+                      Google login is available only through the Vercel app. Click the link below to open the login page. This preview enables the sandbox; you’ll need the sandbox turned on to log in because the Vercel app hasn’t been published yet.
+                    </Alert>
+
+                    <Stack gap={14}>
+                      <Text fw={700} style={{ fontSize: 24, lineHeight: 1.3 }}>
+                        Production login on Vercel
+                      </Text>
+                      <Text c="dimmed" style={{ fontSize: 24, lineHeight: 1.6 }}>
+                        Use the below link to sign in to the App
+                      </Text>
+                    </Stack>
+
+                    {effectiveDeploymentUrl ? (
+                      <>
+                        <Stack gap={14}>
+                          <Text style={{ fontSize: 24, fontWeight: 600, lineHeight: 1.4 }} c="dimmed" tt="uppercase">
+                            Production login URL
+                          </Text>
+                          <Code
+                            block
+                            style={{
+                              fontSize: 24,
+                              lineHeight: 1.6,
+                              wordBreak: "break-all",
+                              padding: "20px 22px",
+                            }}
+                          >
+                            {effectiveDeploymentUrl}
+                          </Code>
+                        </Stack>
+                        <Group grow>
+                          <CopyButton value={effectiveDeploymentUrl} timeout={2000}>
+                            {({ copied, copy }) => (
+                              <Button
+                                variant={copied ? "filled" : "light"}
+                                color={copied ? "green" : "appdirect"}
+                                size="xl"
+                                radius="md"
+                                leftSection={copied ? <IconCheck size={22} /> : <IconCopy size={22} />}
+                                onClick={copy}
+                                styles={{ root: { minHeight: 68, fontSize: 24, fontWeight: 600, paddingInline: 20 } }}
+                              >
+                                {copied ? "Copied Vercel link" : "Copy Vercel link"}
+                              </Button>
+                            )}
+                          </CopyButton>
+                          <Button
+                            component="a"
+                            href={effectiveDeploymentUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            size="xl"
+                            color="appdirect"
+                            leftSection={<IconExternalLink size={22} />}
+                            radius="md"
+                            styles={{ root: { minHeight: 68, fontSize: 24, fontWeight: 600, paddingInline: 20 } }}
+                          >
+                            Open Vercel login page
+                          </Button>
+                        </Group>
+                      </>
+                    ) : (
+                      <Alert
+                        icon={<IconLink size={24} />}
+                        color="gray"
+                        radius="md"
+                        variant="light"
+                        styles={{
+                          root: { padding: 24 },
+                          message: { fontSize: 24, lineHeight: 1.6 },
+                          icon: { alignSelf: "flex-start", marginTop: 6 },
+                        }}
+                      >
+                        Your Vercel deployment link will appear here after you publish from the Deploy panel.
+                      </Alert>
+                    )}
+                  </Stack>
+                ) : ssoEnabled ? (
                   <>
                     <Button
                       fullWidth
@@ -234,7 +347,7 @@ export default function SignInPage() {
                         <IconShieldCheck size={12} />
                       </ThemeIcon>
                       <Text size="xs" c="dimmed">
-                        Restricted to @appdirect.com accounts
+                        Restricted to approved @appdirect.com accounts
                       </Text>
                     </Group>
                   </>
@@ -258,7 +371,7 @@ export default function SignInPage() {
                 )}
 
                 {/* Google Cloud Console setup helper */}
-                {ssoEnabled && redirectUri && (
+                {!shouldShowPreviewInstructions && ssoEnabled && redirectUri && (
                   <>
                     <Divider />
                     <Box

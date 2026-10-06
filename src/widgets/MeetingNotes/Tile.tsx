@@ -9,9 +9,14 @@ type OneOnOneNote = Awaited<ReturnType<typeof db.one_on_one_notes.list>>[number]
 type PersonalActionItem = Awaited<ReturnType<typeof db.personal_action_items.list>>[number];
 
 const MANAGEMENT_PREFIX = "Management · ";
+const OTHER_PREFIX = "Other · ";
 
 function isManagementNote(note: OneOnOneNote) {
   return String(note.employee_name ?? "").startsWith(MANAGEMENT_PREFIX);
+}
+
+function isOtherNotebookNote(note: OneOnOneNote) {
+  return note.notebook_group === "other" || String(note.employee_name ?? "").startsWith(OTHER_PREFIX);
 }
 
 export function MeetingNotesTile({ onExpand }: { onExpand: () => void }) {
@@ -31,21 +36,22 @@ export function MeetingNotesTile({ onExpand }: { onExpand: () => void }) {
   }, []);
 
   const myManagedNotes = useMemo(() => identity?.name ? notes.filter((note) => note.manager_name === identity.name) : [], [identity?.name, notes]);
-  const individualCount = useMemo(() => myManagedNotes.filter((note) => !isManagementNote(note)).length, [myManagedNotes]);
+  const individualCount = useMemo(() => myManagedNotes.filter((note) => !isManagementNote(note) && !isOtherNotebookNote(note)).length, [myManagedNotes]);
   const managementCount = useMemo(() => myManagedNotes.filter(isManagementNote).length, [myManagedNotes]);
+  const personalNotebookCount = useMemo(() => myManagedNotes.filter(isOtherNotebookNote).length, [myManagedNotes]);
   const receivedCount = useMemo(() => identity?.name ? notes.filter((note) => !isManagementNote(note) && note.employee_name === identity.name && note.status === "shared").length : 0, [identity?.name, notes]);
   const openTaskCount = useMemo(() => identity?.name ? tasks.filter((task) => task.employee_name === identity.name && task.status !== "done").length : 0, [identity?.name, tasks]);
 
   return (
     <WidgetTile
-      title="Meeting Notes"
-      description={isManager ? "Notebook workspace for 1:1s and management notes" : "Shared summaries and personal action items"}
+      title="Notebook"
+      description={isManager ? "Notebook workspace for 1:1s and management notes" : "Personal notepad for sticky notes, shared summaries, and action items"}
       icon={IconNotes}
       iconColor="grape"
       onExpand={onExpand}
       status={{
-        label: isManager ? `${individualCount + managementCount} notes` : `${receivedCount} shared`,
-        color: isManager ? "grape" : receivedCount > 0 ? "green" : "gray",
+        label: isManager ? `${individualCount + managementCount} notes` : `${personalNotebookCount} notebook page${personalNotebookCount === 1 ? "" : "s"}`,
+        color: isManager ? "grape" : personalNotebookCount > 0 ? "orange" : "gray",
       }}
     >
       <Stack gap="sm" style={{ height: "100%" }}>
@@ -69,19 +75,29 @@ export function MeetingNotesTile({ onExpand }: { onExpand: () => void }) {
             </Group>
           </>
         ) : (
-          <Group gap="sm" wrap="nowrap">
-            <ThemeIcon radius="md" variant="light" color="grape"><IconChecklist size={16} /></ThemeIcon>
-            <div style={{ flex: 1 }}>
-              <Text size="xs" c="dimmed" tt="uppercase" fw={700}>My notebook</Text>
-              <Text fw={700}>{receivedCount} shared summaries</Text>
-            </div>
-            <Badge variant="light" color={openTaskCount > 0 ? "yellow" : "green"}>{openTaskCount} open tasks</Badge>
-          </Group>
+          <Stack gap="sm">
+            <Group gap="sm" wrap="nowrap">
+              <ThemeIcon radius="md" variant="light" color="orange"><IconNotes size={16} /></ThemeIcon>
+              <div style={{ flex: 1 }}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>My notebook</Text>
+                <Text fw={700}>{personalNotebookCount} personal page{personalNotebookCount === 1 ? "" : "s"}</Text>
+              </div>
+              <Badge variant="light" color="orange">Notepad</Badge>
+            </Group>
+            <Group gap="sm" wrap="nowrap">
+              <ThemeIcon radius="md" variant="light" color="grape"><IconChecklist size={16} /></ThemeIcon>
+              <div style={{ flex: 1 }}>
+                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Shared with me</Text>
+                <Text fw={700}>{receivedCount} shared summar{receivedCount === 1 ? "y" : "ies"}</Text>
+              </div>
+              <Badge variant="light" color={openTaskCount > 0 ? "yellow" : "green"}>{openTaskCount} open tasks</Badge>
+            </Group>
+          </Stack>
         )}
         <Text size="sm" c="dimmed">
           {isManager
             ? "Organize 1:1 pages by employee and keep a separate notebook for management-level meeting notes in one place."
-            : "Review shared 1:1 notes and keep track of your own follow-up tasks."}
+            : "Use My notebook like sticky notes or a personal notepad for reminders, links, drafts, handoff notes, and anything you want to save for yourself."}
         </Text>
       </Stack>
     </WidgetTile>

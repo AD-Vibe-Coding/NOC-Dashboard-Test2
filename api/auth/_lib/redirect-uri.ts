@@ -25,18 +25,25 @@ import type { IncomingMessage } from "node:http";
  * they can paste it verbatim.
  */
 export function getRedirectUri(req: IncomingMessage, providerId: string): string {
-  // APP_BASE_URL wins unconditionally — it's the explicit public origin
-  // set by the operator (e.g. https://sb-48rvj5c9ycdl.vercel.run).
-  // Without it, the Vite dev-server proxy hands the handler a request
-  // whose Host header is `localhost:5173`, producing a redirect URI
-  // of `http://localhost:5173/api/auth/…/callback` that Google
-  // (correctly) rejects with `redirect_uri_mismatch`.
+  // Prefer the request's own resolved origin whenever it is a real
+  // non-loopback host. This keeps the popup's /start request, the
+  // temporary oauth_state_* cookies, and the provider callback all on
+  // the SAME origin. If APP_BASE_URL points somewhere else, forcing the
+  // callback there causes `state_mismatch` because the callback lands on
+  // a different origin than the one that set the cookies.
+  const requestOrigin = getOrigin(req);
+  if (requestOrigin && !isLoopbackOrigin(requestOrigin)) {
+    return `${requestOrigin}/api/auth/${providerId}/callback`;
+  }
+
+  // When the request came through localhost/127.0.0.1 (common in local
+  // dev proxy setups), prefer APP_BASE_URL if present so the provider sees
+  // a public redirect URI instead of localhost.
   const base = (process.env.APP_BASE_URL ?? "").replace(/\/$/, "");
   if (base) return `${base}/api/auth/${providerId}/callback`;
 
-  // Fall back to `http://localhost` when no Host can be resolved.
-  const origin = getOrigin(req) ?? "http://localhost";
-  return `${origin}/api/auth/${providerId}/callback`;
+  // Final fallback for purely local development.
+  return `${requestOrigin ?? "http://localhost"}/api/auth/${providerId}/callback`;
 }
 
 /**
@@ -103,6 +110,14 @@ function isLoopbackHost(hostHeader: string): boolean {
   if (bare === "localhost") return true;
   if (bare === "::1") return true;
   return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare);
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+  try {
+    return isLoopbackHost(new URL(origin).host);
+  } catch {
+    return false;
+  }
 }
 
 /**

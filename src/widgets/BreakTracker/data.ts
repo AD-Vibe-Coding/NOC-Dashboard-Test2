@@ -32,6 +32,9 @@ export function useBreakData() {
       setHistory(historyRows);
     } catch (e) {
       console.warn("[useBreakData] refresh failed:", e);
+      // Do not retain potentially stale "active" rows after a failed refresh.
+      // Reminder logic must prefer missing data over false escalations.
+      setActive([]);
     }
   }
 

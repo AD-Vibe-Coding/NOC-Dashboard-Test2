@@ -56,7 +56,6 @@ import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember } from "../Perf
 import { useIdentity } from "../../lib/identity";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { getDefaultAgentId } from "../../lib/devs-ai/agents";
-import { AiAgentSelector } from "../../components/AiAgentSelector";
 import { postSlackMessage } from "../../lib/slack";
 import { db } from "../../db";
 import { defaultRoleFor } from "../../lib/roles";
@@ -75,6 +74,12 @@ type StructuredSummary = {
   employeeActionItems: string[];
 };
 
+type GmailLabelRecord = {
+  id: string;
+  name: string;
+  type?: string;
+};
+
 type GmailNoteMessage = {
   id: string;
   threadId: string | null;
@@ -86,9 +91,44 @@ type GmailNoteMessage = {
   imported: boolean;
   internalDate: string | null;
   labelQuery: string;
+  labelIds?: string[];
+  labelNames?: string[];
 };
 
 type NotebookMode = "individual" | "management" | "other";
+type WorkspaceView = "team_members" | "my_notebook";
+
+type GmailFolderMapping = {
+  notebookGroup: NotebookMode;
+  sectionName: string;
+  employeeName: string;
+  titleHint?: string;
+};
+
+type GmailSyncStats = {
+  start: string;
+  end: string;
+  fetched: number;
+  approvedFolderMatches: number;
+  pending: number;
+  extractedNotes: number;
+  aiStructured: number;
+  fallbackStructured: number;
+  createdPages: number;
+  skippedExisting: number;
+  skippedUnclassified: number;
+  skippedNoExtractedNotes: number;
+  skippedNoStructuredContent: number;
+  statusMessage?: string;
+};
+
+type AnnualSummary = {
+  summary: string;
+  achievements: string[];
+  recognition: string[];
+  feedback: string[];
+  improvements: string[];
+};
 
 type NormalizedNote = OneOnOneNote & {
   notebook_group: NotebookMode;
@@ -191,6 +231,40 @@ const MANAGEMENT_PREFIX = "Management · ";
 const OTHER_PREFIX = "Other · ";
 const DEFAULT_OTHER_SECTION = "Others";
 const SECTION_PATH_SEPARATOR = " / ";
+const TEAM_MEMBERS_ROOT = "Team Members";
+const MY_NOTEBOOK_ROOT = "My Notebook";
+const GMAIL_GEMINI_ROOT = "Gemini Notes";
+const GMAIL_TEAM_ONE_ON_ONE_ROOT = "Team One on One Notes";
+const APPROVED_TEAM_MEMBER_NAMES = [
+  "Karthik Radhakrishnan",
+  "Pranav Dandibhotla",
+  "Sriram Parisa",
+  "Lokesh Naik Banavath",
+  "Kenya Gentry",
+  "Mohammed Ashraf",
+  "Hamza Rahmani",
+  "Akash Hanvate",
+  "Otukho Olembo",
+  "Mohammed Zubairuddin",
+  "Karthik Damagalla",
+  "Abhishek Benarji",
+  "Akram Ahmed",
+  "Mahalakshmi Samiti",
+] as const;
+const ALLOWED_TEAM_MEMBER_GEMINI_LABELS = new Set(APPROVED_TEAM_MEMBER_NAMES.map(normalizeLabelValue));
+const APPROVED_MY_NOTEBOOK_NAMES = [
+  "C3 & NOC Monthly Sync",
+  "Monthly Review - NOC",
+  "NOC & MOM Monthly Sync",
+  "NOC Management Meetings",
+  "Team Meetings",
+  "Matt - One on One",
+] as const;
+const ALLOWED_MY_NOTEBOOK_GEMINI_LABELS = new Set(APPROVED_MY_NOTEBOOK_NAMES.map(normalizeLabelValue));
+const BLOCKED_GEMINI_FOLDER_PREFIXES = [
+  normalizeLabelValue("Not Important"),
+  normalizeLabelValue("Inbox / RCO Order Requests"),
+];
 
 /** Case/space-insensitive name comparison — handles trimming and casing variants */
 function samePerson(a: string, b: string): boolean {
@@ -226,10 +300,274 @@ function parseJsonSummary(input: string): StructuredSummary | null {
   }
 }
 
-function formatDate(value?: string | null) {
+function hasStructuredSummaryContent(parsed: StructuredSummary | null) {
+  if (!parsed) return false;
+  return Boolean(
+    parsed.summary.trim()
+    || parsed.discussionPoints.length > 0
+    || parsed.managerActionItems.length > 0
+    || parsed.employeeActionItems.length > 0,
+  );
+}
+
+function parseGeminiSectionsToStructuredSummary(noteText: string, fallbackTitle: string): StructuredSummary | null {
+  const lines = String(noteText ?? "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return null;
+
+  let currentSection: "summary" | "discussion" | "actions" | null = null;
+  const summaryLines: string[] = [];
+  const discussionPoints: string[] = [];
+  const actionItems: string[] = [];
+
+  const cleanBullet = (value: string) => value.replace(/^[-*•\d.)\s]+/, "").trim();
+  const normalizeHeading = (value: string) => normalizeLabelValue(value).replace(/:$/, "").trim();
+  const headingType = (value: string): "summary" | "discussion" | "actions" | null => {
+    const normalized = normalizeHeading(value);
+    if (
+      normalized === "summary"
+      || normalized === "meeting summary"
+      || normalized === "overview"
+      || normalized === "recap"
+    ) return "summary";
+    if (
+      normalized === "discussion points"
+      || normalized === "key discussion points"
+      || normalized === "discussion"
+      || normalized === "key takeaways"
+      || normalized === "highlights"
+      || normalized === "notes"
+      || normalized === "quick notes"
+    ) return "discussion";
+    if (
+      normalized === "plan of action"
+      || normalized === "action items"
+      || normalized === "next steps"
+      || normalized === "follow ups"
+      || normalized === "follow-up actions"
+      || normalized === "follow up actions"
+      || normalized === "follow ups and owners"
+    ) return "actions";
+    return null;
+  };
+
+  const looksLikeTopicHeading = (value: string) => {
+    const cleaned = cleanBullet(value).replace(/:$/, "").trim();
+    if (!cleaned) return false;
+    if (cleaned.length > 90) return false;
+    if (/[.!?]$/.test(cleaned)) return false;
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    return words.length >= 2 && words.length <= 10;
+  };
+
+  const looksLikeActionItem = (value: string) => {
+    const normalized = normalizeLabelValue(value);
+    return /\b(will|follow up|follow-up|to do|todo|action|owner|send|share|review|update|check|confirm|schedule|create|escalate)\b/.test(normalized);
+  };
+
+  for (const line of lines) {
+    const inlineMatch = line.match(/^([^:]{2,60}):\s*(.+)$/);
+    if (inlineMatch) {
+      const [, heading, content] = inlineMatch;
+      const matchedSection = headingType(heading);
+      if (matchedSection) {
+        currentSection = matchedSection;
+        const cleaned = cleanBullet(content);
+        if (cleaned) {
+          if (matchedSection === "summary") summaryLines.push(cleaned);
+          if (matchedSection === "discussion") discussionPoints.push(cleaned);
+          if (matchedSection === "actions") actionItems.push(cleaned);
+        }
+        continue;
+      }
+    }
+
+    const matchedSection = headingType(line);
+    if (matchedSection) {
+      currentSection = matchedSection;
+      continue;
+    }
+
+    if (currentSection === "summary") {
+      summaryLines.push(cleanBullet(line));
+    } else if (currentSection === "discussion") {
+      const cleaned = cleanBullet(line);
+      if (cleaned) {
+        if (looksLikeTopicHeading(cleaned)) {
+          discussionPoints.push(cleaned);
+        } else if (looksLikeActionItem(cleaned)) {
+          actionItems.push(cleaned);
+        } else {
+          discussionPoints.push(cleaned);
+        }
+      }
+    } else if (currentSection === "actions") {
+      const cleaned = cleanBullet(line);
+      if (cleaned) actionItems.push(cleaned);
+    }
+  }
+
+  if (summaryLines.length === 0 && discussionPoints.length === 0 && actionItems.length === 0) {
+    const cleanedLines = lines
+      .map(cleanBullet)
+      .filter((line) => line && !/^notes from\b/i.test(line));
+
+    if (cleanedLines.length > 0) {
+      const contentLines = cleanedLines.filter((line) => !looksLikeTopicHeading(line) || /\s/.test(line));
+      const firstSentence = contentLines.slice(0, 2).join(" ").trim();
+      if (firstSentence) summaryLines.push(firstSentence);
+
+      cleanedLines.slice(summaryLines.length > 0 ? 2 : 0).forEach((line) => {
+        if (looksLikeActionItem(line)) actionItems.push(line);
+        else discussionPoints.push(line);
+      });
+    }
+  }
+
+  if (summaryLines.length === 0 && discussionPoints.length > 0) {
+    summaryLines.push(discussionPoints.slice(0, 2).join(" "));
+  }
+
+  const summary = summaryLines.join(" ").trim();
+  const title = String(fallbackTitle || "Meeting summary").trim() || "Meeting summary";
+
+  const parsed: StructuredSummary = {
+    title,
+    summary,
+    discussionPoints,
+    managerActionItems: actionItems,
+    employeeActionItems: [],
+  };
+
+  return hasStructuredSummaryContent(parsed) ? parsed : null;
+}
+
+function buildRawTextStructuredSummary(noteText: string, fallbackTitle: string): StructuredSummary | null {
+  const lines = String(noteText ?? "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*•\d.)\s]+/, "").trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) return null;
+
+  const discussionPoints = lines.slice(0, 12);
+  const summary = lines.slice(0, Math.min(6, lines.length)).join("\n").trim();
+
+  const parsed: StructuredSummary = {
+    title: String(fallbackTitle || "Meeting summary").trim() || "Meeting summary",
+    summary,
+    discussionPoints,
+    managerActionItems: [],
+    employeeActionItems: [],
+  };
+
+  return hasStructuredSummaryContent(parsed) ? parsed : null;
+}
+
+function extractGeminiNoteText(message: GmailNoteMessage) {
+  const raw = String(message.body || message.snippet || "").replace(/\r/g, "").trim();
+  if (!raw) return "";
+
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const filteredLines = lines.filter((line) => {
+    const lower = line.toLowerCase();
+    return !(
+      lower.startsWith("from:")
+      || lower.startsWith("to:")
+      || lower.startsWith("cc:")
+      || lower.startsWith("bcc:")
+      || lower.startsWith("subject:")
+      || lower.startsWith("sent:")
+      || lower.startsWith("date:")
+      || lower.startsWith("gmail")
+      || lower === "view summary"
+      || lower === "open in gmail"
+      || lower === "open meeting notes"
+      || lower.startsWith("these notes have been sent")
+      || lower.startsWith("the content was auto-generated")
+      || /^notes from\s+[“\"].+[”\"]$/i.test(line)
+    );
+  });
+
+  const sectionAnchors = [
+    "summary",
+    "meeting summary",
+    "discussion points",
+    "key discussion points",
+    "discussion",
+    "key takeaways",
+    "highlights",
+    "plan of action",
+    "action items",
+    "next steps",
+    "follow ups",
+    "follow-up actions",
+    "follow up actions",
+    "notes",
+  ];
+
+  const anchorIndex = filteredLines.findIndex((line) => sectionAnchors.some((anchor) => normalizeLabelValue(line).startsWith(anchor)));
+  const extracted = anchorIndex >= 0 ? filteredLines.slice(anchorIndex).join("\n") : filteredLines.join("\n");
+
+  return extracted
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseAnnualSummary(input: string): AnnualSummary | null {
+  try {
+    const start = input.indexOf("{");
+    const end = input.lastIndexOf("}");
+    if (start < 0 || end < 0 || end <= start) return null;
+    const parsed = JSON.parse(input.slice(start, end + 1)) as Partial<AnnualSummary>;
+    return {
+      summary: String(parsed.summary ?? "").trim(),
+      achievements: Array.isArray(parsed.achievements) ? parsed.achievements.map(String).filter(Boolean) : [],
+      recognition: Array.isArray(parsed.recognition) ? parsed.recognition.map(String).filter(Boolean) : [],
+      feedback: Array.isArray(parsed.feedback) ? parsed.feedback.map(String).filter(Boolean) : [],
+      improvements: Array.isArray(parsed.improvements) ? parsed.improvements.map(String).filter(Boolean) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+const PACIFIC_TIME_ZONE = "America/Los_Angeles";
+
+function parseCalendarDate(value?: string | Date | null) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+
+  const rawValue = String(value).trim();
+  const calendarMatch = rawValue.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (calendarMatch) {
+    const [, year, month, day] = calendarMatch;
+    const parsed = new Date(Number(year), Number(month) - 1, Number(day), 12);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(rawValue);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDate(value?: string | Date | null) {
   if (!value) return "—";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  const rawValue = value instanceof Date ? value.toISOString() : value;
+  const d = parseCalendarDate(value);
+  return d
+    ? d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: PACIFIC_TIME_ZONE })
+    : String(rawValue);
 }
 
 function isManagementEmployeeValue(value: string | null | undefined) {
@@ -242,10 +580,10 @@ function isOtherEmployeeValue(value: string | null | undefined) {
 
 function formatMeetingTitleDate(value?: string | null) {
   if (!value) return "";
-  const d = new Date(value);
-  return Number.isNaN(d.getTime())
-    ? String(value)
-    : d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  const d = parseCalendarDate(value);
+  return d
+    ? d.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: PACIFIC_TIME_ZONE })
+    : String(value);
 }
 
 function defaultMeetingTitle(mode: NotebookMode, meetingDate?: string | null) {
@@ -253,7 +591,13 @@ function defaultMeetingTitle(mode: NotebookMode, meetingDate?: string | null) {
     const formattedDate = formatMeetingTitleDate(meetingDate);
     return formattedDate ? `Team Meeting - ${formattedDate}` : "Team Meeting";
   }
-  return "1:1 Meeting Summary";
+
+  if (meetingDate) {
+    const formattedDate = formatMeetingTitleDate(meetingDate);
+    return formattedDate ? `One on One Notes - ${formattedDate}` : `One on One Notes - ${meetingDate}`;
+  }
+
+  return "One on One Notes";
 }
 
 function deriveNotebookGroup(note: OneOnOneNote): NotebookMode {
@@ -317,6 +661,180 @@ function splitSectionPath(label: string) {
     .filter(Boolean);
 }
 
+function normalizeLabelValue(value: string) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+}
+
+function splitGmailLabelPath(value: string) {
+  return String(value ?? "")
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function looksLikeOneOnOneLabel(value: string) {
+  const normalized = normalizeLabelValue(value);
+  return normalized.includes("1:1") || normalized.includes("one on one") || normalized.includes("one-on-one") || normalized.includes("bi weekly one on one");
+}
+
+function cleanOneOnOneFolderName(value: string) {
+  return String(value ?? "")
+    .replace(/\bbi[-\s]*weekly\s+one\s+on\s+one\b/gi, "")
+    .replace(/\bone\s+on\s+one\b/gi, "")
+    .replace(/\b1\s*:\s*1\b/gi, "")
+    .replace(/\bmeeting\b/gi, "")
+    .replace(/\bnotes?\b/gi, "")
+    .replace(/\s*[-–—|:]\s*$/g, "")
+    .replace(/^\s*[-–—|:]\s*/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function resolveApprovedTeamMemberName(parts: string[]) {
+  const candidates = parts
+    .flatMap((part) => {
+      const raw = String(part ?? "").trim();
+      const cleaned = cleanOneOnOneFolderName(raw);
+      return [raw, cleaned].filter(Boolean);
+    })
+    .map(normalizeLabelValue);
+
+  for (const approvedName of APPROVED_TEAM_MEMBER_NAMES) {
+    const normalizedApproved = normalizeLabelValue(approvedName);
+    if (candidates.some((candidate) => candidate === normalizedApproved || candidate.includes(normalizedApproved) || normalizedApproved.includes(candidate))) {
+      return approvedName;
+    }
+  }
+  return null;
+}
+
+function resolveApprovedNotebookName(parts: string[]) {
+  const candidates = parts
+    .flatMap((part) => {
+      const raw = String(part ?? "").trim();
+      const cleaned = raw
+        .replace(/\bmeeting\s*notes?\b/gi, "meeting")
+        .replace(/\bnotes?\b/gi, "")
+        .replace(/\bup\s*call\b/gi, "")
+        .replace(/\band\b/gi, "&")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+      return [raw, cleaned].filter(Boolean);
+    })
+    .map(normalizeLabelValue);
+
+  const hasWords = (candidate: string, words: string[]) => words.every((word) => candidate.includes(word));
+
+  for (const candidate of candidates) {
+    if (hasWords(candidate, ["c3", "noc", "monthly", "sync"])) {
+      return "C3 & NOC Monthly Sync";
+    }
+    if (hasWords(candidate, ["noc", "mom", "monthly", "sync"])) {
+      return "NOC & MOM Monthly Sync";
+    }
+    if (hasWords(candidate, ["monthly", "review", "noc"])) {
+      return "Monthly Review - NOC";
+    }
+    if (hasWords(candidate, ["team", "meeting"])) {
+      return "Team Meetings";
+    }
+    if (hasWords(candidate, ["noc", "management", "meeting"])) {
+      return "NOC Management Meetings";
+    }
+  }
+
+  for (const approvedName of APPROVED_MY_NOTEBOOK_NAMES) {
+    const normalizedApproved = normalizeLabelValue(approvedName);
+    if (candidates.some((candidate) => candidate === normalizedApproved || candidate.includes(normalizedApproved) || normalizedApproved.includes(candidate))) {
+      return approvedName;
+    }
+  }
+  return null;
+}
+
+function parseFolderNameFromGmailLabel(labelName: string): GmailFolderMapping | null {
+  const path = splitGmailLabelPath(labelName);
+  if (path.length === 0) return null;
+
+  const geminiIndex = path.findIndex((part) => normalizeLabelValue(part) === normalizeLabelValue(GMAIL_GEMINI_ROOT));
+  const relevantPath = geminiIndex >= 0 ? path.slice(geminiIndex + 1) : path;
+  if (relevantPath.length === 0) return null;
+
+  const [first, ...rest] = relevantPath;
+  const normalizedFirst = normalizeLabelValue(first);
+
+  const approvedNotebookName = resolveApprovedNotebookName(relevantPath);
+   if (approvedNotebookName) {
+    const titleHint = relevantPath[relevantPath.length - 1]?.trim() ?? approvedNotebookName;
+    return {
+      notebookGroup: "other" as const,
+      sectionName: approvedNotebookName,
+      employeeName: `${OTHER_PREFIX}${approvedNotebookName}`,
+      titleHint,
+    } satisfies GmailFolderMapping;
+  }
+
+  const teamMemberParts = normalizedFirst === normalizeLabelValue(GMAIL_TEAM_ONE_ON_ONE_ROOT)
+    ? rest
+    : relevantPath;
+  const approvedMemberName = resolveApprovedTeamMemberName(teamMemberParts);
+  if (approvedMemberName) {
+    return {
+      notebookGroup: "individual" as const,
+      sectionName: approvedMemberName,
+      employeeName: approvedMemberName,
+      titleHint: teamMemberParts[teamMemberParts.length - 1] ?? first,
+    } satisfies GmailFolderMapping;
+  }
+
+  const leafLabel = relevantPath.length > 0 ? relevantPath[relevantPath.length - 1]?.trim() ?? "" : "";
+  if (!leafLabel) return null;
+
+  return {
+    notebookGroup: "other" as const,
+    sectionName: leafLabel,
+    employeeName: `${OTHER_PREFIX}${leafLabel}`,
+    titleHint: leafLabel,
+  } satisfies GmailFolderMapping;
+}
+
+function isBlockedGeminiFolderName(value: string) {
+  const normalized = normalizeLabelValue(value);
+  return BLOCKED_GEMINI_FOLDER_PREFIXES.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix} /`) || normalized.startsWith(`${prefix}/`));
+}
+
+function folderNameFromGmailLabel(labelName: string): GmailFolderMapping | null {
+  const mapping = parseFolderNameFromGmailLabel(labelName);
+  if (!mapping) return null;
+  const labelToCheck = normalizeLabelValue(mapping.titleHint || mapping.sectionName);
+  if (isBlockedGeminiFolderName(labelToCheck) || isBlockedGeminiFolderName(mapping.sectionName)) return null;
+  if (mapping.notebookGroup === "individual") {
+    return ALLOWED_TEAM_MEMBER_GEMINI_LABELS.has(normalizeLabelValue(mapping.sectionName)) ? mapping : null;
+  }
+  if (mapping.notebookGroup === "other") {
+    return ALLOWED_MY_NOTEBOOK_GEMINI_LABELS.has(normalizeLabelValue(mapping.sectionName)) ? mapping : null;
+  }
+  return null;
+}
+
+function findTeamMemberFromLabels(labelNames: string[]) {
+  const folderHit = labelNames
+    .map(folderNameFromGmailLabel)
+    .find((mapping) => mapping?.notebookGroup === "individual");
+  return folderHit?.sectionName ?? undefined;
+}
+
+function deriveSelfNotebookBucket(labelNames: string[], _subject: string) {
+  const mappedFolder = labelNames
+    .map(folderNameFromGmailLabel)
+    .find((mapping) => mapping?.notebookGroup === "other");
+  return mappedFolder?.sectionName ?? null;
+}
+
 function noteSortValue(note: NormalizedNote) {
   return new Date(note.updated_at ?? note.meeting_date ?? note.created_at ?? 0).getTime();
 }
@@ -324,6 +842,24 @@ function noteSortValue(note: NormalizedNote) {
 function sortNotes(a: NormalizedNote, b: NormalizedNote) {
   if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
   return noteSortValue(b) - noteSortValue(a);
+}
+
+function dedupeById<T extends { id: number }>(rows: T[]) {
+  return Array.from(new Map(rows.map((row) => [row.id, row])).values());
+}
+
+function getNoteDisplayTitle(note: Pick<NormalizedNote, "notebook_group" | "source_type" | "meeting_date" | "title">) {
+  if (note.notebook_group === "individual" && note.source_type === "gmail_gemini") {
+    return defaultMeetingTitle("individual", note.meeting_date);
+  }
+  return note.title;
+}
+
+function getPersistedNoteTitle(note: Pick<OneOnOneNote, "notebook_group" | "source_type" | "meeting_date" | "title">) {
+  if (note.notebook_group === "individual" && note.source_type === "gmail_gemini") {
+    return defaultMeetingTitle("individual", note.meeting_date);
+  }
+  return String(note.title ?? "").trim();
 }
 
 function MarkdownBlock({ text }: { text: string }) {
@@ -335,6 +871,21 @@ function DetailCard({ note, managerView }: { note: NormalizedNote; managerView: 
   const managerItems = safeJsonArray(note.manager_action_items_json);
   const employeeItems = safeJsonArray(note.employee_action_items_json);
   const management = note.notebook_group === "management";
+  const plainNotebookPage = note.notebook_group === "other";
+
+  if (plainNotebookPage) {
+    const showTitle = note.title.trim() && note.title.trim().toLowerCase() !== "quick note";
+
+    return (
+      <Card withBorder radius="lg" p="xl">
+        <Stack gap="sm">
+          {showTitle && <Text fw={700} size="xl">{note.title}</Text>}
+          {managerView && <Text size="sm" c="dimmed">{note.section_name}</Text>}
+          <MarkdownBlock text={note.summary_markdown || note.source_body || ""} />
+        </Stack>
+      </Card>
+    );
+  }
 
   return (
     <Card withBorder radius="lg" p="lg">
@@ -342,7 +893,7 @@ function DetailCard({ note, managerView }: { note: NormalizedNote; managerView: 
         <Group justify="space-between" align="flex-start">
           <Stack gap={4}>
             <Group gap="xs">
-              <Text fw={700} size="lg">{note.title}</Text>
+              <Text fw={700} size="lg">{getNoteDisplayTitle(note)}</Text>
               <Badge variant="light" color={management ? "blue" : "grape"}>{management ? "Management" : "1:1"}</Badge>
               {note.is_archived && <Badge variant="light" color="gray">Archived</Badge>}
             </Group>
@@ -568,7 +1119,7 @@ const TaskRow = memo(function TaskRow({
 export function MeetingNotesWidget() {
   const { identity } = useIdentity();
   const isManager = identity?.role === "manager";
-  const [selectedAgentId, setSelectedAgentId] = useState<string>(getDefaultAgentId());
+  const [selectedAgentId] = useState<string>(getDefaultAgentId());
   const { complete, result: aiResult, isLoading: aiLoading, error: aiError } = useCompletion({ model: selectedAgentId });
   const { complete: completePattern } = useCompletion({ model: selectedAgentId });
   const { complete: completeWeekly } = useCompletion({ model: selectedAgentId });
@@ -587,12 +1138,19 @@ export function MeetingNotesWidget() {
   const [extractDebug, setExtractDebug] = useState<string | null>(null);
   const [gmailLoading, setGmailLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gmailSyncStats, setGmailSyncStats] = useState<GmailSyncStats | null>(null);
 
   const [rawNotes, setRawNotes] = useState<OneOnOneNote[]>([]);
   const [preferences, setPreferences] = useState<NotebookSectionPreference[]>([]);
   const [tasks, setTasks] = useState<PersonalActionItem[]>([]);
   const [gmailMessages, setGmailMessages] = useState<GmailNoteMessage[]>([]);
-  const [gmailStartDate, setGmailStartDate] = useState(new Date().toISOString().slice(0, 10));
+  const [gmailAvailableLabels, setGmailAvailableLabels] = useState<string[]>([]);
+  const [gmailStartDate, setGmailStartDate] = useState(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const currentYear = new Date().getFullYear();
+    const backfillDone = typeof window !== "undefined" ? window.localStorage.getItem(`meeting-notes-gmail-backfill-done:${currentYear}`) : null;
+    return backfillDone ? today : `${currentYear}-02-01`;
+  });
   const [gmailEndDate, setGmailEndDate] = useState(new Date().toISOString().slice(0, 10));
 
   const [search, setSearch] = useState("");
@@ -603,7 +1161,7 @@ export function MeetingNotesWidget() {
   const [renameAreaValue, setRenameAreaValue] = useState<string>("");
   const [activeSectionKey, setActiveSectionKey] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<number | null>(null);
-  const [workspaceView, setWorkspaceView] = useState<NotebookMode>("individual");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("team_members");
   const setAccordionValues = (_updater: (prev: string[]) => string[]) => {};
   const [managerView, setManagerView] = useState<"notebook" | "actions">("notebook");
   const [allNotesModalOpen, setAllNotesModalOpen] = useState(false);
@@ -636,6 +1194,10 @@ export function MeetingNotesWidget() {
   const [duplicateReviewLoading, setDuplicateReviewLoading] = useState(false);
   const [duplicateReview, setDuplicateReview] = useState<DuplicateTaskReview | null>(null);
   const [duplicateReviewOpen, setDuplicateReviewOpen] = useState(false);
+  const [annualSummaryCache, setAnnualSummaryCache] = useState<Record<string, AnnualSummary>>({});
+  const [annualSummaryLoading, setAnnualSummaryLoading] = useState(false);
+  const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
+  const [lastAutoSyncStamp, setLastAutoSyncStamp] = useState<string | null>(null);
 
   const [openComposer, setOpenComposer] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState<number | null>(null);
@@ -680,6 +1242,7 @@ export function MeetingNotesWidget() {
   const [employeeActionItems, setEmployeeActionItems] = useState("");
   const composerBodyRef = useRef<HTMLTextAreaElement | null>(null);
   const gmailRequestInFlightRef = useRef(false);
+  const lastGmailLoadRef = useRef<{ key: string; at: number; messages: GmailNoteMessage[] } | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
 
   const [taskTitle, setTaskTitle] = useState("");
@@ -713,26 +1276,58 @@ export function MeetingNotesWidget() {
     if (!usingWarmCache) setLoading(true);
     setError(null);
     try {
-      const notePromise = db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } });
-      const taskPromise = db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } });
       const prefPromise = db.notebook_section_preferences.list({ filter: { owner_name: identity.name } }).catch(() => [] as NotebookSectionPreference[]);
 
+      const notePromise = isManager
+        ? db.one_on_one_notes.list({ orderBy: { column: "created_at", ascending: false } })
+        : Promise.all([
+            db.one_on_one_notes.list({ filter: { manager_name: identity.name }, orderBy: { column: "created_at", ascending: false } }).catch(() => [] as OneOnOneNote[]),
+            db.one_on_one_notes.list({ filter: { employee_name: identity.name }, orderBy: { column: "created_at", ascending: false } }).catch(() => [] as OneOnOneNote[]),
+          ]).then(([ownedRows, receivedRows]) => dedupeById([...ownedRows, ...receivedRows]));
+
+      const taskPromise = isManager
+        ? db.personal_action_items.list({ orderBy: { column: "created_at", ascending: false } })
+        : Promise.all([
+            db.personal_action_items.list({ filter: { owner_name: identity.name }, orderBy: { column: "created_at", ascending: false } }).catch(() => [] as PersonalActionItem[]),
+            db.personal_action_items.list({ filter: { employee_name: identity.name }, orderBy: { column: "created_at", ascending: false } }).catch(() => [] as PersonalActionItem[]),
+            db.personal_action_items.list({ filter: { created_by: identity.name }, orderBy: { column: "created_at", ascending: false } }).catch(() => [] as PersonalActionItem[]),
+          ]).then(([ownerRows, employeeRows, createdRows]) => dedupeById([...ownerRows, ...employeeRows, ...createdRows]));
+
       const [noteRows, prefRows] = await Promise.all([notePromise, prefPromise]);
-      setRawNotes(noteRows);
+      const migratedNoteRows = noteRows.map((note) => {
+        const migratedTitle = getPersistedNoteTitle(note);
+        return migratedTitle && migratedTitle !== note.title
+          ? { ...note, title: migratedTitle }
+          : note;
+      });
+      const notesNeedingMigration = noteRows.filter((note) => {
+        const migratedTitle = getPersistedNoteTitle(note);
+        return migratedTitle && migratedTitle !== note.title;
+      });
+
+      setRawNotes(migratedNoteRows);
       setPreferences(prefRows);
       meetingNotesCache = {
         ownerName: identity.name,
-        notes: noteRows,
+        notes: migratedNoteRows,
         preferences: prefRows,
         tasks: meetingNotesCache.ownerName === identity.name ? meetingNotesCache.tasks : [],
       };
       setLoading(false);
 
+      if (notesNeedingMigration.length > 0) {
+        void Promise.allSettled(
+          notesNeedingMigration.map((note) => db.one_on_one_notes.updateById(note.id, {
+            title: getPersistedNoteTitle(note),
+          })),
+        );
+      }
+
       const taskRows = await taskPromise;
       setTasks(taskRows);
       meetingNotesCache = {
         ownerName: identity.name,
-        notes: noteRows,
+        notes: migratedNoteRows,
         preferences: prefRows,
         tasks: taskRows,
       };
@@ -745,6 +1340,12 @@ export function MeetingNotesWidget() {
   useEffect(() => {
     void load();
   }, [identity?.name, isManager]);
+
+  useEffect(() => {
+    // Gmail sync is manual-only to avoid burning through Gmail API quota
+    // on widget mount, tab switches, or incidental re-renders.
+    return;
+  }, [identity?.name, isManager, loading, lastAutoSyncStamp, rawNotes.length]);
 
   // Persist filter selections to localStorage
   useEffect(() => { localStorage.setItem("ac_filter_status", taskStatusFilter); }, [taskStatusFilter]);
@@ -881,9 +1482,6 @@ export function MeetingNotesWidget() {
       }
     };
 
-    PERSON_TEAM_NAMES.forEach((name) => ensureSection("individual", name));
-    DEFAULT_MANAGEMENT_SECTIONS.forEach((name) => ensureSection("management", name));
-    ensureSection("other", DEFAULT_OTHER_SECTION);
     preferences
       .filter((pref) => pref.owner_name === identity?.name && !pref.section_key.startsWith("hidden:") && !pref.section_key.startsWith("area:"))
       .forEach((pref) => {
@@ -919,7 +1517,9 @@ export function MeetingNotesWidget() {
   );
   useEffect(() => {
     const firstKey = isManager
-      ? (favoriteSections[0]?.key ?? individualSections[0]?.key ?? managementSections[0]?.key ?? null)
+      ? (workspaceView === "team_members"
+          ? (individualSections[0]?.key ?? favoriteSections[0]?.key ?? managementSections[0]?.key ?? otherSections[0]?.key ?? null)
+          : (otherSections[0]?.key ?? managementSections[0]?.key ?? favoriteSections[0]?.key ?? individualSections[0]?.key ?? null))
       : (sectionRecords.find((s) => s.notebook_group === "other")?.key ?? null);
     if (!activeSectionKey) {
       setActiveSectionKey(firstKey);
@@ -927,9 +1527,50 @@ export function MeetingNotesWidget() {
     }
     const valid = sectionRecords.some((section) => section.key === activeSectionKey);
     if (!valid) setActiveSectionKey(firstKey);
-  }, [isManager, activeSectionKey, favoriteSections, individualSections, managementSections, sectionRecords]);
+  }, [isManager, workspaceView, activeSectionKey, favoriteSections, individualSections, managementSections, otherSections, sectionRecords]);
 
   const activeSection = useMemo(() => sectionRecords.find((section) => section.key === activeSectionKey) ?? null, [sectionRecords, activeSectionKey]);
+  const gmailMessagesByMemberLabel = useMemo(() => {
+    const groups = new Map<string, { label: string; sectionName: string; messages: GmailNoteMessage[] }>();
+
+    for (const rawLabel of gmailAvailableLabels) {
+      const mapping = folderNameFromGmailLabel(rawLabel);
+      if (!mapping || mapping.notebookGroup !== "individual") continue;
+      groups.set(mapping.sectionName, {
+        label: rawLabel,
+        sectionName: mapping.sectionName,
+        messages: [],
+      });
+    }
+
+    for (const message of gmailMessages) {
+      const matchedLabel = (message.labelNames ?? [])
+        .map((label) => ({ rawLabel: label, mapping: folderNameFromGmailLabel(label) }))
+        .find((entry) => entry.mapping?.notebookGroup === "individual");
+
+      if (!matchedLabel?.mapping) continue;
+      const key = matchedLabel.mapping.sectionName;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          label: matchedLabel.rawLabel,
+          sectionName: matchedLabel.mapping.sectionName,
+          messages: [],
+        });
+      }
+      groups.get(key)?.messages.push(message);
+    }
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        messages: [...group.messages].sort((a, b) => {
+          const aTime = a.internalDate ? new Date(a.internalDate).getTime() : 0;
+          const bTime = b.internalDate ? new Date(b.internalDate).getTime() : 0;
+          return bTime - aTime;
+        }),
+      }))
+      .sort((a, b) => a.sectionName.localeCompare(b.sectionName));
+  }, [gmailAvailableLabels, gmailMessages]);
   const managedSection = useMemo(() => sectionRecords.find((section) => section.key === manageSectionKey) ?? null, [sectionRecords, manageSectionKey]);
   const renamingSection = useMemo(() => sectionRecords.find((section) => section.key === renameSectionKey) ?? null, [sectionRecords, renameSectionKey]);
   const movingSection = useMemo(() => sectionRecords.find((section) => section.key === moveSectionKey) ?? null, [sectionRecords, moveSectionKey]);
@@ -950,6 +1591,83 @@ export function MeetingNotesWidget() {
   const selectedNote = useMemo(() => pageList.find((note) => note.id === selectedPageId) ?? null, [pageList, selectedPageId]);
 
   const visiblePageList = useMemo(() => [...pageList].sort(sortNotes).slice(0, 250), [pageList]);
+  const activeTeamMember = useMemo(() => {
+    if (workspaceView !== "team_members") return null;
+    if (!activeSection || activeSection.notebook_group !== "individual") return null;
+    return activeSection.label;
+  }, [workspaceView, activeSection]);
+  const memberNotes = useMemo(() => activeTeamMember
+    ? managerOwnedNotes.filter((note) => note.notebook_group === "individual" && note.section_name === activeTeamMember).sort(sortNotes)
+    : [], [activeTeamMember, managerOwnedNotes]);
+  const memberTasks = useMemo(() => activeTeamMember
+    ? tasks.filter((task) => samePerson(storedOwner(task), activeTeamMember) || samePerson(task.section_name ?? "", activeTeamMember)).sort((a, b) => new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime())
+    : [], [activeTeamMember, tasks]);
+  const yearOptions = useMemo(() => {
+    const years = new Set<number>();
+    memberNotes.forEach((note) => {
+      const raw = note.meeting_date ?? note.created_at;
+      const d = new Date(raw ?? 0);
+      if (!Number.isNaN(d.getTime())) years.add(d.getFullYear());
+    });
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return Array.from(years).sort((a, b) => b - a).map((year) => ({ value: String(year), label: String(year) }));
+  }, [memberNotes]);
+  const memberNotesForYear = useMemo(() => memberNotes.filter((note) => {
+    const raw = note.meeting_date ?? note.created_at;
+    const d = new Date(raw ?? 0);
+    return !Number.isNaN(d.getTime()) && String(d.getFullYear()) === selectedYear;
+  }), [memberNotes, selectedYear]);
+  const annualSummaryKey = activeTeamMember ? `${activeTeamMember}:${selectedYear}` : null;
+  const annualSummary = annualSummaryKey ? annualSummaryCache[annualSummaryKey] ?? null : null;
+
+  useEffect(() => {
+    if (!yearOptions.some((option) => option.value === selectedYear)) {
+      setSelectedYear(yearOptions[0]?.value ?? String(new Date().getFullYear()));
+    }
+  }, [yearOptions, selectedYear]);
+
+  useEffect(() => {
+    if (!activeTeamMember || memberNotesForYear.length === 0 || !annualSummaryKey || annualSummaryCache[annualSummaryKey]) return;
+
+    let cancelled = false;
+    (async () => {
+      setAnnualSummaryLoading(true);
+      try {
+        const compiledNotes = memberNotesForYear.map((note) => {
+          const discussion = safeJsonArray(note.discussion_points_json).join("; ");
+          const managerItems = safeJsonArray(note.manager_action_items_json).join("; ");
+          const employeeItems = safeJsonArray(note.employee_action_items_json).join("; ");
+          return `[${note.meeting_date ?? formatDate(note.created_at)}] ${note.title}\nSummary: ${note.summary_markdown}\nDiscussion: ${discussion}\nManager actions: ${managerItems}\nEmployee actions: ${employeeItems}`;
+        }).join("\n\n");
+
+        const prompt = `You are preparing an annual performance summary for ${activeTeamMember} based on 1:1 summaries.
+Return ONLY valid JSON in this exact shape:
+{"summary":"...","achievements":["..."],"recognition":["..."],"feedback":["..."],"improvements":["..."]}
+
+Rules:
+- achievements: concrete wins, successful outcomes, impact, ownership.
+- recognition: appreciations, praise, positive feedback, standout contributions.
+- feedback: coaching themes, concerns, or performance feedback mentioned in notes.
+- improvements: growth opportunities, recurring blockers, skills/processes to improve.
+- Be concise and evidence-based. Do not invent facts.
+
+Notes for ${selectedYear}:
+${compiledNotes}`;
+        const raw = await complete(prompt);
+        const parsed = parseAnnualSummary(raw);
+        if (!cancelled && parsed) {
+          setAnnualSummaryCache((prev) => ({ ...prev, [annualSummaryKey]: parsed }));
+        }
+      } finally {
+        if (!cancelled) setAnnualSummaryLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTeamMember, memberNotesForYear, annualSummaryKey, annualSummaryCache, complete, selectedYear]);
+
   const moveDialogNote = useMemo(() => managerOwnedNotes.find((note) => note.id === moveDialogNoteId) ?? null, [managerOwnedNotes, moveDialogNoteId]);
   const allSectionOptions = useMemo(() => sectionRecords.map((section) => ({ value: section.key, label: `${section.notebook_group === "management" ? "Management" : section.notebook_group === "other" ? "Others" : "Individual"} · ${section.label}` })), [sectionRecords]);
   const moveSectionParentOptions = useMemo(() => {
@@ -992,6 +1710,11 @@ export function MeetingNotesWidget() {
     samePerson(task.employee_name ?? "", identity?.name ?? ""),
   ), [tasks, identity?.name]);
 
+  const notebookOpenActionCount = useMemo(() => {
+    const managerOwnedNoteIds = new Set(managerOwnedNotes.map((note) => note.id));
+    return tasks.filter((task) => task.status !== "done" && task.note_id != null && managerOwnedNoteIds.has(task.note_id)).length;
+  }, [managerOwnedNotes, tasks]);
+
   // Use the explicitly stored owner field for the My/Team split.
   // resolveTaskOwner() uses the title prefix heuristic which is a legacy
   // extraction artefact — it doesn't reflect what the user explicitly set
@@ -1031,15 +1754,16 @@ export function MeetingNotesWidget() {
 
 
 
-  function resetComposer(mode: NotebookMode = "individual") {
+  function resetComposer(mode: NotebookMode = isManager ? "individual" : "other") {
+    const effectiveMode = isManager ? mode : "other";
     setEditingNoteId(null);
     setParentNoteId(null);
-    setNotebookMode(mode);
-    setSelectedEmployee(mode === "individual" ? PERSON_TEAM_NAMES[0] ?? null : null);
+    setNotebookMode(effectiveMode);
+    setSelectedEmployee(effectiveMode === "individual" ? PERSON_TEAM_NAMES[0] ?? null : null);
     setManagementSection(DEFAULT_MANAGEMENT_SECTIONS[0]);
     setMeetingDate("");
     setSourceType("manual");
-    setTitle(defaultMeetingTitle(mode));
+    setTitle(isManager ? defaultMeetingTitle(effectiveMode) : "Quick note");
     setSourceNotes("");
     setImportedMessageId(null);
     setImportedMessageSubject(null);
@@ -1071,54 +1795,189 @@ export function MeetingNotesWidget() {
     setEmployeeActionItems(safeJsonArray(note.employee_action_items_json).join("\n"));
   }
 
-  function applyImportedMessage(message: GmailNoteMessage) {
-    setOpenComposer(true);
-    setNotebookMode("individual");
-    setSourceType("gmail_gemini");
-    setSourceNotes(message.body || message.snippet || "");
-    setImportedMessageId(message.id);
-    setImportedMessageSubject(message.subject);
-    setTitle(message.subject?.trim() || defaultMeetingTitle("individual", message.internalDate?.slice(0, 10) ?? ""));
-    if (message.internalDate) setMeetingDate(message.internalDate.slice(0, 10));
+  async function syncSectionsFromGmailLabels(labels: GmailLabelRecord[], messages: GmailNoteMessage[] = []) {
+    if (!identity?.name) return 0;
 
-    window.setTimeout(() => {
-      composerBodyRef.current?.focus();
-      composerBodyRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    }, 50);
+    const mappedSections: GmailFolderMapping[] = [];
+    const legacyMappedSections: GmailFolderMapping[] = [];
+    const discoveredLabelNames = [
+      ...labels.map((label) => label.name),
+      ...messages.flatMap((message) => Array.isArray(message.labelNames) ? message.labelNames : []),
+    ];
+
+    for (const labelName of discoveredLabelNames) {
+      const allowedMapping = folderNameFromGmailLabel(labelName);
+      if (allowedMapping?.sectionName) mappedSections.push(allowedMapping);
+
+      const legacyMapping = parseFolderNameFromGmailLabel(labelName);
+      if (legacyMapping?.sectionName) legacyMappedSections.push(legacyMapping);
+    }
+
+    const desiredSections = Array.from(new Map(
+      mappedSections.map((mapping) => [`${mapping.notebookGroup}:${mapping.sectionName}`, mapping]),
+    ).values());
+
+    const desiredKeys = new Set(desiredSections.map((mapping) => `${mapping.notebookGroup}:${mapping.sectionName}`));
+    const legacyKeys = new Set(legacyMappedSections.map((mapping) => `${mapping.notebookGroup}:${mapping.sectionName}`));
+
+    const hiddenPrefs = preferences.filter(
+      (pref) => pref.owner_name === identity.name && pref.section_key.startsWith("hidden:"),
+    );
+    const hiddenKeys = new Set(hiddenPrefs.map((pref) => pref.section_key.slice("hidden:".length)));
+
+    const staleKeys = Array.from(legacyKeys).filter((sectionKey) => !desiredKeys.has(sectionKey));
+    const blockedSectionKeys = preferences
+      .filter((pref) => {
+        if (pref.owner_name !== identity.name) return false;
+        if (pref.section_key.startsWith("hidden:") || pref.section_key.startsWith("area:")) return false;
+        return isBlockedGeminiFolderName(pref.section_label) || isBlockedGeminiFolderName(pref.section_key.replace(/^[^:]+:/, ""));
+      })
+      .map((pref) => pref.section_key);
+    const nonApprovedNotebookKeys = preferences
+      .filter((pref) => {
+        if (pref.owner_name !== identity.name) return false;
+        if (pref.section_key.startsWith("hidden:") || pref.section_key.startsWith("area:")) return false;
+        if (pref.notebook_group !== "other") return false;
+        const sectionName = pref.section_key.replace(/^[^:]+:/, "");
+        return !ALLOWED_MY_NOTEBOOK_GEMINI_LABELS.has(normalizeLabelValue(sectionName));
+      })
+      .map((pref) => pref.section_key);
+    const nonApprovedTeamMemberKeys = preferences
+      .filter((pref) => {
+        if (pref.owner_name !== identity.name) return false;
+        if (pref.section_key.startsWith("hidden:") || pref.section_key.startsWith("area:")) return false;
+        if (pref.notebook_group !== "individual") return false;
+        const sectionName = pref.section_key.replace(/^[^:]+:/, "");
+        return !ALLOWED_TEAM_MEMBER_GEMINI_LABELS.has(normalizeLabelValue(sectionName));
+      })
+      .map((pref) => pref.section_key);
+    const keysToRemove = Array.from(new Set([...staleKeys, ...blockedSectionKeys, ...nonApprovedNotebookKeys, ...nonApprovedTeamMemberKeys]));
+    const stalePrefs = preferences.filter(
+      (pref) => pref.owner_name === identity.name && keysToRemove.includes(pref.section_key),
+    );
+    const missingHiddenKeys = keysToRemove.filter((sectionKey) => !hiddenKeys.has(sectionKey));
+
+    if (stalePrefs.length > 0) {
+      await Promise.all(stalePrefs.map((pref) => db.notebook_section_preferences.deleteById(pref.id)));
+    }
+
+    if (missingHiddenKeys.length > 0) {
+      await Promise.all(missingHiddenKeys.map((sectionKey) => db.notebook_section_preferences.insert({
+        owner_name: identity.name,
+        notebook_group: "other",
+        section_key: `hidden:${sectionKey}`,
+        section_label: sectionKey,
+        is_favorite: false,
+      })));
+    }
+
+    const approvedHiddenPrefs = hiddenPrefs.filter((pref) => desiredKeys.has(pref.section_key.slice("hidden:".length)));
+    if (approvedHiddenPrefs.length > 0) {
+      await Promise.all(approvedHiddenPrefs.map((pref) => db.notebook_section_preferences.deleteById(pref.id)));
+    }
+
+    const missing = desiredSections.filter((mapping) => {
+      const sectionKey = `${mapping.notebookGroup}:${mapping.sectionName}`;
+      return !preferences.some((pref) => pref.owner_name === identity.name && pref.section_key === sectionKey);
+    });
+
+    if (missing.length > 0) {
+      await Promise.all(missing.map((mapping) => db.notebook_section_preferences.insert({
+        owner_name: identity.name,
+        notebook_group: mapping.notebookGroup,
+        section_key: `${mapping.notebookGroup}:${mapping.sectionName}`,
+        section_label: mapping.sectionName,
+        is_favorite: false,
+      })));
+    }
+
+    return stalePrefs.length + missingHiddenKeys.length + approvedHiddenPrefs.length + missing.length;
   }
 
-  async function loadGmailNotes(): Promise<GmailNoteMessage[]> {
+  async function loadGmailNotes(options?: { start?: string; end?: string; silent?: boolean }): Promise<GmailNoteMessage[]> {
     if (!isManager) return [] as GmailNoteMessage[];
-    if (!gmailStartDate || !gmailEndDate) {
-      setError("Choose both a start date and end date for the Gmail import range.");
+    const start = options?.start ?? gmailStartDate;
+    const end = options?.end ?? gmailEndDate;
+    const silent = Boolean(options?.silent);
+    if (!start || !end) {
+      if (!silent) setError("Choose both a start date and end date for the Gmail import range.");
       return [] as GmailNoteMessage[];
     }
-    if (gmailStartDate > gmailEndDate) {
-      setError("The Gmail start date must be on or before the end date.");
+    if (start > end) {
+      if (!silent) setError("The Gmail start date must be on or before the end date.");
       return [] as GmailNoteMessage[];
+    }
+
+    const requestKey = `${identity?.name ?? "manager"}:${start}:${end}`;
+    const recentLoad = lastGmailLoadRef.current;
+    if (gmailRequestInFlightRef.current) {
+      return recentLoad?.key === requestKey ? recentLoad.messages : gmailMessages;
+    }
+    if (recentLoad?.key === requestKey && Date.now() - recentLoad.at < 60_000) {
+      setGmailMessages(recentLoad.messages);
+      setGmailSyncStats((prev) => prev ? {
+        ...prev,
+        start,
+        end,
+        fetched: recentLoad.messages.length,
+        approvedFolderMatches: recentLoad.messages.filter((message) => classifyImportedMessage(message)).length,
+        pending: recentLoad.messages.filter((message) => !message.imported).length,
+        statusMessage: `Using recent Gmail results from the last minute for ${recentLoad.messages.length} emails.`,
+      } : prev);
+      return recentLoad.messages;
     }
 
     gmailRequestInFlightRef.current = true;
     setGmailLoading(true);
-    setError(null);
+    if (!silent) setError(null);
     try {
       const params = new URLSearchParams({
-        start: gmailStartDate,
-        end: gmailEndDate,
-        max: "500",
+        start,
+        end,
+        max: "100",
       });
       const response = await fetch(`/api/gmail/meeting-notes?${params.toString()}`);
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+      const labels = Array.isArray(payload.labels) ? (payload.labels as GmailLabelRecord[]) : [];
       const messages = Array.isArray(payload.messages) ? (payload.messages as GmailNoteMessage[]) : [];
+      const approvedLabels = Array.isArray(payload.approvedLabels) ? payload.approvedLabels.map(String).filter(Boolean) : [];
+      const approvedFolderMatches = messages.filter((message) => classifyImportedMessage(message)).length;
       setGmailMessages(messages);
-      if (messages.length > 0 && !sourceNotes.trim()) applyImportedMessage(messages[0]);
-      if (messages.length === 0) {
-        setError(`No Gemini notes were found in Gmail between ${gmailStartDate} and ${gmailEndDate}.`);
+      setGmailAvailableLabels(approvedLabels);
+      lastGmailLoadRef.current = {
+        key: requestKey,
+        at: Date.now(),
+        messages,
+      };
+      setGmailSyncStats((prev) => ({
+        start,
+        end,
+        fetched: messages.length,
+        approvedFolderMatches,
+        pending: messages.filter((message) => !message.imported).length,
+        extractedNotes: prev?.extractedNotes ?? 0,
+        aiStructured: prev?.aiStructured ?? 0,
+        fallbackStructured: prev?.fallbackStructured ?? 0,
+        createdPages: prev?.createdPages ?? 0,
+        skippedExisting: prev?.skippedExisting ?? 0,
+        skippedUnclassified: prev?.skippedUnclassified ?? 0,
+        skippedNoExtractedNotes: prev?.skippedNoExtractedNotes ?? 0,
+        skippedNoStructuredContent: prev?.skippedNoStructuredContent ?? 0,
+        statusMessage: messages.length === 0
+          ? `No Gmail notes were found between ${start} and ${end}.`
+          : `Loaded ${messages.length} Gmail notes across approved labels. Running automatic import next.`,
+      }));
+      const createdCount = await syncSectionsFromGmailLabels(labels, messages);
+      if (createdCount > 0) {
+        await load();
+      }
+      if (!silent && messages.length === 0) {
+        setError(`No Gemini notes were found in Gmail between ${start} and ${end}.`);
       }
       return messages;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (!silent) setError(err instanceof Error ? err.message : String(err));
       return [];
     } finally {
       gmailRequestInFlightRef.current = false;
@@ -1126,7 +1985,23 @@ export function MeetingNotesWidget() {
     }
   }
 
-  // Gmail notes are loaded manually by clicking "Load notes" — no auto-fetch on open.
+  async function runManualGmailSync() {
+    if (!identity?.name || !isManager) return;
+    const messages = await loadGmailNotes({ start: gmailStartDate, end: gmailEndDate, silent: false });
+    if (messages.length === 0) return;
+    const pending = messages.filter((message) => !message.imported);
+    if (pending.length === 0) {
+      setGmailSyncStats((prev) => prev ? {
+        ...prev,
+        pending: 0,
+        statusMessage: "All matching Gmail notes in this date range were already imported into their mapped folders.",
+      } : prev);
+      setError("Approved Gmail labels were loaded, but every email in this date range has already been synced.");
+      return;
+    }
+    await autoOrganizeLoadedNotes(pending);
+    setLastAutoSyncStamp(`${identity.name}:${gmailStartDate}:${gmailEndDate}`);
+  }
 
   async function generateFromNotes() {
     if (!sourceNotes.trim()) {
@@ -1163,32 +2038,58 @@ Keep each bullet concise and factual. Notes:\n\n${sourceNotes}`;
     setEmployeeActionItems(parsed.employeeActionItems.join("\n"));
   }
 
-  function classifyImportedMessage(message: GmailNoteMessage): { mode: NotebookMode; sectionName: string; title: string } {
+  function classifyImportedMessage(message: GmailNoteMessage): { mode: NotebookMode; sectionName: string; title: string; employeeName: string } | null {
     const subject = String(message.subject ?? "").trim();
-    const oneOnOneMatch = subject.match(/^Bi-Weekly One on One\s*-\s*(.+)$/i);
-    if (oneOnOneMatch) {
+    const labelNames = Array.isArray(message.labelNames) ? message.labelNames : [];
+    const mappedFolder = labelNames.map(folderNameFromGmailLabel).find(Boolean) ?? null;
+
+    if (mappedFolder?.notebookGroup === "individual") {
       return {
         mode: "individual",
-        sectionName: oneOnOneMatch[1].trim(),
-        title: subject || "1:1 Meeting Summary",
+        sectionName: mappedFolder.sectionName,
+        employeeName: mappedFolder.employeeName,
+        title: subject || `1:1 Meeting Summary - ${mappedFolder.sectionName}`,
       };
     }
-    if (/noc management/i.test(subject)) {
+
+    if (mappedFolder?.notebookGroup === "other") {
+      const cleanedSubject = subject || `${mappedFolder.sectionName} Notes`;
       return {
-        mode: "management",
-        sectionName: "NOC Management",
-        title: subject || "NOC Management Meeting",
+        mode: "other",
+        sectionName: mappedFolder.sectionName,
+        employeeName: mappedFolder.employeeName,
+        title: cleanedSubject,
       };
     }
+
+    const teamMember = findTeamMemberFromLabels(labelNames);
+    const oneOnOneMatch = subject.match(/^Bi-Weekly One on One\s*-\s*(.+)$/i);
+    const subjectMember = oneOnOneMatch?.[1]?.trim() || null;
+    const resolvedMember = teamMember || subjectMember || null;
+    const isOneOnOne = labelNames.some(looksLikeOneOnOneLabel) || Boolean(oneOnOneMatch) || Boolean(teamMember);
+
+    if (isOneOnOne && resolvedMember) {
+      return {
+        mode: "individual",
+        sectionName: resolvedMember,
+        employeeName: resolvedMember,
+        title: subject || `1:1 Meeting Summary - ${resolvedMember}`,
+      };
+    }
+
+    const bucket = deriveSelfNotebookBucket(labelNames, subject);
+    if (!bucket) return null;
+    const cleanedSubject = subject || `${bucket} Notes`;
     return {
       mode: "other",
-      sectionName: "Others",
-      title: subject || "Other Meeting Notes",
+      sectionName: bucket,
+      employeeName: `${OTHER_PREFIX}${bucket}`,
+      title: cleanedSubject,
     };
   }
 
   function buildAutoOrganizePrompt(message: GmailNoteMessage, mode: NotebookMode) {
-    const noteText = message.body || message.snippet || "";
+    const noteText = extractGeminiNoteText(message);
     const managerName = identity?.name ?? "the manager";
     const MANAGER_NAMES = ["Anirudh Kukudala", "Perry Cox", "Matt Marquez"];
 
@@ -1196,7 +2097,7 @@ Keep each bullet concise and factual. Notes:\n\n${sourceNotes}`;
       return `Turn these management meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Focus on leadership decisions, risks, owners, and follow-ups. Notes:\n\n${noteText}`;
     }
     if (mode === "other") {
-      return `Turn these general meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. Focus on the topic, decisions, owners, and follow-ups. Notes:\n\n${noteText}`;
+      return `Turn these meeting notes into JSON with this exact shape: {"title":"...","summary":"...","discussionPoints":["..."],"managerActionItems":["..."],"employeeActionItems":["..."]}. These notes belong in the manager's own notebook (team meetings, other managers, or customer meetings). Focus on the key summary, recognitions, owners, decisions, blockers, and follow-ups. Notes:\n\n${noteText}`;
     }
 
     // For individual 1:1 notes — extract the employee name from the message subject
@@ -1272,39 +2173,104 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
     const pendingMessages = (messagesToProcess ?? gmailMessages).filter((message) => !message.imported);
     if (pendingMessages.length === 0) {
       setError("There are no new Gmail notes to auto-organize in this date range.");
+      setGmailSyncStats((prev) => prev ? { ...prev, pending: 0, statusMessage: "No new Gmail notes needed importing." } : prev);
       return;
     }
 
+    const stats = {
+      extractedNotes: 0,
+      aiStructured: 0,
+      fallbackStructured: 0,
+      createdPages: 0,
+      skippedExisting: 0,
+      skippedUnclassified: 0,
+      skippedNoExtractedNotes: 0,
+      skippedNoStructuredContent: 0,
+    };
+
+    const importedIds = new Set<string>();
     setSaving(true);
     setError(null);
     try {
       for (const message of pendingMessages) {
+        const existingRows = await db.one_on_one_notes.list({ filter: { source_message_id: message.id } }).catch(() => [] as OneOnOneNote[]);
+        if (existingRows.length > 0) {
+          stats.skippedExisting += 1;
+          importedIds.add(message.id);
+          continue;
+        }
+
         const classification = classifyImportedMessage(message);
-        const raw = await complete(buildAutoOrganizePrompt(message, classification.mode));
-        const parsed = parseJsonSummary(raw);
-        if (!parsed) continue;
+        if (!classification) {
+          stats.skippedUnclassified += 1;
+          continue;
+        }
+
+        const extractedNoteText = extractGeminiNoteText(message);
+        const rawFallbackText = String(message.body || message.snippet || "").replace(/\r/g, "").trim();
+        const noteText = extractedNoteText || rawFallbackText;
+        if (!noteText) {
+          stats.skippedNoExtractedNotes += 1;
+          continue;
+        }
+        stats.extractedNotes += 1;
+
+        let parsed: StructuredSummary | null = null;
+        try {
+          const raw = await complete(buildAutoOrganizePrompt({ ...message, body: noteText }, classification.mode));
+          parsed = parseJsonSummary(raw);
+        } catch {
+          parsed = null;
+        }
+
+        const fallbackTitle = String(message.subject || classification.title || "Meeting summary");
+        const fallbackStructured = parseGeminiSectionsToStructuredSummary(noteText, fallbackTitle);
+        const rawTextStructured = buildRawTextStructuredSummary(noteText, fallbackTitle);
+        if (hasStructuredSummaryContent(parsed)) {
+          stats.aiStructured += 1;
+        } else if (fallbackStructured || rawTextStructured) {
+          stats.fallbackStructured += 1;
+        }
+        const finalParsed = hasStructuredSummaryContent(parsed)
+          ? parsed
+          : fallbackStructured ?? rawTextStructured;
+        if (!finalParsed) {
+          stats.skippedNoStructuredContent += 1;
+          continue;
+        }
+
+        const normalizedSummary = finalParsed.summary.trim();
+        const importedMeetingDate = message.internalDate ? message.internalDate.slice(0, 10) : null;
+        const normalizedTitle = classification.mode === "individual"
+          ? defaultMeetingTitle("individual", importedMeetingDate)
+          : finalParsed.title.trim()
+            || String(message.subject || classification.title || "Meeting summary").trim()
+            || "Meeting summary";
+        const managerItems = finalParsed.managerActionItems;
+        const employeeItems = finalParsed.employeeActionItems;
+        const discussionPoints = finalParsed.discussionPoints;
 
         const employeeValue = classification.mode === "management"
           ? `${MANAGEMENT_PREFIX}${classification.sectionName}`
           : classification.mode === "other"
             ? `${OTHER_PREFIX}${classification.sectionName}`
-            : classification.sectionName;
+            : classification.employeeName;
 
         const inserted = await db.one_on_one_notes.insert({
           manager_name: identity.name,
           employee_name: employeeValue,
-          title: parsed.title || classification.title,
+          title: normalizedTitle,
           meeting_date: message.internalDate ? message.internalDate.slice(0, 10) : null,
           source_type: "gmail_gemini",
           source_message_id: message.id,
           source_subject: message.subject,
           source_excerpt: (message.snippet || "").slice(0, 280) || null,
           source_body: message.body || null,
-          summary_markdown: parsed.summary || "",
-          discussion_points_json: JSON.stringify(parsed.discussionPoints ?? []),
-          manager_action_items_json: JSON.stringify(parsed.managerActionItems ?? []),
-          employee_action_items_json: JSON.stringify(parsed.employeeActionItems ?? []),
-          status: classification.mode === "individual" ? "draft" : "shared",
+          summary_markdown: normalizedSummary,
+          discussion_points_json: JSON.stringify(discussionPoints),
+          manager_action_items_json: JSON.stringify(managerItems),
+          employee_action_items_json: JSON.stringify(employeeItems),
+          status: "shared",
           notebook_group: classification.mode,
           section_name: classification.sectionName,
           parent_note_id: null,
@@ -1315,21 +2281,55 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
           shared_at: new Date().toISOString(),
         });
 
+        const sectionKey = `${classification.mode}:${classification.sectionName}`;
+        const existingPref = preferences.find((pref) => pref.owner_name === identity.name && pref.section_key === sectionKey);
+        if (!existingPref) {
+          await db.notebook_section_preferences.insert({
+            owner_name: identity.name,
+            notebook_group: classification.mode,
+            section_key: sectionKey,
+            section_label: classification.sectionName,
+            is_favorite: false,
+          });
+        }
+
         const created = inserted[0];
         if (created?.id) {
+          stats.createdPages += 1;
+          importedIds.add(message.id);
           await upsertSyncedNoteActionItems({
             noteId: created.id,
             noteTitle: created.title ?? classification.title,
             sectionName: classification.sectionName,
             notebookGroup: classification.mode,
-            managerItems: parsed.managerActionItems ?? [],
-            employeeItems: parsed.employeeActionItems ?? [],
+            managerItems,
+            employeeItems,
           });
         }
       }
 
       await load();
-      await loadGmailNotes();
+      setGmailMessages((prev) => prev.map((message) => (
+        importedIds.has(message.id)
+          ? { ...message, imported: true }
+          : message
+      )));
+      const remainingPending = gmailMessages.filter((message) => !message.imported && !importedIds.has(message.id)).length;
+      setGmailSyncStats((prev) => prev ? {
+        ...prev,
+        pending: remainingPending,
+        extractedNotes: stats.extractedNotes,
+        aiStructured: stats.aiStructured,
+        fallbackStructured: stats.fallbackStructured,
+        createdPages: stats.createdPages,
+        skippedExisting: stats.skippedExisting,
+        skippedUnclassified: stats.skippedUnclassified,
+        skippedNoExtractedNotes: stats.skippedNoExtractedNotes,
+        skippedNoStructuredContent: stats.skippedNoStructuredContent,
+        statusMessage: stats.createdPages > 0
+          ? `Imported ${stats.createdPages} Gmail note${stats.createdPages === 1 ? "" : "s"} into mapped folders automatically.`
+          : `No new pages were created. Existing: ${stats.skippedExisting}, unclassified: ${stats.skippedUnclassified}, parse skips: ${stats.skippedNoExtractedNotes + stats.skippedNoStructuredContent}.`,
+      } : null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1337,54 +2337,51 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
     }
   }
 
-  async function syncGmailNotesOneClick() {
-    const loaded = await loadGmailNotes();
-    if (!loaded.length) return;
-    await autoOrganizeLoadedNotes(loaded);
-  }
-
   async function saveNote(status: "draft" | "shared") {
     if (!identity?.name) return;
-    if (notebookMode === "individual" && !selectedEmployee) {
+    const effectiveNotebookMode: NotebookMode = isManager ? notebookMode : "other";
+    if (effectiveNotebookMode === "individual" && !selectedEmployee) {
       setError("Choose the employee section for this 1:1 note.");
       return;
     }
-    if (notebookMode === "management" && !managementSection.trim()) {
+    if (effectiveNotebookMode === "management" && !managementSection.trim()) {
       setError("Add a management section name.");
       return;
     }
-    if (!summaryMarkdown.trim()) {
-      setError("Add or generate the meeting summary first.");
+
+    const effectiveSummary = (summaryMarkdown.trim() || (!isManager ? sourceNotes.trim() : "")).trim();
+    if (!effectiveSummary) {
+      setError(isManager ? "Add or generate the meeting summary first." : "Add some note content before saving.");
       return;
     }
 
-    const sectionName = notebookMode === "individual"
+    const sectionName = effectiveNotebookMode === "individual"
       ? String(customSectionName.trim() || selectedEmployee || "").trim()
-      : notebookMode === "management"
+      : effectiveNotebookMode === "management"
         ? customSectionName.trim() || managementSection.trim()
-        : customSectionName.trim();
-    const employeeValue = notebookMode === "management"
+        : customSectionName.trim() || activeSection?.label || DEFAULT_OTHER_SECTION;
+    const employeeValue = effectiveNotebookMode === "management"
       ? `${MANAGEMENT_PREFIX}${sectionName}`
-      : notebookMode === "other"
+      : effectiveNotebookMode === "other"
         ? `${OTHER_PREFIX}${sectionName}`
         : sectionName;
-    const effectiveStatus = notebookMode === "management" || notebookMode === "other" ? "shared" : status;
+    const effectiveStatus = effectiveNotebookMode === "management" || effectiveNotebookMode === "other" ? "shared" : status;
     const payload = {
       manager_name: identity.name,
       employee_name: employeeValue,
-      title: title.trim() || (notebookMode === "management" ? "Management Meeting Notes" : "1:1 Meeting Summary"),
+      title: title.trim() || (!isManager ? "Quick note" : effectiveNotebookMode === "management" ? "Management Meeting Notes" : "1:1 Meeting Summary"),
       meeting_date: meetingDate || null,
       source_type: sourceType || "manual",
       source_message_id: importedMessageId,
       source_subject: importedMessageSubject,
       source_excerpt: sourceNotes.slice(0, 280) || null,
       source_body: sourceNotes || null,
-      summary_markdown: summaryMarkdown,
+      summary_markdown: effectiveSummary,
       discussion_points_json: JSON.stringify(discussionPoints.split("\n").map((x) => x.trim()).filter(Boolean)),
       manager_action_items_json: JSON.stringify(managerActionItems.split("\n").map((x) => x.trim()).filter(Boolean)),
       employee_action_items_json: JSON.stringify(employeeActionItems.split("\n").map((x) => x.trim()).filter(Boolean)),
       status: effectiveStatus,
-      notebook_group: notebookMode,
+      notebook_group: effectiveNotebookMode,
       section_name: sectionName,
       parent_note_id: parentNoteId,
       sort_order: 0,
@@ -1400,12 +2397,12 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
       if (editingNoteId) {
         const updated = await db.one_on_one_notes.updateById(editingNoteId, payload);
         setSelectedPageId(updated.id);
-        setActiveSectionKey(`${notebookMode}:${sectionName}`);
+        setActiveSectionKey(`${effectiveNotebookMode}:${sectionName}`);
       } else {
         const inserted = await db.one_on_one_notes.insert(payload);
         const created = inserted[0];
         if (created?.id) setSelectedPageId(created.id);
-        setActiveSectionKey(`${notebookMode}:${sectionName}`);
+        setActiveSectionKey(`${effectiveNotebookMode}:${sectionName}`);
       }
       setOpenComposer(false);
       resetComposer();
@@ -1677,7 +2674,10 @@ Keep each bullet concise and factual. Notes:\n\n${noteText}`;
     setWeeklyLoading(true);
     setWeeklyResult("");
     try {
-      const prompt = `Generate a professional weekly action-item summary for a team manager. Write 2-3 paragraphs: what was accomplished this week, what's still in flight, and any risks or recommendations. Keep it concise and suitable for a manager update.\n\n${summary}`;
+      const prompt = [
+        "Generate a professional weekly action-item summary for a team manager. Write 2-3 paragraphs: what was accomplished this week, what's still in flight, and any risks or recommendations. Keep it concise and suitable for a manager update.\n\n",
+        summary,
+      ].join("");
       const res = await completeWeekly(prompt);
       setWeeklyResult(res ?? "");
     } finally {
@@ -1878,7 +2878,15 @@ Tasks:\n${taskLines}`;
         if (t.note_id == null && t.section_name && noteSectionToNote.has(t.section_name.trim().toLowerCase())) return true;
         return false;
       });
-      console.log(`[Extract] Deleting ${toDelete.length} old tasks (${toDelete.filter(t => t.note_id != null).length} by note_id, ${toDelete.filter(t => t.note_id == null).length} legacy)`);
+      console.log([
+        "[Extract] Deleting ",
+        toDelete.length,
+        " old tasks (",
+        toDelete.filter(t => t.note_id != null).length,
+        " by note_id, ",
+        toDelete.filter(t => t.note_id == null).length,
+        " legacy)",
+      ].join(""));
       for (const t of toDelete) {
         await db.personal_action_items.deleteById(t.id);
       }
@@ -2796,7 +3804,7 @@ Tasks:\n${taskLines}`;
           </ThemeIcon>
           <Stack gap={3} style={{ flex: 1, minWidth: 0 }}>
             <Group justify="space-between" wrap="nowrap" gap="xs">
-              <Text fw={600} size="sm" truncate style={{ flex: 1 }}>{note.title}</Text>
+              <Text fw={600} size="sm" truncate style={{ flex: 1 }}>{getNoteDisplayTitle(note)}</Text>
               <Text size="xs" c="dimmed" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>{formatDate(note.meeting_date)}</Text>
             </Group>
             <Text size="xs" c="dimmed" lineClamp={1}>{note.summary_markdown || "No summary yet."}</Text>
@@ -2815,11 +3823,11 @@ Tasks:\n${taskLines}`;
   const pagePanelTitle = search.trim()
     ? `Search results (${filteredManagerNotes.length})`
     : activeSection
-      ? `${activeSection.notebook_group === "management" ? "Management" : activeSection.notebook_group === "other" ? "Others" : "Individual"} section · ${activeSection.label}`
-      : "Select a section";
+      ? `${workspaceView === "team_members" ? TEAM_MEMBERS_ROOT : MY_NOTEBOOK_ROOT} · ${activeSection.label}`
+      : ["Select a section in ", workspaceView === "team_members" ? TEAM_MEMBERS_ROOT : MY_NOTEBOOK_ROOT].join("");
 
   const workspaceSections: SectionRecord[] = sectionRecords
-    .filter((section) => section.notebook_group === workspaceView)
+    .filter((section) => workspaceView === "team_members" ? section.notebook_group === "individual" : section.notebook_group !== "individual")
     .slice()
     .sort((a, b) => {
       if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
@@ -2833,24 +3841,22 @@ Tasks:\n${taskLines}`;
 
   return (
     <WidgetFrame
-      title="Meeting Notes"
-      subtitle={isManager ? `${managerOwnedNotes.length} pages · ${tasks.filter(t => t.created_by === identity?.name && t.status !== "done").length} open actions` : "Your shared notes and follow-up tasks"}
+      title="Notebook"
+      subtitle={isManager ? `${managerOwnedNotes.length} pages · ${notebookOpenActionCount} open actions` : `${managerOwnedNotes.length} personal notes · ${myOwnTasks.length} self-created tasks`}
       icon={IconNotes}
       iconColor="grape"
       loading={loading}
       onRefresh={load}
       headerActions={isManager ? (
         <Group gap="xs">
-          <Button size="xs" variant="subtle" color="dimmed" leftSection={<IconMailSpark size={14} />} onClick={() => { resetComposer("individual"); setSourceType("gmail_gemini"); setOpenComposer(true); }}>Sync Gmail</Button>
-          <Button size="xs" variant="filled" color="grape" leftSection={<IconPlus size={14} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); }}>New page</Button>
+          <Button size="xs" variant="light" color="blue" leftSection={<IconMailSpark size={14} />} loading={gmailLoading || saving} onClick={() => { void runManualGmailSync(); }}>Gmail sync</Button>
+          <Button size="xs" variant="filled" color="grape" leftSection={<IconPlus size={14} />} onClick={() => { resetComposer(workspaceView === "team_members" ? "individual" : "other"); setOpenComposer(true); }}>New page</Button>
         </Group>
       ) : undefined}
     >
       <Stack gap="md">
         {error && <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light">{error}</Alert>}
         {aiError && <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light">AI assistant: {aiError}</Alert>}
-
-        <AiAgentSelector value={selectedAgentId} onChange={setSelectedAgentId} />
 
         {isManager ? (
           <>
@@ -2883,7 +3889,7 @@ Tasks:\n${taskLines}`;
                         radius="md"
                         variant="light"
                         leftSection={<IconPlus size={12} />}
-                        onClick={() => { setCreateSectionGroup("individual"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}
+                        onClick={() => { setCreateSectionGroup(workspaceView === "team_members" ? "individual" : "other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}
                       >
                         New
                       </Button>
@@ -2900,11 +3906,10 @@ Tasks:\n${taskLines}`;
 
                     <SegmentedControl
                       value={workspaceView}
-                      onChange={(value) => setWorkspaceView(value as NotebookMode)}
+                      onChange={(value) => setWorkspaceView(value as WorkspaceView)}
                       data={[
-                        { value: "individual", label: `1:1 (${individualSections.length})` },
-                        { value: "management", label: `Management (${managementSections.length})` },
-                        { value: "other", label: `Other (${otherSections.length})` },
+                        { value: "team_members", label: `${TEAM_MEMBERS_ROOT} (${individualSections.length})` },
+                        { value: "my_notebook", label: `${MY_NOTEBOOK_ROOT} (${managementSections.length + otherSections.length})` },
                       ]}
                       fullWidth
                       size="xs"
@@ -2913,7 +3918,7 @@ Tasks:\n${taskLines}`;
                     <Card withBorder radius="md" p="xs" bg="rgba(255,255,255,0.01)">
                       <Stack gap="xs">
                         <Group justify="space-between" align="center">
-                          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Folders</Text>
+                          <Text size="xs" c="dimmed" tt="uppercase" fw={700}>{workspaceView === "team_members" ? TEAM_MEMBERS_ROOT : MY_NOTEBOOK_ROOT}</Text>
                           <Badge size="xs" variant="light">{workspaceSections.length}</Badge>
                         </Group>
                         <ScrollArea.Autosize mah={420} offsetScrollbars>
@@ -2961,7 +3966,7 @@ Tasks:\n${taskLines}`;
                             })}
                           </Stack>
                         </ScrollArea.Autosize>
-                        <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup(workspaceView); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
+                        <Button size="xs" radius="md" variant="subtle" leftSection={<IconPlus size={11} />} onClick={() => { setCreateSectionGroup(workspaceView === "team_members" ? "individual" : "other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
                           Add folder
                         </Button>
                       </Stack>
@@ -2990,8 +3995,9 @@ Tasks:\n${taskLines}`;
                           <Card withBorder radius="lg" p="lg" bg="transparent">
                             <Stack align="center" gap="xs" py="sm">
                               <ThemeIcon size={32} radius="md" variant="light" color="gray"><IconNotes size={16} /></ThemeIcon>
-                              <Text size="sm" c="dimmed" ta="center">No pages in this section yet.</Text>
-                              <Button size="xs" variant="light" color="grape" leftSection={<IconPlus size={12} />} onClick={() => { resetComposer("individual"); setOpenComposer(true); }}>Add a page</Button>
+                              <Text size="sm" c="dimmed" ta="center">{workspaceView === "team_members" ? "No summarized 1:1 pages for this team member yet." : "No pages in this section yet."}</Text>
+                              <Text size="xs" c="dimmed" ta="center">{workspaceView === "team_members" ? "Pages will be created automatically from Gmail labels and note summaries." : "Pages will appear here automatically from Gmail labels or you can add one manually."}</Text>
+                              <Button size="xs" variant="light" color="grape" leftSection={<IconPlus size={12} />} onClick={() => { resetComposer(workspaceView === "team_members" ? "individual" : "other"); setOpenComposer(true); }}>Add a page</Button>
                             </Stack>
                           </Card>
                         ) : visiblePageList.map((note) => renderPageNode(note))}
@@ -3002,22 +4008,111 @@ Tasks:\n${taskLines}`;
                 </Card>
 
                 <Stack gap="sm">
+                  {activeTeamMember && workspaceView === "team_members" && (
+                    <Card withBorder radius="xl" p="md">
+                      <Stack gap="md">
+                        <Group justify="space-between" align="flex-start" wrap="wrap">
+                          <Stack gap={2}>
+                            <Text fw={700} size="sm">{activeTeamMember}</Text>
+                            <Text size="xs" c="dimmed">All 1:1 summaries, action items, yearly review, recognition, achievements, and growth areas.</Text>
+                          </Stack>
+                          <Group gap="xs" wrap="wrap">
+                            <Badge variant="light" color="grape">{memberNotes.length} summaries</Badge>
+                            <Badge variant="light" color="blue">{memberTasks.filter((task) => task.status !== "done").length} open actions</Badge>
+                            <Select
+                              size="xs"
+                              data={yearOptions}
+                              value={selectedYear}
+                              onChange={(value) => value && setSelectedYear(value)}
+                              allowDeselect={false}
+                              w={100}
+                            />
+                          </Group>
+                        </Group>
+
+                        {memberNotesForYear.length === 0 ? (
+                          <Card withBorder radius="lg" p="md" bg="transparent">
+                            <Text size="sm" c="dimmed" ta="center">No meeting history found for {activeTeamMember} in {selectedYear} yet.</Text>
+                          </Card>
+                        ) : (
+                          <>
+                            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                              <Card withBorder radius="lg" p="sm">
+                                <Stack gap={4}>
+                                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Overall yearly summary</Text>
+                                  {annualSummaryLoading && !annualSummary ? (
+                                    <Text size="sm" c="dimmed">Generating yearly review…</Text>
+                                  ) : (
+                                    <Text size="sm">{annualSummary?.summary || "Review will appear automatically once enough summarized notes are available."}</Text>
+                                  )}
+                                </Stack>
+                              </Card>
+                              <Card withBorder radius="lg" p="sm">
+                                <Stack gap={4}>
+                                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Recognition & achievements</Text>
+                                  {[...(annualSummary?.recognition ?? []), ...(annualSummary?.achievements ?? [])].slice(0, 6).map((item, index) => (
+                                    <Text key={`recognition-${index}`} size="sm">• {item}</Text>
+                                  ))}
+                                  {!(annualSummary?.recognition?.length || annualSummary?.achievements?.length) && <Text size="sm" c="dimmed">No clear recognition themes yet.</Text>}
+                                </Stack>
+                              </Card>
+                              <Card withBorder radius="lg" p="sm">
+                                <Stack gap={4}>
+                                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Feedback</Text>
+                                  {(annualSummary?.feedback ?? []).slice(0, 6).map((item, index) => (
+                                    <Text key={`feedback-${index}`} size="sm">• {item}</Text>
+                                  ))}
+                                  {!annualSummary?.feedback?.length && <Text size="sm" c="dimmed">No repeated feedback themes detected yet.</Text>}
+                                </Stack>
+                              </Card>
+                              <Card withBorder radius="lg" p="sm">
+                                <Stack gap={4}>
+                                  <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Areas of improvement</Text>
+                                  {(annualSummary?.improvements ?? []).slice(0, 6).map((item, index) => (
+                                    <Text key={`improvement-${index}`} size="sm">• {item}</Text>
+                                  ))}
+                                  {!annualSummary?.improvements?.length && <Text size="sm" c="dimmed">No recurring improvement themes detected yet.</Text>}
+                                </Stack>
+                              </Card>
+                            </SimpleGrid>
+
+                            <Card withBorder radius="lg" p="sm">
+                              <Stack gap={4}>
+                                <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Action items</Text>
+                                {memberTasks.length > 0 ? memberTasks.slice(0, 8).map((task) => (
+                                  <Group key={task.id} justify="space-between" gap="xs" wrap="nowrap">
+                                    <Text size="sm" style={{ flex: 1 }}>• {task.title}</Text>
+                                    <Badge size="xs" variant="light" color={task.status === "done" ? "green" : task.status === "blocked" ? "red" : task.status === "in_progress" ? "blue" : "yellow"}>{task.status}</Badge>
+                                  </Group>
+                                )) : <Text size="sm" c="dimmed">No action items extracted for this team member yet.</Text>}
+                              </Stack>
+                            </Card>
+                          </>
+                        )}
+                      </Stack>
+                    </Card>
+                  )}
+
                   {selectedNote ? (
                     <>
                       <Card withBorder radius="xl" p="sm">
                         <Group justify="space-between" align="center" gap="sm" wrap="nowrap">
                           <Stack gap={2} style={{ flex: 1, minWidth: 0 }}>
-                            <Text fw={700} size="sm" truncate>{selectedNote.title}</Text>
-                            <Group gap={6}>
-                              <Badge size="xs" variant="light" color={selectedNote.notebook_group === "management" ? "blue" : selectedNote.notebook_group === "other" ? "orange" : "grape"}>{selectedNote.section_name}</Badge>
-                              {selectedNote.is_archived && <Badge size="xs" variant="light" color="gray">Archived</Badge>}
-                              {selectedNote.meeting_date && <Text size="xs" c="dimmed">{formatDate(selectedNote.meeting_date)}</Text>}
-                            </Group>
+                            {!(selectedNote.notebook_group === "other" && selectedNote.title.trim().toLowerCase() === "quick note") && (
+                              <Text fw={700} size="sm" truncate>{getNoteDisplayTitle(selectedNote)}</Text>
+                            )}
+                            {(isManager || selectedNote.notebook_group !== "other") && (
+                              <Group gap={6}>
+                                <Badge size="xs" variant="light" color={selectedNote.notebook_group === "management" ? "blue" : selectedNote.notebook_group === "other" ? "orange" : "grape"}>{selectedNote.section_name}</Badge>
+                                {selectedNote.is_archived && <Badge size="xs" variant="light" color="gray">Archived</Badge>}
+                                {selectedNote.meeting_date && <Text size="xs" c="dimmed">{formatDate(selectedNote.meeting_date)}</Text>}
+                              </Group>
+                            )}
                           </Stack>
                           <Group gap={4} wrap="nowrap">
                             <Button size="xs" radius="md" variant="light" onClick={() => { populateComposer(selectedNote); setOpenComposer(true); }}>Edit</Button>
-                            <Button size="xs" radius="md" variant="subtle" onClick={() => { populateComposer(selectedNote, true); setOpenComposer(true); }}>+ Subpage</Button>
-                            <Button size="xs" radius="md" variant="subtle" color="gray" onClick={() => void archiveNote(selectedNote, !selectedNote.is_archived)}>{selectedNote.is_archived ? "Restore" : "Archive"}</Button>
+                            {isManager && <Button size="xs" radius="md" variant="subtle" onClick={() => { populateComposer(selectedNote, true); setOpenComposer(true); }}>+ Subpage</Button>}
+                            {isManager && <Button size="xs" radius="md" variant="subtle" color="gray" onClick={() => void archiveNote(selectedNote, !selectedNote.is_archived)}>{selectedNote.is_archived ? "Restore" : "Archive"}</Button>}
                             <ActionIcon size="sm" color="red" variant="subtle" onClick={() => void deleteNote(selectedNote)}><IconTrash size={14} /></ActionIcon>
                           </Group>
                         </Group>
@@ -3629,6 +4724,11 @@ Tasks:\n${taskLines}`;
             {/* ── Personal Notebook ── */}
             <Tabs.Panel value="notebook" pt="md">
               <Stack gap="md">
+                <Alert color="orange" variant="light" radius="lg" icon={<IconNotes size={16} />}>
+                  <Text size="sm">
+                    <strong>My notebook is your personal notepad.</strong> Use it like sticky notes to save reminders, handoff notes, links, drafts, meeting prep, and any personal reference info you want to keep for yourself.
+                  </Text>
+                </Alert>
                 <div style={{ display: "grid", gridTemplateColumns: "220px 1fr", gap: 16, alignItems: "start" }}>
                   {/* Sidebar */}
                   <Card withBorder radius="xl" p="md">
@@ -3648,7 +4748,8 @@ Tasks:\n${taskLines}`;
                           ) : otherSections.map((section) => (
                             <Card key={section.key} withBorder radius="md" p="xs"
                               style={{ cursor: "pointer", background: activeSectionKey === section.key ? "rgba(255,140,0,0.12)" : undefined, borderColor: activeSectionKey === section.key ? "rgba(255,140,0,0.45)" : undefined }}
-                              onClick={() => setActiveSectionKey(section.key)}>
+                              onClick={() => setActiveSectionKey(section.key)}
+                              onContextMenu={(event) => openSectionContextMenu(event, section)}>
                               <Group gap="xs" wrap="nowrap">
                                 <ThemeIcon size={22} radius="sm" variant="light" color="orange"><IconNotes size={11} /></ThemeIcon>
                                 <div style={{ minWidth: 0 }}>
@@ -3669,16 +4770,30 @@ Tasks:\n${taskLines}`;
                       <Group justify="space-between" align="center">
                         <Text fw={700} size="sm">{activeSection.label}</Text>
                         <Button size="xs" variant="filled" color="orange" leftSection={<IconPlus size={12} />}
-                          onClick={() => { resetComposer("other"); setManagementSection(activeSection.label); setOpenComposer(true); }}>
+                          onClick={() => { resetComposer("other"); setCustomSectionName(activeSection.label); setManagementSection(activeSection.label); setOpenComposer(true); }}>
                           New page
                         </Button>
                       </Group>
                       {activeSection.notes.filter((n) => noteMatchesSearch(n, search)).length === 0 ? (
-                        <Text size="sm" c="dimmed" ta="center" py="xl">No pages in this section yet. Click "New page" to start writing.</Text>
+                        <Text size="sm" c="dimmed" ta="center" py="xl">No notes in this section yet. Click "New page" to start writing.</Text>
                       ) : (
                         <Stack gap="sm">
                           {activeSection.notes.filter((n) => noteMatchesSearch(n, search)).map((note) => (
-                            <DetailCard key={note.id} note={note} managerView={false} />
+                            <Card key={note.id} withBorder radius="lg" p="md">
+                              <Stack gap="sm">
+                                <Group justify="space-between" align="center" wrap="nowrap">
+                                  <Stack gap={2} style={{ minWidth: 0, flex: 1 }}>
+                                    <Text fw={700} size="sm" truncate>{getNoteDisplayTitle(note)}</Text>
+                                    <Text size="xs" c="dimmed">Updated {formatDate(note.updated_at ?? note.meeting_date ?? note.created_at)}</Text>
+                                  </Stack>
+                                  <Group gap="xs" wrap="nowrap">
+                                    <Button size="xs" variant="light" color="orange" onClick={() => { populateComposer(note); setOpenComposer(true); }}>Edit</Button>
+                                    <ActionIcon size="sm" color="red" variant="subtle" onClick={() => void deleteNote(note)}><IconTrash size={14} /></ActionIcon>
+                                  </Group>
+                                </Group>
+                                <DetailCard note={note} managerView={false} />
+                              </Stack>
+                            </Card>
                           ))}
                         </Stack>
                       )}
@@ -3688,7 +4803,7 @@ Tasks:\n${taskLines}`;
                       <Stack align="center" gap="sm" py="xl">
                         <ThemeIcon size={48} radius="xl" variant="light" color="orange"><IconNotes size={24} /></ThemeIcon>
                         <Text fw={600}>Your personal notebook</Text>
-                        <Text size="sm" c="dimmed" ta="center">Create sections to organize your notes — meeting prep, follow-ups, personal logs.</Text>
+                        <Text size="sm" c="dimmed" ta="center">Use this like sticky notes or a notepad to store reminders, handoff notes, links, drafts, passwords references, meeting prep, and any other personal work notes.</Text>
                         <Button variant="filled" color="orange" leftSection={<IconPlus size={14} />}
                           onClick={() => { setCreateSectionGroup("other"); setCreateSectionParent(null); setCreateSectionName(""); setCreateSectionOpen(true); }}>
                           Create first section
@@ -3896,7 +5011,7 @@ Tasks:\n${taskLines}`;
                     ? <Table.Tr><Table.Td colSpan={4}><Text size="sm" c="dimmed" ta="center" py="md">No notes matched your filters.</Text></Table.Td></Table.Tr>
                     : filteredAllNotes.map((note) => (
                       <Table.Tr key={note.id}>
-                        <Table.Td><Text fw={600} size="sm">{note.title}</Text><Text size="xs" c="dimmed" lineClamp={1}>{note.summary_markdown}</Text></Table.Td>
+                        <Table.Td><Text fw={600} size="sm">{getNoteDisplayTitle(note)}</Text><Text size="xs" c="dimmed" lineClamp={1}>{note.summary_markdown}</Text></Table.Td>
                         <Table.Td><Badge variant="light" size="sm" color={note.notebook_group === "management" ? "blue" : note.notebook_group === "other" ? "orange" : "grape"}>{note.section_name}</Badge></Table.Td>
                         <Table.Td><Text size="sm" style={{ whiteSpace: "nowrap" }}>{formatDate(note.meeting_date)}</Text></Table.Td>
                         <Table.Td>
@@ -3934,9 +5049,25 @@ Tasks:\n${taskLines}`;
           <Stack gap={4}>
             {contextMenu.type === "section" && contextMenuSection ? (
               <>
-                <Button variant="subtle" justify="flex-start" leftSection={<IconEdit size={14} />} onClick={() => { setRenameSectionKey(contextMenuSection.key); setRenameSectionName(splitSectionPath(contextMenuSection.label).slice(-1)[0] ?? contextMenuSection.label); setContextMenu(null); }}>Rename</Button>
-                <Button variant="subtle" justify="flex-start" leftSection={<IconArrowsRight size={14} />} onClick={() => { setMoveSectionKey(contextMenuSection.key); setMoveSectionTargetParent(null); setMoveSectionOpen(true); setContextMenu(null); }}>Move</Button>
-                <Button variant="subtle" justify="flex-start" leftSection={<IconClipboardText size={14} />} onClick={() => void duplicateSectionFolder(contextMenuSection)}>Copy</Button>
+                <Button
+                  variant="subtle"
+                  justify="flex-start"
+                  leftSection={<IconEdit size={14} />}
+                  onClick={() => {
+                    setRenameSectionKey(contextMenuSection.key);
+                    setRenameSectionName(splitSectionPath(contextMenuSection.label).slice(-1)[0] ?? contextMenuSection.label);
+                    setRenameSectionOpen(true);
+                    setContextMenu(null);
+                  }}
+                >
+                  Rename
+                </Button>
+                {(isManager || contextMenuSection.notebook_group !== "other") && (
+                  <>
+                    <Button variant="subtle" justify="flex-start" leftSection={<IconArrowsRight size={14} />} onClick={() => { setMoveSectionKey(contextMenuSection.key); setMoveSectionTargetParent(null); setMoveSectionOpen(true); setContextMenu(null); }}>Move</Button>
+                    <Button variant="subtle" justify="flex-start" leftSection={<IconClipboardText size={14} />} onClick={() => void duplicateSectionFolder(contextMenuSection)}>Copy</Button>
+                  </>
+                )}
                 <Button variant="subtle" justify="flex-start" color="red" leftSection={<IconTrash size={14} />} onClick={() => void deleteSectionFolder(contextMenuSection)}>Delete</Button>
               </>
             ) : contextMenu.type === "area" && contextMenu.areaName ? (
@@ -4249,176 +5380,267 @@ Tasks:\n${taskLines}`;
         </Stack>
       </Modal>
 
-      <Modal opened={openComposer} onClose={() => setOpenComposer(false)} title={editingNoteId ? "Edit notebook page" : parentNoteId ? "Create subpage" : notebookMode === "management" ? "Create management notebook page" : "Prepare 1:1 page"} centered size="xl">
+      <Modal opened={openComposer} onClose={() => setOpenComposer(false)} title={editingNoteId ? "Edit notebook page" : parentNoteId ? "Create subpage" : !isManager ? "New sticky note" : notebookMode === "management" ? "Create management notebook page" : "Prepare 1:1 page"} centered size="xl">
         <Stack gap="md">
-          <Alert icon={<IconBook size={16} />} color={notebookMode === "management" ? "blue" : "grape"} variant="light">
-            {notebookMode === "management"
-              ? "Capture management-level meeting notes into reusable notebook sections for leadership, staffing, operations, and coaching themes."
-              : <>Managers can pull Gmail messages automatically from <strong>label:gemini-notes</strong>, structure them, then save them into each employee notebook.</>}
-          </Alert>
-
-          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-            <Select label="Notebook type" data={NOTEBOOK_OPTIONS} value={notebookMode} onChange={(value) => setNotebookMode((value as NotebookMode) || "individual")} allowDeselect={false} />
-            <TextInput label="Meeting date" type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.currentTarget.value)} />
-          </SimpleGrid>
-
-          {notebookMode === "individual" && (
+          {!isManager ? (
             <>
-              <Card withBorder radius="lg" p="md">
-                <Stack gap="sm">
-                  <Group justify="space-between" align="flex-end" wrap="wrap">
-                    <Stack gap={2}>
-                      <Text fw={700}>Gmail Gemini notes</Text>
-                      <Text size="sm" c="dimmed">Gmail label source: <strong>label:gemini-notes</strong>. Pick a date range and click one button to sync everything.</Text>
-                    </Stack>
-                    <Group gap="xs">
-                      <Badge variant="light" color="grape">{gmailMessages.length} loaded</Badge>
-                      <Button
-                        size="xs"
-                        color="grape"
-                        leftSection={<IconSparkles size={14} />}
-                        onClick={() => void syncGmailNotesOneClick()}
-                        loading={gmailLoading || saving || aiLoading}
-                      >
-                        Sync Gmail notes (one click)
-                      </Button>
-                    </Group>
+              <Card withBorder radius="lg" p="md" style={{ background: "rgba(255,140,0,0.06)", borderColor: "rgba(255,140,0,0.24)" }}>
+                <Stack gap="xs">
+                  <Group gap="sm" wrap="nowrap">
+                    <ThemeIcon radius="md" variant="light" color="orange"><IconNotes size={16} /></ThemeIcon>
+                    <div>
+                      <Text fw={700} size="sm">Personal sticky note</Text>
+                      <Text size="sm" c="dimmed">Write a quick reminder, draft, handoff note, link, or anything else you want to keep in your notebook.</Text>
+                    </div>
                   </Group>
+                </Stack>
+              </Card>
 
-                  <Text size="xs" c="dimmed">One click performs: pull Gmail notes → generate summary → route to sections/pages → add action items.</Text>
+              <TextInput
+                label="Section"
+                value={customSectionName}
+                onChange={(e) => setCustomSectionName(e.currentTarget.value)}
+                placeholder={activeSection?.label || "General notes"}
+                description="This note will be saved in this notebook section."
+              />
 
-                  <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="sm">
-                    <TextInput
-                      label="Start date"
-                      type="date"
-                      value={gmailStartDate}
-                      onChange={(e) => setGmailStartDate(e.currentTarget.value)}
-                    />
-                    <TextInput
-                      label="End date"
-                      type="date"
-                      value={gmailEndDate}
-                      onChange={(e) => setGmailEndDate(e.currentTarget.value)}
-                    />
-                    <Button
-                      mt={{ base: 0, sm: 25 }}
-                      size="sm"
-                      variant="light"
-                      leftSection={<IconMailSpark size={14} />}
-                      onClick={() => void loadGmailNotes()}
-                      loading={gmailLoading}
-                      fullWidth
-                    >
-                      Load notes
-                    </Button>
-                  </SimpleGrid>
+              <TextInput
+                label="Title"
+                value={title}
+                onChange={(e) => setTitle(e.currentTarget.value)}
+                placeholder="Quick note"
+              />
 
-                  {gmailMessages.length === 0 ? (
-                    <Text size="sm" c="dimmed">No Gmail notes loaded for this range yet.</Text>
-                  ) : gmailMessages.map((message) => (
-                    <Card key={message.id} withBorder radius="md" p="sm">
-                      <Group justify="space-between" align="flex-start">
-                        <Stack gap={2} style={{ flex: 1 }}>
-                          <Text fw={600}>{message.subject}</Text>
-                          <Text size="xs" c="dimmed">{formatDate(message.internalDate ?? message.date)}{message.from ? ` · ${message.from}` : ""}</Text>
-                          <Text size="sm" c="dimmed" lineClamp={2}>{message.snippet || message.body}</Text>
+              <Textarea
+                label="Note"
+                minRows={12}
+                autosize
+                value={sourceNotes}
+                onChange={(e) => setSourceNotes(e.currentTarget.value)}
+                placeholder="Type your sticky note here — reminders, links, handoff notes, follow-ups, ideas, drafts…"
+                ref={composerBodyRef}
+              />
+
+              <Group justify="flex-end" gap="xs">
+                <Button variant="default" onClick={() => setOpenComposer(false)}>Cancel</Button>
+                <Button color="orange" leftSection={<IconNotes size={14} />} onClick={() => void saveNote("shared")} loading={saving}>
+                  {editingNoteId ? "Save changes" : "Create note"}
+                </Button>
+              </Group>
+            </>
+          ) : (
+            <>
+              <Alert icon={<IconBook size={16} />} color={notebookMode === "management" ? "blue" : "grape"} variant="light">
+                {notebookMode === "management"
+                  ? "Capture management-level meeting notes into reusable notebook sections for leadership, staffing, operations, and coaching themes."
+                  : <>Gmail notes are synced automatically from <strong>label:gemini-notes</strong>. Team-member 1:1 pages and My Notebook pages are created from Gmail labels without manual import.</>}
+              </Alert>
+
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                <Select label="Notebook type" data={NOTEBOOK_OPTIONS} value={notebookMode} onChange={(value) => setNotebookMode((value as NotebookMode) || "individual")} allowDeselect={false} />
+                <TextInput label="Meeting date" type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.currentTarget.value)} />
+              </SimpleGrid>
+
+              {notebookMode === "individual" && (
+                <>
+                  <Card withBorder radius="lg" p="md">
+                    <Stack gap="sm">
+                      <Group justify="space-between" align="flex-end" wrap="wrap">
+                        <Stack gap={2}>
+                          <Text fw={700}>Gmail label sync</Text>
+                          <Text size="sm" c="dimmed">Click <strong>Gmail sync</strong> to automatically load approved Gmail labels, map each email to its matching folder, generate summaries, and save pages without manual review.</Text>
                         </Stack>
                         <Group gap="xs">
-                          {message.imported && <Badge variant="light" color="yellow">Already used</Badge>}
-                          {importedMessageId === message.id && <Badge variant="light" color="grape">Selected</Badge>}
-                          <Button
-                            size="xs"
-                            color="grape"
-                            variant={importedMessageId === message.id ? "filled" : "light"}
-                            onClick={() => applyImportedMessage(message)}
-                          >
-                            {importedMessageId === message.id ? "Selected" : "Use this note"}
+                          <Badge variant="light" color="grape">{gmailMessages.length} loaded</Badge>
+                          <Badge variant="light" color={gmailLoading || saving ? "blue" : "green"}>{gmailLoading || saving ? "Syncing Gmail" : "Ready"}</Badge>
+                          <Button size="xs" variant="light" color="blue" leftSection={<IconMailSpark size={12} />} loading={gmailLoading || saving} disabled={saving} onClick={() => { void runManualGmailSync(); }}>
+                            Gmail sync
                           </Button>
                         </Group>
                       </Group>
-                    </Card>
-                  ))}
-                </Stack>
-              </Card>
+
+                      <Text size="xs" c="dimmed">Approved member labels found in Gmail are shown below. Matching emails are imported into these folders automatically during sync.</Text>
+
+                      <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                        <TextInput
+                          label="Auto-sync start"
+                          type="date"
+                          value={gmailStartDate}
+                          onChange={(e) => setGmailStartDate(e.currentTarget.value)}
+                        />
+                        <TextInput
+                          label="Auto-sync end"
+                          type="date"
+                          value={gmailEndDate}
+                          onChange={(e) => setGmailEndDate(e.currentTarget.value)}
+                        />
+                      </SimpleGrid>
+
+                      {gmailAvailableLabels.length > 0 && (
+                        <Card withBorder radius="md" p="sm" bg="rgba(255,255,255,0.01)">
+                          <Stack gap={6}>
+                            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Approved Gmail member labels found</Text>
+                            <Group gap="xs">
+                              {gmailAvailableLabels.map((label) => (
+                                <Badge key={label} variant="light" color="grape">{label.split("/").pop() ?? label}</Badge>
+                              ))}
+                            </Group>
+                          </Stack>
+                        </Card>
+                      )}
+
+                      {gmailSyncStats && (
+                        <Card withBorder radius="md" p="sm" bg="rgba(255,255,255,0.01)">
+                          <Stack gap={6}>
+                            <Text size="xs" tt="uppercase" fw={700} c="dimmed">Last Gmail sync result</Text>
+                            <SimpleGrid cols={{ base: 2, sm: 4 }} spacing="xs">
+                              <Badge variant="light">Fetched: {gmailSyncStats.fetched}</Badge>
+                              <Badge variant="light">Matched labels: {gmailSyncStats.approvedFolderMatches}</Badge>
+                              <Badge variant="light">Pending: {gmailSyncStats.pending}</Badge>
+                              <Badge variant="light" color={gmailSyncStats.createdPages > 0 ? "green" : "gray"}>Created: {gmailSyncStats.createdPages}</Badge>
+                              <Badge variant="light">Extracted notes: {gmailSyncStats.extractedNotes}</Badge>
+                              <Badge variant="light">AI structured: {gmailSyncStats.aiStructured}</Badge>
+                              <Badge variant="light">Fallback structured: {gmailSyncStats.fallbackStructured}</Badge>
+                              <Badge variant="light" color={(gmailSyncStats.skippedNoExtractedNotes + gmailSyncStats.skippedNoStructuredContent) > 0 ? "yellow" : "gray"}>Skipped parse: {gmailSyncStats.skippedNoExtractedNotes + gmailSyncStats.skippedNoStructuredContent}</Badge>
+                            </SimpleGrid>
+                            {gmailSyncStats.statusMessage && <Text size="sm">{gmailSyncStats.statusMessage}</Text>}
+                            <Text size="xs" c="dimmed">
+                              Existing: {gmailSyncStats.skippedExisting} · Unclassified: {gmailSyncStats.skippedUnclassified} · No extracted notes: {gmailSyncStats.skippedNoExtractedNotes} · No structured content: {gmailSyncStats.skippedNoStructuredContent}
+                            </Text>
+                            <Text size="xs" c="dimmed">Range: {gmailSyncStats.start} → {gmailSyncStats.end}</Text>
+                          </Stack>
+                        </Card>
+                      )}
+
+                      {gmailMessages.length === 0 ? (
+                        <Text size="sm" c="dimmed">No Gmail notes loaded for this range yet.</Text>
+                      ) : gmailMessagesByMemberLabel.length === 0 ? (
+                        <Text size="sm" c="dimmed">Emails were loaded, but none of them matched the approved member-label folders.</Text>
+                      ) : (
+                        <Stack gap="sm">
+                          {gmailMessagesByMemberLabel.map((group) => (
+                            <Card key={group.sectionName} withBorder radius="md" p="sm">
+                              <Stack gap="sm">
+                                <Group justify="space-between" align="center">
+                                  <Stack gap={2}>
+                                    <Text fw={700}>{group.sectionName}</Text>
+                                    <Text size="xs" c="dimmed">{group.label}</Text>
+                                  </Stack>
+                                  <Badge variant="light" color="grape">{group.messages.length} email{group.messages.length === 1 ? "" : "s"}</Badge>
+                                </Group>
+
+                                {group.messages.map((message) => (
+                                  <Card key={message.id} withBorder radius="md" p="sm" bg="rgba(255,255,255,0.02)">
+                                    <Stack gap="sm">
+                                      <Group justify="space-between" align="flex-start">
+                                        <Stack gap={2} style={{ flex: 1 }}>
+                                          <Text fw={600}>{message.subject}</Text>
+                                          <Text size="xs" c="dimmed">{formatDate(message.internalDate ?? message.date)}{message.from ? ` · ${message.from}` : ""}</Text>
+                                          <Text size="sm" c="dimmed" lineClamp={2}>{message.snippet || message.body}</Text>
+                                        </Stack>
+                                        <Group gap="xs">
+                                          <Badge variant="light" color={message.imported ? "green" : "blue"}>{message.imported ? "Imported" : "Pending import"}</Badge>
+                                        </Group>
+                                      </Group>
+                                    </Stack>
+                                  </Card>
+                                ))}
+                              </Stack>
+                            </Card>
+                          ))}
+                        </Stack>
+                      )}
+                    </Stack>
+                  </Card>
+                </>
+              )}
+
+              <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
+                {notebookMode === "individual" ? (
+                  <Select
+                    label="Start from an existing employee section"
+                    data={PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
+                    value={selectedEmployee}
+                    onChange={(value) => {
+                      setSelectedEmployee(value);
+                      if (value) setCustomSectionName(value);
+                    }}
+                    searchable
+                    clearable
+                    description="Optional. Pick an existing employee section, or type a brand-new section name on the right."
+                  />
+                ) : notebookMode === "management" ? (
+                  <Select
+                    label="Start from an existing management section"
+                    data={DEFAULT_MANAGEMENT_SECTIONS.map((name) => ({ value: name, label: name }))}
+                    value={managementSection}
+                    onChange={(value) => {
+                      const next = value || DEFAULT_MANAGEMENT_SECTIONS[0];
+                      setManagementSection(next);
+                      setCustomSectionName(value || "");
+                    }}
+                    searchable
+                    clearable
+                    description="Optional. Pick a common management section, or type a new one on the right."
+                  />
+                ) : (
+                  <TextInput
+                    label="Notebook"
+                    value="Other notebook"
+                    readOnly
+                    description="Use this notebook for extracted pages and custom sections that are not tied to a specific employee."
+                  />
+                )}
+                <TextInput
+                  label={notebookMode === "individual" ? "Section name" : notebookMode === "management" ? "Management section name" : "Other section name"}
+                  value={customSectionName}
+                  onChange={(e) => setCustomSectionName(e.currentTarget.value)}
+                  placeholder={notebookMode === "individual" ? "Type a new employee or topic section" : notebookMode === "management" ? "Leadership sync" : "Project follow-ups"}
+                  description="This section will be created automatically if it does not already exist."
+                />
+              </SimpleGrid>
+
+              <Select label="Source" data={SOURCE_OPTIONS} value={sourceType} onChange={setSourceType} allowDeselect={false} />
+
+              {sourceType === "gmail_gemini" ? (
+                <Alert icon={<IconMailSpark size={16} />} color="grape" variant="light">
+                  Gmail-labeled notes are imported automatically during Gmail sync. You only need the manual editor below for pasted notes, handwritten notes, or editing an existing page.
+                </Alert>
+              ) : (
+                <>
+                  <TextInput label="Title" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
+                  <Textarea
+                    label={notebookMode === "management" ? "Meeting notes" : "Gemini / Gmail notes"}
+                    minRows={8}
+                    value={sourceNotes}
+                    onChange={(e) => setSourceNotes(e.currentTarget.value)}
+                    placeholder={notebookMode === "management" ? "Paste leadership or management meeting notes" : "Imported Gmail note body or pasted Gemini-generated notes"}
+                    ref={composerBodyRef}
+                    description={importedMessageSubject ? `Loaded from: ${importedMessageSubject}` : undefined}
+                  />
+
+                  <Group justify="space-between">
+                    <Group gap="xs">
+                      <Button variant="light" leftSection={<IconSparkles size={14} />} onClick={() => void generateFromNotes()} loading={aiLoading}>Prepare summary</Button>
+                      {aiResult && <Badge variant="light" color="grape">AI structured</Badge>}
+                    </Group>
+                    <Group gap="xs">
+                      <Button variant="default" onClick={() => setOpenComposer(false)}>Cancel</Button>
+                      {notebookMode === "individual" && !editingNoteId && <Button variant="light" color="yellow" leftSection={<IconClipboardText size={14} />} onClick={() => void saveNote("draft")} loading={saving}>Save draft</Button>}
+                      <Button color={notebookMode === "management" ? "blue" : "grape"} leftSection={notebookMode === "management" ? <IconBook size={14} /> : <IconSend size={14} />} onClick={() => void saveNote("shared")} loading={saving}>{editingNoteId ? "Save changes" : notebookMode === "management" ? "Save to notebook" : "Save page"}</Button>
+                    </Group>
+                  </Group>
+
+                  <Textarea label="Meeting summary" minRows={6} value={summaryMarkdown} onChange={(e) => setSummaryMarkdown(e.currentTarget.value)} placeholder="Clean summary with context, decisions, feedback, and outcomes" />
+                  <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
+                    <Textarea label="Discussion points" minRows={6} value={discussionPoints} onChange={(e) => setDiscussionPoints(e.currentTarget.value)} placeholder="One item per line" />
+                    <Textarea label="Manager action items" minRows={6} value={managerActionItems} onChange={(e) => setManagerActionItems(e.currentTarget.value)} placeholder="One item per line" />
+                    <Textarea label={notebookMode === "management" ? "Team follow-ups" : "Employee action items"} minRows={6} value={employeeActionItems} onChange={(e) => setEmployeeActionItems(e.currentTarget.value)} placeholder="One item per line" />
+                  </SimpleGrid>
+                </>
+              )}
             </>
           )}
-
-          <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
-            {notebookMode === "individual" ? (
-              <Select
-                label="Start from an existing employee section"
-                data={PERSON_TEAM_NAMES.map((name) => ({ value: name, label: name }))}
-                value={selectedEmployee}
-                onChange={(value) => {
-                  setSelectedEmployee(value);
-                  if (value) setCustomSectionName(value);
-                }}
-                searchable
-                clearable
-                description="Optional. Pick an existing employee section, or type a brand-new section name on the right."
-              />
-            ) : notebookMode === "management" ? (
-              <Select
-                label="Start from an existing management section"
-                data={DEFAULT_MANAGEMENT_SECTIONS.map((name) => ({ value: name, label: name }))}
-                value={managementSection}
-                onChange={(value) => {
-                  const next = value || DEFAULT_MANAGEMENT_SECTIONS[0];
-                  setManagementSection(next);
-                  setCustomSectionName(value || "");
-                }}
-                searchable
-                clearable
-                description="Optional. Pick a common management section, or type a new one on the right."
-              />
-            ) : (
-              <TextInput
-                label="Notebook"
-                value="Other notebook"
-                readOnly
-                description="Use this notebook for extracted pages and custom sections that are not tied to a specific employee."
-              />
-            )}
-            <TextInput
-              label={notebookMode === "individual" ? "Section name" : notebookMode === "management" ? "Management section name" : "Other section name"}
-              value={customSectionName}
-              onChange={(e) => setCustomSectionName(e.currentTarget.value)}
-              placeholder={notebookMode === "individual" ? "Type a new employee or topic section" : notebookMode === "management" ? "Leadership sync" : "Project follow-ups"}
-              description="This section will be created automatically if it does not already exist."
-            />
-          </SimpleGrid>
-
-          <Select label="Source" data={SOURCE_OPTIONS} value={sourceType} onChange={setSourceType} allowDeselect={false} />
-
-          <TextInput label="Title" value={title} onChange={(e) => setTitle(e.currentTarget.value)} />
-          <Textarea
-            label={notebookMode === "management" ? "Meeting notes" : "Gemini / Gmail notes"}
-            minRows={8}
-            value={sourceNotes}
-            onChange={(e) => setSourceNotes(e.currentTarget.value)}
-            placeholder={notebookMode === "management" ? "Paste leadership or management meeting notes" : "Imported Gmail note body or pasted Gemini-generated notes"}
-            ref={composerBodyRef}
-            description={importedMessageSubject ? `Loaded from: ${importedMessageSubject}` : undefined}
-          />
-
-          <Group justify="space-between">
-            <Group gap="xs">
-              <Button variant="light" leftSection={<IconSparkles size={14} />} onClick={() => void generateFromNotes()} loading={aiLoading}>Prepare summary</Button>
-              {aiResult && <Badge variant="light" color="grape">AI structured</Badge>}
-            </Group>
-            <Group gap="xs">
-              <Button variant="default" onClick={() => setOpenComposer(false)}>Cancel</Button>
-              {notebookMode === "individual" && !editingNoteId && <Button variant="light" color="yellow" leftSection={<IconClipboardText size={14} />} onClick={() => void saveNote("draft")} loading={saving}>Save draft</Button>}
-              <Button color={notebookMode === "management" ? "blue" : "grape"} leftSection={notebookMode === "management" ? <IconBook size={14} /> : <IconSend size={14} />} onClick={() => void saveNote("shared")} loading={saving}>{editingNoteId ? "Save changes" : notebookMode === "management" ? "Save to notebook" : "Save page"}</Button>
-            </Group>
-          </Group>
-
-          <Textarea label="Meeting summary" minRows={6} value={summaryMarkdown} onChange={(e) => setSummaryMarkdown(e.currentTarget.value)} placeholder="Clean summary with context, decisions, feedback, and outcomes" />
-          <SimpleGrid cols={{ base: 1, md: 3 }} spacing="sm">
-            <Textarea label="Discussion points" minRows={6} value={discussionPoints} onChange={(e) => setDiscussionPoints(e.currentTarget.value)} placeholder="One item per line" />
-            <Textarea label="Manager action items" minRows={6} value={managerActionItems} onChange={(e) => setManagerActionItems(e.currentTarget.value)} placeholder="One item per line" />
-            <Textarea label={notebookMode === "management" ? "Team follow-ups" : "Employee action items"} minRows={6} value={employeeActionItems} onChange={(e) => setEmployeeActionItems(e.currentTarget.value)} placeholder="One item per line" />
-          </SimpleGrid>
         </Stack>
       </Modal>
 
