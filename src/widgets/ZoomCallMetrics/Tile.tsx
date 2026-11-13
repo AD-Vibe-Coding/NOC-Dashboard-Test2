@@ -1,37 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Badge, Button, Card, Group, Select, Skeleton, Stack, Text, ThemeIcon, ActionIcon } from "@mantine/core";
+import { Alert, Badge, Button, Card, Group, Skeleton, Stack, Text, ThemeIcon, ActionIcon } from "@mantine/core";
 import { IconAlertTriangle, IconPhone, IconPhoneIncoming, IconRefresh } from "@tabler/icons-react";
 import { fetchRingCentralAnalytics, type RingCentralAnalyticsResponse } from "../../lib/ringcentral-analytics";
-
-function currentPacificMonth() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(new Date());
-  return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
-}
-
-function availableMonths() {
-  const [year, month] = currentPacificMonth().split("-").map(Number);
-  const earliest = Date.now() - 184 * 24 * 60 * 60 * 1000;
-  const options: { value: string; label: string }[] = [];
-  for (let offset = 0; offset < 12; offset += 1) {
-    const date = new Date(Date.UTC(year, month - 1 - offset, 1));
-    if (date.getTime() < earliest) break;
-    const value = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-    options.push({
-      value,
-      label: new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" }).format(date),
-    });
-  }
-  return options;
-}
 
 type AnalyticsError = { message: string; code?: string };
 
 export function ZoomCallMetricsTile() {
-  const [month, setMonth] = useState(currentPacificMonth);
   const [data, setData] = useState<RingCentralAnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AnalyticsError | null>(null);
@@ -40,7 +14,7 @@ export function ZoomCallMetricsTile() {
     setLoading(true);
     setError(null);
     try {
-      setData(await fetchRingCentralAnalytics(month));
+      setData(await fetchRingCentralAnalytics());
     } catch (err) {
       setError({
         message: err instanceof Error ? err.message : String(err),
@@ -49,7 +23,7 @@ export function ZoomCallMetricsTile() {
     } finally {
       setLoading(false);
     }
-  }, [month]);
+  }, []);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -76,18 +50,12 @@ export function ZoomCallMetricsTile() {
           </ThemeIcon>
           <div style={{ flex: 1, minWidth: 0 }}>
             <Text fw={600} size="sm" truncate>RingCentral Call Metrics</Text>
-            <Badge size="xs" color="green" variant="dot">RingCentral</Badge>
+            <Group gap={6}>
+              {data && <Badge size="xs" color="green" variant="dot">Connected</Badge>}
+              <Badge size="xs" variant="light">Last 30 days</Badge>
+              {data && <Text size="xs" c="dimmed">{data.from_date} – {data.to_date}</Text>}
+            </Group>
           </div>
-          <Select
-            aria-label="Analytics month"
-            size="xs"
-            w={106}
-            data={availableMonths()}
-            value={month}
-            onChange={(value) => value && setMonth(value)}
-            allowDeselect={false}
-            comboboxProps={{ withinPortal: true }}
-          />
           <ActionIcon aria-label="Refresh RingCentral call analytics" variant="subtle" onClick={() => void load()} loading={loading}>
             <IconRefresh size={16} />
           </ActionIcon>
@@ -112,6 +80,12 @@ export function ZoomCallMetricsTile() {
             <Skeleton height={20} radius="sm" />
             <Skeleton height={20} radius="sm" />
           </>
+        ) : data && data.records.length === 0 ? (
+          <Alert color="gray" icon={<IconAlertTriangle size={16} />} title={data.queues_found.length ? "No call records in this period" : "No support queues found"}>
+            <Text size="xs">{data.queues_found.length
+              ? `RingCentral is connected and returned no inbound call records for ${data.from_date} – ${data.to_date}.`
+              : data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."}</Text>
+          </Alert>
         ) : data ? (
           <Stack gap={8} style={{ flex: 1 }}>
             <Group justify="space-between">
@@ -137,7 +111,7 @@ export function ZoomCallMetricsTile() {
             {data.warning && <Text size="xs" c="dimmed" lineClamp={2}>{data.warning}</Text>}
           </Stack>
         ) : !loading ? (
-          <Text size="sm" c="dimmed">Connect RingCentral to load monthly call analytics.</Text>
+          <Text size="sm" c="dimmed">Connect RingCentral to load call analytics for the last 30 days.</Text>
         ) : null}
       </Stack>
     </Card>

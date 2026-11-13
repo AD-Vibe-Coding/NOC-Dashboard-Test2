@@ -5,13 +5,14 @@ export interface RingCentralQueueMetric {
   abandoned: number;
   missed: number;
   system_handled: number;
+  ringing_calls: number;
   avg_handle_seconds: number;
   avg_wait_seconds: number;
 }
 
 export interface RingCentralAnalyticsResponse {
   source: "ringcentral";
-  month: string;
+  period: "last_30_days";
   from_date: string;
   to_date: string;
   records: RingCentralQueueMetric[];
@@ -24,8 +25,8 @@ export interface RingCentralAnalyticsError {
   error?: string;
 }
 
-export async function fetchRingCentralAnalytics(month: string): Promise<RingCentralAnalyticsResponse> {
-  const response = await fetch(`/api/ringcentral/call-analytics?month=${encodeURIComponent(month)}`, {
+export async function fetchRingCentralAnalytics(): Promise<RingCentralAnalyticsResponse> {
+  const response = await fetch("/api/ringcentral/call-analytics", {
     cache: "no-store",
   });
   const raw = await response.text();

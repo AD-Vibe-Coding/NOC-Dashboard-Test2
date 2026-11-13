@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   Badge,
@@ -7,7 +7,6 @@ import {
   Group,
   Loader,
   ScrollArea,
-  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -30,31 +29,6 @@ import {
 } from "../../lib/ringcentral-analytics";
 
 type AnalyticsResponse = RingCentralAnalyticsResponse;
-
-function currentPacificMonth() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/Los_Angeles",
-    year: "numeric",
-    month: "2-digit",
-  }).formatToParts(new Date());
-  return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
-}
-
-function recentMonths() {
-  const current = currentPacificMonth().split("-").map(Number);
-  const earliestAllowed = Date.now() - 184 * 24 * 60 * 60 * 1000;
-  const options: { value: string; label: string }[] = [];
-  for (let offset = 0; offset < 12; offset += 1) {
-    const date = new Date(Date.UTC(current[0], current[1] - 1 - offset, 1));
-    if (date.getTime() < earliestAllowed) break;
-    const value = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-    options.push({
-      value,
-      label: date.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }),
-    });
-  }
-  return options;
-}
 
 function formatSeconds(seconds: number) {
   if (seconds <= 0) return "0s";
@@ -84,19 +58,17 @@ function MetricCard({ label, value, color, icon }: { label: string; value: strin
 }
 
 export function ZoomCallMetricsWidget() {
-  const [month, setMonth] = useState(currentPacificMonth);
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
-  const monthOptions = useMemo(() => recentMonths(), []);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     setErrorCode(null);
     try {
-      const response = await fetchRingCentralAnalytics(month);
+      const response = await fetchRingCentralAnalytics();
       setData(response);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -104,11 +76,11 @@ export function ZoomCallMetricsWidget() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void refresh();
-  }, [month]);
+  }, [refresh]);
 
   const queueRows = data?.records ?? [];
   const totals = useMemo(() => queueRows.reduce(
@@ -118,41 +90,38 @@ export function ZoomCallMetricsWidget() {
       abandoned: acc.abandoned + row.abandoned,
       missed: acc.missed + row.missed,
       system_handled: acc.system_handled + row.system_handled,
+      ringing_calls: acc.ringing_calls + row.ringing_calls,
       handle_seconds: acc.handle_seconds + row.avg_handle_seconds * row.answered,
-      wait_seconds: acc.wait_seconds + row.avg_wait_seconds * row.total,
+      wait_seconds: acc.wait_seconds + row.avg_wait_seconds * row.ringing_calls,
     }),
-    { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0, handle_seconds: 0, wait_seconds: 0 },
+    { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0, ringing_calls: 0, handle_seconds: 0, wait_seconds: 0 },
   ), [queueRows]);
 
   const avgHandle = totals.answered > 0 ? totals.handle_seconds / totals.answered : 0;
-  const avgWait = totals.total > 0 ? totals.wait_seconds / totals.total : 0;
+  const avgWait = totals.ringing_calls > 0 ? totals.wait_seconds / totals.ringing_calls : 0;
+  const dateRange = data ? `${data.from_date} – ${data.to_date}` : "";
 
   return (
     <WidgetFrame
       title="RingCentral Call Metrics"
-      subtitle={`${month} queue call analytics`}
+      subtitle={dateRange ? `Last 30 days · ${dateRange} (Pacific time)` : "Rolling last 30 days of queue call analytics"}
       icon={IconPhone}
       iconColor="green"
       loading={loading}
       onRefresh={refresh}
-      status={data ? { label: "RINGCENTRAL", color: "green", tooltip: `Showing ${month} call analytics for Mobility + Network queues` } : undefined}
+      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing last 30 days (${dateRange}) for Mobility + Network queues` } : undefined}
     >
       <Stack gap="lg">
-        <Group justify="space-between" align="end" wrap="wrap">
-          <Select
-            label="Reporting month"
-            data={monthOptions}
-            value={month}
-            onChange={(value) => value && setMonth(value)}
-            w={220}
-            searchable
-            nothingFoundMessage="No months found"
-          />
+        <Group justify="space-between" align="center" wrap="wrap">
+          <Group gap="xs">
+            <Badge variant="light" color="green">Last 30 days</Badge>
+            {dateRange && <Text size="sm" c="dimmed">{dateRange} · Pacific time</Text>}
+          </Group>
           <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => void refresh()} loading={loading}>
             Refresh analytics
           </Button>
         </Group>
-        {data?.warning && (
+        {data?.warning && queueRows.length > 0 && (
           <Alert icon={<IconAlertTriangle size={16} />} color="yellow" variant="light" radius="md">
             <Text size="sm">{data.warning}</Text>
           </Alert>
@@ -169,16 +138,29 @@ export function ZoomCallMetricsWidget() {
             </Stack>
           </Alert>
         )}
+        {data && queueRows.length === 0 && !error && (
+          <Alert
+            icon={<IconAlertTriangle size={16} />}
+            color="gray"
+            variant="light"
+            radius="md"
+            title={data.queues_found.length ? "No call records in this period" : "No support queues found"}
+          >
+            {data.queues_found.length
+              ? `RingCentral is connected and returned no inbound call aggregates for ${dateRange}.`
+              : data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."}
+          </Alert>
+        )}
 
-        <SimpleGrid cols={{ base: 2, sm: 5 }} spacing="sm">
+        {queueRows.length > 0 && <SimpleGrid cols={{ base: 2, sm: 5 }} spacing="sm">
           <MetricCard label="Total Calls" value={totals.total.toLocaleString()} color="blue" icon={<IconPhoneCall size={14} />} />
           <MetricCard label="Answered" value={totals.answered.toLocaleString()} color="green" icon={<IconPhoneIncoming size={14} />} />
           <MetricCard label="Abandoned" value={totals.abandoned.toLocaleString()} color="red" icon={<IconPhoneX size={14} />} />
           <MetricCard label="Missed" value={totals.missed.toLocaleString()} color="orange" icon={<IconPhoneOff size={14} />} />
           <MetricCard label="Voicemail / Auto" value={totals.system_handled.toLocaleString()} color="gray" icon={<IconPhone size={14} />} />
-        </SimpleGrid>
+        </SimpleGrid>}
 
-        <Group gap="xl" wrap="wrap">
+        {queueRows.length > 0 && <Group gap="xl" wrap="wrap">
           <div>
             <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Average Handle</Text>
             <Text size="lg" fw={700} ff="monospace">{formatSeconds(avgHandle)}</Text>
@@ -195,9 +177,9 @@ export function ZoomCallMetricsWidget() {
               ))}
             </Group>
           </div>
-        </Group>
+        </Group>}
 
-        <Card withBorder radius="md" p={0}>
+        {queueRows.length > 0 && <Card withBorder radius="md" p={0}>
           <ScrollArea.Autosize mah={420}>
             {loading && !data ? (
               <Group justify="center" p="xl"><Loader size="sm" /></Group>
@@ -232,7 +214,7 @@ export function ZoomCallMetricsWidget() {
                     <Table.Tr>
                       <Table.Td colSpan={8}>
                         <Text size="sm" c="dimmed" ta="center" py="lg">
-                          No {month} call analytics found for the configured Mobility or Network queues.
+                          No queue call analytics were returned for the last 30 days.
                         </Text>
                       </Table.Td>
                     </Table.Tr>
@@ -241,7 +223,7 @@ export function ZoomCallMetricsWidget() {
               </Table>
             )}
           </ScrollArea.Autosize>
-        </Card>
+        </Card>}
       </Stack>
     </WidgetFrame>
   );

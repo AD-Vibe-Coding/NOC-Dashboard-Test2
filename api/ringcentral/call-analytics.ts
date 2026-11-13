@@ -14,70 +14,33 @@ type QueueMetrics = {
   abandoned: number;
   missed: number;
   system_handled: number;
+  ringing_calls: number;
   avg_handle_seconds: number;
   avg_wait_seconds: number;
 };
 
 const TIME_ZONE = "America/Los_Angeles";
-const MAX_HISTORY_DAYS = 184;
+const REPORTING_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const TARGET_QUEUE_TERMS = ["mobility", "network"];
 
-function currentPacificMonth() {
+function pacificDateString(date: Date) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: TIME_ZONE,
     year: "numeric",
     month: "2-digit",
-  }).formatToParts(new Date());
-  const year = parts.find((part) => part.type === "year")?.value ?? "";
-  const month = parts.find((part) => part.type === "month")?.value ?? "";
-  return `${year}-${month}`;
-}
-
-function zonedMidnightUtc(dateKey: string) {
-  const [year, month, day] = dateKey.split("-").map(Number);
-  const targetWallTime = Date.UTC(year, month - 1, day, 0, 0, 0);
-  let guess = targetWallTime;
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: TIME_ZONE,
-    year: "numeric",
-    month: "2-digit",
     day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const parts = formatter.formatToParts(new Date(guess));
-    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
-    const representedWallTime = Date.UTC(
-      get("year"),
-      get("month") - 1,
-      get("day"),
-      get("hour"),
-      get("minute"),
-      get("second"),
-    );
-    const correction = targetWallTime - representedWallTime;
-    if (correction === 0) break;
-    guess += correction;
-  }
-
-  return new Date(guess).toISOString();
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
 }
 
-function monthRange(month: string) {
-  const [year, monthNumber] = month.split("-").map(Number);
-  const fromDate = `${month}-01`;
-  const nextMonth = new Date(Date.UTC(year, monthNumber, 1));
-  const toExclusiveDate = `${nextMonth.getUTCFullYear()}-${String(nextMonth.getUTCMonth() + 1).padStart(2, "0")}-01`;
-  const lastDay = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+function last30DayRange(now = new Date()) {
+  const from = new Date(now.getTime() - REPORTING_WINDOW_MS);
   return {
-    fromDate,
-    toDate: `${month}-${String(lastDay).padStart(2, "0")}`,
-    timeFrom: zonedMidnightUtc(fromDate),
-    timeTo: zonedMidnightUtc(toExclusiveDate),
+    fromDate: pacificDateString(from),
+    toDate: pacificDateString(now),
+    timeFrom: from.toISOString(),
+    timeTo: now.toISOString(),
   };
 }
 
@@ -151,18 +114,25 @@ function getRows(payload: any): any[] {
   return candidates.find(Array.isArray) ?? [];
 }
 
-function rowQueueId(row: any) {
+function queueGroupingValue(row: any) {
   const dimensions = row?.grouping ?? row?.key ?? row?.dimensions ?? row?.queue ?? {};
-  return String(
-    dimensions?.id ?? dimensions?.queueId ?? dimensions?.Queues?.id ?? dimensions?.queues?.id ?? row?.queueId ?? row?.id ?? "",
-  ).trim();
+  if (Array.isArray(dimensions)) {
+    return dimensions.find((item) => /queues?/i.test(String(item?.name ?? item?.key ?? item?.type ?? ""))) ?? {};
+  }
+  return dimensions?.Queues ?? dimensions?.queues ?? dimensions?.Queue ?? dimensions?.queue ?? dimensions;
+}
+
+function rowQueueId(row: any) {
+  const value = queueGroupingValue(row);
+  const record = asRecord(value);
+  const id = record.id ?? record.queueId ?? record.key ?? record.value ?? row?.queueId ?? row?.groupId ?? row?.id;
+  return String(id ?? (typeof value === "string" || typeof value === "number" ? value : "")).trim();
 }
 
 function rowQueueName(row: any) {
-  const dimensions = row?.grouping ?? row?.key ?? row?.dimensions ?? row?.queue ?? {};
-  return String(
-    dimensions?.name ?? dimensions?.queueName ?? dimensions?.Queues?.name ?? dimensions?.queues?.name ?? row?.queueName ?? row?.name ?? "",
-  ).trim();
+  const value = queueGroupingValue(row);
+  const record = asRecord(value);
+  return String(record.name ?? record.queueName ?? record.label ?? row?.queueName ?? row?.groupName ?? row?.name ?? "").trim();
 }
 
 function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
@@ -192,6 +162,7 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
     abandoned,
     missed,
     system_handled: systemHandled,
+    ringing_calls: ringingCalls,
     avg_handle_seconds: answered > 0 ? (talkSeconds + holdSeconds) / answered : 0,
     avg_wait_seconds: ringingCalls > 0 ? ringingSeconds / ringingCalls : 0,
   };
@@ -218,10 +189,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const month = String(req.query.month ?? currentPacificMonth()).trim();
-  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
-    return res.status(400).json({ error: "month must be YYYY-MM" });
-  }
   if (!hasRingCentralConfig(req)) {
     return res.status(503).json({
       code: "RINGCENTRAL_NOT_CONFIGURED",
@@ -235,20 +202,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  const range = monthRange(month);
-  const earliestAllowed = Date.now() - MAX_HISTORY_DAYS * 24 * 60 * 60 * 1000;
-  if (new Date(range.timeFrom).getTime() < earliestAllowed) {
-    return res.status(400).json({
-      code: "RINGCENTRAL_DATE_RANGE_TOO_OLD",
-      error: `RingCentral Business Analytics supports a limited recent-history window. Choose a month starting within the last ${MAX_HISTORY_DAYS} days.`,
-    });
-  }
+  const range = last30DayRange();
 
   try {
     const config = getRingCentralConfig(req);
     const allQueues = await listCallQueues(req, res);
     const configuredNames = config.queueNames.map((name) => name.toLowerCase());
-    const matchingQueues = allQueues.filter((queue) => getQueueId(queue) && isTargetQueue(getQueueName(queue)));
+    const matchingQueues = [...new Map(
+      allQueues
+        .filter((queue) => getQueueId(queue) && isTargetQueue(getQueueName(queue)))
+        .map((queue) => [getQueueId(queue), queue]),
+    ).values()];
     const configuredMatches = matchingQueues.filter((queue) => {
       const name = getQueueName(queue).toLowerCase();
       return configuredNames.some((configuredName) => name.includes(configuredName) || configuredName.includes(name));
@@ -261,7 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (targetQueues.length === 0) {
       return res.status(200).json({
         source: "ringcentral",
-        month,
+        period: "last_30_days",
         from_date: range.fromDate,
         to_date: range.toDate,
         records: [],
@@ -321,15 +285,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const queueById = new Map(targetQueues.map((queue) => [getQueueId(queue), getQueueName(queue)]));
     const responseRows = getRows(payload);
-    const records = responseRows.map((row: any) => {
+    const records = responseRows.map((row: any, index: number) => {
       const id = rowQueueId(row);
-      const name = rowQueueName(row) || queueById.get(id) || (targetQueues.length === 1 ? getQueueName(targetQueues[0]) : "");
+      const name = rowQueueName(row)
+        || queueById.get(id)
+        || (targetQueues.length === 1 ? getQueueName(targetQueues[0]) : "")
+        // The request groups only by the ordered queue keys. Some RingCentral
+        // responses omit the dimension label, so retain the corresponding key
+        // when the API returns exactly one aggregate row per requested queue.
+        || (responseRows.length === targetQueues.length ? getQueueName(targetQueues[index]) : "");
       return name ? buildQueueMetrics(row, name) : null;
     }).filter((row: QueueMetrics | null): row is QueueMetrics => Boolean(row));
 
     return res.status(200).json({
       source: "ringcentral",
-      month,
+      period: "last_30_days",
       from_date: range.fromDate,
       to_date: range.toDate,
       records,
