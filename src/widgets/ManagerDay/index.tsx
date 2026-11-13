@@ -373,6 +373,12 @@ export function ManagerDayWidget() {
     }
   }, [identity?.name]);
   useEffect(() => { void loadMeetingTasks(); }, [loadMeetingTasks]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadMeetingTasks();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [loadMeetingTasks]);
 
   async function updateMeetingTaskStatus(task: MeetingTask, status: MeetingTaskStatus) {
     const nextProgress = status === "done" ? 100 : status === "open" ? 0 : (task.progress_percent ?? 0);
@@ -384,14 +390,24 @@ export function ManagerDayWidget() {
     }
   }
   async function completeOwnershipTask(task: OwnershipTask) {
-    setOwnershipTasks((prev) => prev.filter((item) => item.id !== task.id));
+    const completedAt = new Date().toISOString();
+    const patch = {
+      status: "completed",
+      completed_at: completedAt,
+      next_reminder_at: null,
+      last_error: "",
+    };
+    setOwnershipTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, ...patch } : item)));
+    setManagerOwnershipTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, ...patch } : item)));
     try {
-      await db.ownership_tasks.updateById(task.id, {
-        status: "completed",
-        completed_at: new Date().toISOString(),
-        next_reminder_at: null,
-        last_error: "",
+      const response = await fetch(`/api/my/ownership-tasks/${task.id}/complete`, {
+        method: "POST",
+        credentials: "include",
       });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(String(payload?.error ?? `Failed to complete ownership task (${response.status})`));
+      }
     } finally {
       await loadMeetingTasks();
     }

@@ -24,7 +24,7 @@
     },
     {
       "path": "/api/work-allotment/cron?action=generate",
-      "schedule": "10 10 * * *"
+      "schedule": "10 9 * * *"
     },
     {
       "path": "/api/work-allotment/cron?action=post-due",

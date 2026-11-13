@@ -237,7 +237,8 @@ function hydrateMetricRow(row, importSourceMap) {
   // cache must be forced to re-parse. Check the newest fields last.
   if (rest.source_type && rest.period_month && rest.ack_minutes !== undefined
       && rest.hour !== undefined && rest.is_maintenance !== undefined
-      && rest.is_weekend !== undefined && rest.ref_number !== undefined) {
+      && rest.is_weekend !== undefined && rest.ref_number !== undefined
+      && rest.date_key !== undefined) {
     return rest;
   }
 
@@ -298,6 +299,12 @@ function hydrateMetricRow(row, importSourceMap) {
     }
   }
 
+  const startish = raw.opened_date ?? raw["Start Time"] ?? raw.start_time ?? raw.add_dtm ?? raw["Date Opened"] ?? null;
+  const parsedStart = startish ? new Date(String(startish)) : null;
+  const dateKey = parsedStart && !Number.isNaN(parsedStart.getTime())
+    ? parsedStart.toISOString().slice(0, 10)
+    : null;
+
   const out = {
     ...rest,
     source_type: sourceType,
@@ -308,6 +315,7 @@ function hydrateMetricRow(row, importSourceMap) {
     is_maintenance: isMaintenance,
     is_weekend: isWeekend,
     hour: hour,
+    date_key: dateKey,
     // Identifier / context fields extracted from raw_json so the
     // frontend can show them in the Raw Data table without needing
     // to transmit the full raw_json blob.

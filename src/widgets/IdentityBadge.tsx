@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Avatar,
@@ -34,15 +34,11 @@ import {
 } from "../lib/roles";
 import { NOC_ROSTER } from "../lib/roster";
 
-// ── Impersonation helpers ─────────────────────────────────────────────────────
-const IMPERSONATE_KEY = "noc_impersonate_original";
-
-function getOriginalManager(): string | null {
-  return localStorage.getItem(IMPERSONATE_KEY);
-}
-function clearOriginalManager() {
-  localStorage.removeItem(IMPERSONATE_KEY);
-}
+// ── Manager impersonation helpers ────────────────────────────────────────────
+const MANAGER_IMPERSONATION_OPTIONS = NOC_ROSTER.map((name) => ({
+  value: name,
+  label: name,
+}));
 
 /* -------------------------------------------------------------------------- */
 /*                           Header IdentityBadge                             */
@@ -52,12 +48,11 @@ export function IdentityBadge() {
   const { identity, loading, devSignIn, impersonate, signOut, setRole } = useIdentity();
   const [opened, setOpened] = useState(false);
 
-  const originalManager = getOriginalManager();
-  const isImpersonating = !!originalManager && identity?.name !== originalManager;
+  const originalManager = identity?.impersonatedBy?.name ?? null;
+  const isImpersonating = !!identity?.impersonatedBy;
 
   async function returnToManager() {
     if (!originalManager) return;
-    clearOriginalManager();
     impersonate(originalManager);
     setOpened(false);
   }
@@ -166,7 +161,6 @@ export function IdentityBadge() {
         originalManager={originalManager}
         impersonate={impersonate}
         signOut={async () => {
-          clearOriginalManager();
           await signOut();
           setOpened(false);
         }}
@@ -256,7 +250,7 @@ function AccountModal({
   signOut,
   isImpersonating,
   originalManager,
-  impersonate: _impersonate,
+  impersonate,
   returnToManager,
 }: {
   opened: boolean;
@@ -269,6 +263,15 @@ function AccountModal({
   impersonate: (name: string) => void;
   returnToManager: () => Promise<void>;
 }) {
+  const isManager = (identity.impersonatedBy?.role ?? identity.role) === "manager";
+  const signedInManagerName = identity.impersonatedBy?.name ?? identity.name;
+  const [impersonationTarget, setImpersonationTarget] = useState<string | null>(identity.name);
+
+  const impersonationOptions = useMemo(
+    () => MANAGER_IMPERSONATION_OPTIONS.filter((option) => option.value !== signedInManagerName),
+    [signedInManagerName],
+  );
+
   return (
     <Modal
       opened={opened}
@@ -350,6 +353,70 @@ function AccountModal({
         )}
 
         <Divider />
+
+        {isManager && (
+          <>
+            <Box
+              p="xs"
+              style={{
+                background: "var(--mantine-color-dark-7)",
+                borderRadius: 8,
+                borderLeft: "3px solid var(--mantine-color-orange-6)",
+              }}
+            >
+              <Stack gap="xs">
+                <Box>
+                  <Text size="xs" fw={600} c="dimmed" tt="uppercase" mb={4}>
+                    Manager switch user
+                  </Text>
+                  <Text size="xs" c="dimmed">
+                    Signed in as <b>{signedInManagerName}</b>. Use this to preview the dashboard as another roster user without logging out.
+                  </Text>
+                </Box>
+                <Group align="end" wrap="wrap">
+                  <Select
+                    label="View dashboard as"
+                    placeholder="Select roster user"
+                    data={impersonationOptions}
+                    value={isImpersonating ? identity.name : impersonationTarget}
+                    onChange={setImpersonationTarget}
+                    searchable
+                    clearable={false}
+                    flex={1}
+                    miw={260}
+                    comboboxProps={{ withinPortal: true }}
+                  />
+                  <Button
+                    color="orange"
+                    variant="light"
+                    leftSection={<IconSwitch size={14} />}
+                    disabled={!impersonationTarget || impersonationTarget === signedInManagerName}
+                    onClick={() => {
+                      if (!impersonationTarget) return;
+                      impersonate(impersonationTarget);
+                    }}
+                  >
+                    {isImpersonating ? "Switch user" : "View as user"}
+                  </Button>
+                  {isImpersonating && (
+                    <Button
+                      variant="default"
+                      leftSection={<IconArrowBack size={14} />}
+                      onClick={() => returnToManager()}
+                    >
+                      Return to me
+                    </Button>
+                  )}
+                </Group>
+                <Text size="xs" c="dimmed">
+                  This affects the dashboard identity in your current browser only. It does not create a new Google session.
+                </Text>
+              </Stack>
+            </Box>
+
+            <Divider />
+          </>
+        )}
 
         {/* Role display */}
         <Box

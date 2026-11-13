@@ -73,7 +73,7 @@ const PILLARS = [
 
 const TOOLS = [
   { icon: IconLayoutDashboard, color: "appdirect", label: "My Day",            desc: "Google Calendar + personal task planner for the shift" },
-  { icon: IconHeadset,         color: "blue",       label: "Zoom Queue",        desc: "Live in-queue vs out, per-queue breakdown, break reasons" },
+  { icon: IconHeadset,         color: "blue",       label: "Team Availability", desc: "Live in-queue vs out, per-queue breakdown, break reasons" },
   { icon: IconCoffee,          color: "orange",     label: "Break Tracker",     desc: "Start/end breaks with Slack alerts and live duration timers" },
   { icon: IconPhone,           color: "green",      label: "Zoom Call Metrics", desc: "Jan–Apr 2026 inbound call volume, handle time, and trends" },
   { icon: IconChartBar,        color: "green",      label: "Performance",       desc: "Excel-imported scorecards with per-agent drill-down" },

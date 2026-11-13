@@ -182,6 +182,13 @@ const ALIASES: Array<[string, string]> = [
   ["mohammed zubair", "Mohammed Zubairuddin"],
   ["mohammed zubairuddin", "Mohammed Zubairuddin"],
 
+  // RingCentral variants seen in queue/presence exports
+  ["bala pranav dandibhotla", "Pranav Dandibhotla"],
+  ["abhishek benarji teegala", "Abhishek Benarji"],
+  ["abishek benarji teegala", "Abhishek Benarji"],
+  ["hamza rahmani umme", "Hamza Rahmani"],
+  ["akram ahmed mohammed", "Akram Ahmed"],
+
   // Akram Ahmed — also seen as "Mohammed Akram Ahmed" (full legal name)
   ["akram", "Akram Ahmed"],
   ["akram ahmed", "Akram Ahmed"],
@@ -261,6 +268,7 @@ const ALIASES: Array<[string, string]> = [
   // Lokesh Naik Banavath
   ["lokesh", "Lokesh Naik Banavath"],
   ["lokesh naik", "Lokesh Naik Banavath"],
+  ["lokesh banavath", "Lokesh Naik Banavath"],
   ["banavath", "Lokesh Naik Banavath"],
   ["lokesh naik banavath", "Lokesh Naik Banavath"],
 

@@ -1,11 +1,21 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
 import { dispatchDueOwnershipTaskReminders, ensureDailyWorkAllotmentJobs, postDueScheduledWorkAllotments, recordAutomationRun, reconcilePlannedWorkAllotmentJobs, syncWeekendFairnessIfDue } from "../_lib/work-allotment-automation.js";
+import { syncFairnessSheetForOperationalDate } from "../_lib/google-sheets-work-allotment.js";
 
 function parseNow(value: unknown) {
   if (!value) return new Date();
   const parsed = new Date(String(value));
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+function parseOperationalDate(value: unknown, fallbackNow: Date) {
+  const raw = String(value ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const year = fallbackNow.getUTCFullYear();
+  const month = String(fallbackNow.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(fallbackNow.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -56,6 +66,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         note: `manual_post_due:${weekendFairness.reason ?? "weekend_sync"}`,
       });
       return res.status(200).json({ ok: true, result: { ...result, ownershipReminders, weekendFairness } });
+    }
+
+    if (action === "sync-fairness") {
+      const operationalDate = parseOperationalDate(req.body?.operationalDate, now);
+      const result = await syncFairnessSheetForOperationalDate({ operationalDate, jobs: [] });
+      await recordAutomationRun({
+        action: "manual-sync-fairness",
+        ran_at: now.toISOString(),
+        generation_triggered: false,
+        generation_skipped: true,
+        due_count: 0,
+        posted_count: 0,
+        failure_count: result.ok ? 0 : 1,
+        note: `manual_sync_fairness:${operationalDate}:${result.skipped ? (result.reason ?? "skipped") : "ok"}`,
+      });
+      return res.status(200).json({ ok: true, result });
     }
 
     const generation = await reconcilePlannedWorkAllotmentJobs({ now });

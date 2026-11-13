@@ -52,7 +52,9 @@ import {
 } from "./team";
 import {
   aggregateMetrics,
+  buildWorkloadContext,
   diagnoseMemberTickets,
+  filterMetrics,
   isMaintenanceTicket,
   listAvailablePeriods,
   SHIFT_LABELS,
@@ -66,12 +68,15 @@ import {
   type SourceBucket,
 } from "./data";
 import { type SourceType } from "./import";
+import { ActiveFilterChips } from "./FilterChips";
+import { KPI_BY_KEY, type KpiKey } from "./kpiConfig";
 import { RawDataModal, type DisputeInfo } from "./RawDataModal";
 import { DisputeForm, type DisputeField } from "./DisputeForm";
 
 interface Props {
   metrics: PerformanceMetric[];
   scopedMember: string | null;
+  isManager?: boolean;
   /** Optional: caller (the widget root) can provide the re-derive action so
    *  the diagnostic banner can offer a one-click "fix it" button. */
   onRederive?: () => void;
@@ -90,6 +95,7 @@ interface Props {
 export function PerformanceDashboard({
   metrics,
   scopedMember,
+  isManager = false,
   onRederive,
   isRederiving,
   currentUserName,
@@ -144,6 +150,13 @@ export function PerformanceDashboard({
   const [dayFilter, setDayFilter] = useState<DayFilter>("all");
   const [shiftFilter, setShiftFilter] = useState<ShiftFilter>("all");
   const [rawDataMember, setRawDataMember] = useState<string | null>(null);
+  const [rawDrillContext, setRawDrillContext] = useState<{
+    metricKey?: KpiKey | null;
+    month?: string | null;
+    sourceTab?: "tickets" | "calls" | "tasks" | "audits";
+    title?: string;
+    description?: string;
+  } | null>(null);
 
   const periods = useMemo(() => listAvailablePeriods(metrics), [metrics]);
 
@@ -176,10 +189,71 @@ export function PerformanceDashboard({
     return Array.from(members);
   }, [scopedMember]);
 
+  const filteredMetrics = useMemo(() => {
+    const scopeRows = scopedMember
+      ? metrics.filter((metric) => metric.member_name === scopedMember)
+      : metrics;
+    return filterMetrics(scopeRows, options);
+  }, [metrics, scopedMember, options]);
+
+  const workload = useMemo(() => buildWorkloadContext(filteredMetrics), [filteredMetrics]);
+
   const summaries = useMemo(
     () => aggregateMetrics(metrics, summaryMembers, options),
     [metrics, summaryMembers, options.queue, options.period, options.excludeMaintenance, options.dayFilter, options.shiftFilter],
   );
+
+  const managerParity = useMemo(() => {
+    if (!isManager || !scopedMember) return null;
+    const managerScoped = aggregateMetrics(metrics, [scopedMember], options)[0] ?? null;
+    const simulatedSelf = aggregateMetrics(
+      metrics.filter((metric) => metric.member_name === scopedMember),
+      [scopedMember],
+      options,
+    )[0] ?? null;
+    if (!managerScoped || !simulatedSelf) return null;
+
+    const checks = [
+      { key: "tickets_acked" as KpiKey, label: "Tickets Acked" },
+      { key: "avg_ack_time" as KpiKey, label: "Avg Ack Time" },
+      { key: "within_24h" as KpiKey, label: "Within 24h" },
+      { key: "carrier_under_15" as KpiKey, label: "Carrier ≤ 15 min" },
+      { key: "inbound_calls" as KpiKey, label: "Inbound Calls" },
+      { key: "refused_calls" as KpiKey, label: "Refused Calls" },
+      { key: "tasks_worked" as KpiKey, label: "Tasks Worked" },
+      { key: "sla_met" as KpiKey, label: "SLA-Met" },
+    ].map((item) => {
+      const def = KPI_BY_KEY[item.key];
+      const managerValue = def.compute([managerScoped]).numeric;
+      const selfValue = def.compute([simulatedSelf]).numeric;
+      const matches =
+        managerValue === selfValue ||
+        (managerValue != null && selfValue != null && Math.abs(managerValue - selfValue) < 0.0001);
+      return { ...item, managerValue, selfValue, matches };
+    });
+
+    return {
+      allMatch: checks.every((check) => check.matches),
+      checks,
+    };
+  }, [isManager, scopedMember, metrics, options]);
+
+  function openMetricRows(
+    memberName: string | null,
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) {
+    setRawDataMember(memberName);
+    setRawDrillContext({
+      metricKey,
+      month: periodMode === "month" ? effectivePeriodValue : null,
+      sourceTab,
+      title,
+      description,
+    });
+  }
 
   // ---- Auto-diagnostic: do we have ticket rows that don't have a
   // period_month? If so the user almost certainly imported with a buggy
@@ -263,6 +337,35 @@ export function PerformanceDashboard({
         onShiftFilterChange={setShiftFilter}
       />
 
+      <Card withBorder radius="md" p="sm">
+        <Stack gap="xs">
+          <ActiveFilterChips
+            options={options}
+            rowCount={filteredMetrics.length}
+            scopeLabel={scopedMember ?? "Whole team"}
+          />
+          <Group gap="xs" wrap="wrap">
+            <Badge variant="outline" color="grape">
+              Scope source: {scopedMember ? (isManager ? "Manager drill-down" : "Self view") : "Team aggregate"}
+            </Badge>
+            <Badge variant="light" color="gray">
+              Active days: {workload.activeDays}
+            </Badge>
+            <Badge variant="light" color="gray">
+              Weekend load: {workload.weekendDays}
+            </Badge>
+            <Badge variant="light" color="gray">
+              Shifts covered: {workload.shiftsCovered.length || 0}
+            </Badge>
+            {workload.ticketsPerDay != null && (
+              <Badge variant="light" color="blue">
+                Tickets/day: {workload.ticketsPerDay.toFixed(1)}
+              </Badge>
+            )}
+          </Group>
+        </Stack>
+      </Card>
+
       {scopedMember ? (
         <MemberDetailView
           member={scopedMember}
@@ -272,7 +375,22 @@ export function PerformanceDashboard({
           activePeriodMonth={
             periodMode === "month" ? effectivePeriodValue : null
           }
-          onViewRawData={() => setRawDataMember(scopedMember)}
+          filterOptions={options}
+          workload={workload}
+          isManager={isManager}
+          paritySummary={managerParity}
+          onViewRawData={() =>
+            openMetricRows(
+              scopedMember,
+              "tickets_acked",
+              "tickets",
+              `Raw Data — ${scopedMember}`,
+              "Showing the currently filtered raw rows for this member. Use the KPI shortcuts below to jump to narrower row sets."
+            )
+          }
+          onOpenMetricRows={(metricKey, sourceTab, title, description) =>
+            openMetricRows(scopedMember, metricKey, sourceTab, title, description)
+          }
         />
       ) : (
         <TeamOverview
@@ -280,7 +398,11 @@ export function PerformanceDashboard({
           activePeriodMonth={
             periodMode === "month" ? effectivePeriodValue : null
           }
-          onViewRawData={setRawDataMember}
+          filterOptions={options}
+          workload={workload}
+          onOpenMetricRows={(memberName, metricKey, sourceTab, title, description) =>
+            openMetricRows(memberName, metricKey, sourceTab, title, description)
+          }
         />
       )}
 
@@ -288,7 +410,11 @@ export function PerformanceDashboard({
         memberName={rawDataMember}
         metrics={metrics}
         filterOptions={options}
-        onClose={() => setRawDataMember(null)}
+        drillContext={rawDrillContext ?? undefined}
+        onClose={() => {
+          setRawDataMember(null);
+          setRawDrillContext(null);
+        }}
         onDispute={
           currentUserName
             ? (m, f) => {
@@ -509,7 +635,7 @@ function FilterBar({
             <IconClock size={12} />
           </ThemeIcon>
           <Tooltip
-            label="Filter all KPIs by shift. Overlap hours (11 AM, 7 PM, 3 AM) are included in both adjacent shifts."
+            label="Filter all KPIs by shift. Overlap hours (10 AM, 6 PM, 2 AM) are included in both adjacent shifts."
             withinPortal
             multiline
             w={260}
@@ -555,11 +681,21 @@ function formatMonthLabel(yyyyMm: string): string {
 function TeamOverview({
   summaries,
   activePeriodMonth,
-  onViewRawData,
+  filterOptions,
+  workload,
+  onOpenMetricRows,
 }: {
   summaries: MemberSummary[];
   activePeriodMonth: string | null;
-  onViewRawData: (name: string) => void;
+  filterOptions: AggregateOptions;
+  workload: ReturnType<typeof buildWorkloadContext>;
+  onOpenMetricRows: (
+    memberName: string | null,
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
 }) {
   // Track which source types have any data — only render their cards
   const hasTickets = summaries.some((s) => (s.byType.tickets?.rowCount ?? 0) > 0);
@@ -578,10 +714,20 @@ function TeamOverview({
             {LOCKED_TEAM.length} members
           </Badge>
         </Group>
-        <Text size="xs" c="dimmed">
-          Aggregated across all imports matching the filters above. Manager
-          view — drill into individuals via the View dropdown.
-        </Text>
+        <Stack gap={6}>
+          <Text size="xs" c="dimmed">
+            Aggregated across all imports matching the filters above. Manager
+            view — drill into individuals via the View dropdown.
+          </Text>
+          <ActiveFilterChips options={filterOptions} rowCount={undefined} scopeLabel="Whole team" />
+          <Group gap="xs" wrap="wrap">
+            <Badge variant="light" color="gray">Active days: {workload.activeDays}</Badge>
+            <Badge variant="light" color="gray">Weekend days: {workload.weekendDays}</Badge>
+            <Badge variant="light" color="gray">Shifts covered: {workload.shiftsCovered.length || 0}</Badge>
+            {workload.ticketsPerDay != null && <Badge variant="light" color="blue">Tickets/day: {workload.ticketsPerDay.toFixed(1)}</Badge>}
+            {workload.callsPerDay != null && <Badge variant="light" color="green">Calls/day: {workload.callsPerDay.toFixed(1)}</Badge>}
+          </Group>
+        </Stack>
       </Box>
 
       <Grid gutter="md">
@@ -590,18 +736,24 @@ function TeamOverview({
             <TicketsKpiCard
               summaries={summaries}
               activePeriodMonth={activePeriodMonth}
-              onViewRawData={onViewRawData}
+              onOpenMetricRows={onOpenMetricRows}
             />
           </Grid.Col>
         )}
         {hasCalls && (
           <Grid.Col span={{ base: 12, lg: 12 }}>
-            <CallsKpiCard summaries={summaries} onViewRawData={onViewRawData} />
+            <CallsKpiCard
+              summaries={summaries}
+              onOpenMetricRows={onOpenMetricRows}
+            />
           </Grid.Col>
         )}
         {hasTasks && (
           <Grid.Col span={{ base: 12, lg: 12 }}>
-            <TasksKpiCard summaries={summaries} onViewRawData={onViewRawData} />
+            <TasksKpiCard
+              summaries={summaries}
+              onOpenMetricRows={onOpenMetricRows}
+            />
           </Grid.Col>
         )}
         {/* Generic legacy cards for queue/audit until they get
@@ -627,11 +779,17 @@ function TeamOverview({
 function TicketsKpiCard({
   summaries,
   activePeriodMonth,
-  onViewRawData,
+  onOpenMetricRows,
 }: {
   summaries: MemberSummary[];
   activePeriodMonth: string | null;
-  onViewRawData: (name: string) => void;
+  onOpenMetricRows: (
+    memberName: string | null,
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
 }) {
   const [diagMember, setDiagMember] = useState<string | null>(null);
 
@@ -755,6 +913,13 @@ function TicketsKpiCard({
           </Group>
         </Group>
 
+        <Group gap="xs" wrap="wrap">
+          <Button size="compact-xs" variant="light" color="blue" onClick={() => onOpenMetricRows(null, "tickets_acked", "tickets", "Raw Ticket Rows", "All ticket rows matching the active dashboard filters.")}>All ticket rows</Button>
+          <Button size="compact-xs" variant="light" color="grape" onClick={() => onOpenMetricRows(null, "within_24h", "tickets", "Tickets Closed Within 24h", "Ticket rows used to compute the Within 24h KPI under the active filters.")}>Within 24h</Button>
+          <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows(null, "carrier_under_15", "tickets", "Carrier ≤ 15 min", "Ticket rows with carrier timing data under the active filters.")}>Carrier ≤ 15 min</Button>
+          <Button size="compact-xs" variant="light" color="gray" onClick={() => onOpenMetricRows(null, "avg_ack_time", "tickets", "Ack Time Samples", "Ticket rows contributing to Avg Ack Time under the active filters.")}>Ack samples</Button>
+        </Group>
+
         <Stack gap={4}>
           {rows.map((r) => {
             const tier = tierFor(r.name);
@@ -834,7 +999,15 @@ function TicketsKpiCard({
                     size="sm"
                     variant="subtle"
                     color="gray"
-                    onClick={() => onViewRawData(r.name)}
+                    onClick={() =>
+                      onOpenMetricRows(
+                        r.name,
+                        "tickets_acked",
+                        "tickets",
+                        `Raw Ticket Rows — ${r.name}`,
+                        "Ticket rows for this member under the current dashboard filters."
+                      )
+                    }
                     aria-label="Raw data"
                   >
                     <IconTable size={14} />
@@ -1130,7 +1303,19 @@ function TicketDiagnosticsModal({
 // Per-member rows: answered + refused
 // =============================================================================
 
-function CallsKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]; onViewRawData: (name: string) => void }) {
+function CallsKpiCard({
+  summaries,
+  onOpenMetricRows,
+}: {
+  summaries: MemberSummary[];
+  onOpenMetricRows: (
+    memberName: string | null,
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
+}) {
   const rows = summaries
     .map((s) => {
       const b = s.byType.calls;
@@ -1217,6 +1402,13 @@ function CallsKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]
           </Group>
         </Group>
 
+        <Group gap="xs" wrap="wrap">
+          <Button size="compact-xs" variant="light" color="green" onClick={() => onOpenMetricRows(null, "inbound_calls", "calls", "Answered Call Rows", "Call rows contributing to answered inbound call volume under the active filters.")}>Answered calls</Button>
+          <Button size="compact-xs" variant="light" color="red" onClick={() => onOpenMetricRows(null, "refused_calls", "calls", "Refused Call Rows", "Call rows contributing to refused / no-answer counts under the active filters.")}>Refused calls</Button>
+          <Button size="compact-xs" variant="light" color="gray" onClick={() => onOpenMetricRows(null, "avg_handle_time", "calls", "Handle Time Samples", "Call rows with Duration values used for Avg Handle Time.")}>Handle samples</Button>
+          <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows(null, "avg_speed_of_answer", "calls", "Speed of Answer Samples", "Call rows with Wait Time values used for Avg Speed of Answer.")}>Speed-of-answer samples</Button>
+        </Group>
+
         <Stack gap={4}>
           {rows.map((r) => {
             const tier = tierFor(r.name);
@@ -1295,7 +1487,15 @@ function CallsKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]
                     size="sm"
                     variant="subtle"
                     color="gray"
-                    onClick={() => onViewRawData(r.name)}
+                    onClick={() =>
+                      onOpenMetricRows(
+                        r.name,
+                        "inbound_calls",
+                        "calls",
+                        `Raw Call Rows — ${r.name}`,
+                        "Call rows for this member under the current dashboard filters."
+                      )
+                    }
                     aria-label="Raw data"
                   >
                     <IconTable size={14} />
@@ -1316,7 +1516,19 @@ function CallsKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]
 // Per-member rows: tasks + SLA-Met %
 // =============================================================================
 
-function TasksKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]; onViewRawData: (name: string) => void }) {
+function TasksKpiCard({
+  summaries,
+  onOpenMetricRows,
+}: {
+  summaries: MemberSummary[];
+  onOpenMetricRows: (
+    memberName: string | null,
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
+}) {
   const rows = summaries
     .map((s) => {
       const b = s.byType.tasks;
@@ -1383,6 +1595,11 @@ function TasksKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]
               color="teal"
             />
           </Group>
+        </Group>
+
+        <Group gap="xs" wrap="wrap">
+          <Button size="compact-xs" variant="light" color="orange" onClick={() => onOpenMetricRows(null, "tasks_worked", "tasks", "Task Rows", "Task rows matching the active dashboard filters.")}>All task rows</Button>
+          <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows(null, "sla_met", "tasks", "SLA-Met Task Rows", "Task rows contributing to the SLA-Met KPI under the active filters.")}>SLA rows</Button>
         </Group>
 
         <Stack gap={4}>
@@ -1455,7 +1672,15 @@ function TasksKpiCard({ summaries, onViewRawData }: { summaries: MemberSummary[]
                     size="sm"
                     variant="subtle"
                     color="gray"
-                    onClick={() => onViewRawData(r.name)}
+                    onClick={() =>
+                      onOpenMetricRows(
+                        r.name,
+                        "tasks_worked",
+                        "tasks",
+                        `Raw Task Rows — ${r.name}`,
+                        "Task rows for this member under the current dashboard filters."
+                      )
+                    }
                     aria-label="Raw data"
                   >
                     <IconTable size={14} />
@@ -1691,12 +1916,36 @@ function MemberDetailView({
   member,
   summary,
   activePeriodMonth,
+  filterOptions,
+  workload,
+  isManager,
+  paritySummary,
   onViewRawData,
+  onOpenMetricRows,
 }: {
   member: string;
   summary: MemberSummary | null;
   activePeriodMonth: string | null;
+  filterOptions: AggregateOptions;
+  workload: ReturnType<typeof buildWorkloadContext>;
+  isManager: boolean;
+  paritySummary: {
+    allMatch: boolean;
+    checks: Array<{
+      key: KpiKey;
+      label: string;
+      managerValue: number | null;
+      selfValue: number | null;
+      matches: boolean;
+    }>;
+  } | null;
   onViewRawData: () => void;
+  onOpenMetricRows: (
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
 }) {
   const [diagOpen, setDiagOpen] = useState(false);
   const tier = tierFor(member);
@@ -1746,12 +1995,15 @@ function MemberDetailView({
             </Box>
             <Box>
               <Title order={4}>{member}</Title>
-              <Group gap="xs">
+              <Group gap="xs" wrap="wrap">
                 {tier && (
                   <Badge variant="light" color={TIER_COLORS[tier]}>
                     {TIER_LABELS[tier]}
                   </Badge>
                 )}
+                <Badge variant="outline" color="grape">
+                  Scope source: {isManager ? "Manager drill-down" : "Self view"}
+                </Badge>
               </Group>
             </Box>
           </Group>
@@ -1785,6 +2037,17 @@ function MemberDetailView({
             )}
           </Group>
         </Group>
+        <Stack gap={8} mt="sm">
+          <ActiveFilterChips options={filterOptions} scopeLabel={member} />
+          <Group gap="xs" wrap="wrap">
+            <Badge variant="light" color="gray">Active days: {workload.activeDays}</Badge>
+            <Badge variant="light" color="gray">Weekend days: {workload.weekendDays}</Badge>
+            <Badge variant="light" color="gray">Shifts covered: {workload.shiftsCovered.length || 0}</Badge>
+            {workload.ticketsPerDay != null && <Badge variant="light" color="blue">Tickets/day: {workload.ticketsPerDay.toFixed(1)}</Badge>}
+            {workload.callsPerDay != null && <Badge variant="light" color="green">Calls/day: {workload.callsPerDay.toFixed(1)}</Badge>}
+            {workload.tasksPerDay != null && <Badge variant="light" color="orange">Tasks/day: {workload.tasksPerDay.toFixed(1)}</Badge>}
+          </Group>
+        </Stack>
       </Card>
 
       <TicketDiagnosticsModal
@@ -1792,6 +2055,55 @@ function MemberDetailView({
         activePeriodMonth={activePeriodMonth}
         onClose={() => setDiagOpen(false)}
       />
+
+      {paritySummary && (
+        <Card
+          withBorder
+          radius="md"
+          p="md"
+          bg={paritySummary.allMatch ? "teal.0" : "red.0"}
+          style={{ borderColor: paritySummary.allMatch ? "var(--mantine-color-teal-4)" : "var(--mantine-color-red-4)" }}
+        >
+          <Stack gap="xs">
+            <Group justify="space-between" wrap="wrap">
+              <Group gap="xs" wrap="wrap">
+                <Badge variant="light" color={paritySummary.allMatch ? "teal" : "red"}>
+                  {paritySummary.allMatch ? "Parity check passed" : "Parity mismatch detected"}
+                </Badge>
+                <Text size="xs" c="dimmed">
+                  Manager drill-down compared against a simulated self-view for the same member and active filters.
+                </Text>
+              </Group>
+              <Button
+                size="compact-xs"
+                variant="light"
+                color={paritySummary.allMatch ? "teal" : "red"}
+                onClick={() =>
+                  onOpenMetricRows(
+                    "tickets_acked",
+                    "tickets",
+                    `Parity raw rows — ${member}`,
+                    "Open the raw rows behind this member scope to verify manager and self views are using the same filtered records."
+                  )
+                }
+              >
+                Open parity rows
+              </Button>
+            </Group>
+            <Group gap="xs" wrap="wrap">
+              {paritySummary.checks.map((check) => (
+                <Badge
+                  key={check.key}
+                  variant="light"
+                  color={check.matches ? "teal" : "red"}
+                >
+                  {check.label}: {check.matches ? "match" : "mismatch"}
+                </Badge>
+              ))}
+            </Group>
+          </Stack>
+        </Card>
+      )}
 
       {!hasData ? (
         <Card withBorder radius="md" p="xl">
@@ -1807,21 +2119,21 @@ function MemberDetailView({
           {/* Tickets — always shown */}
           <Grid.Col span={{ base: 12, md: 6 }}>
             {tickets && tickets.rowCount > 0
-              ? <MemberTicketCard b={tickets} />
+              ? <MemberTicketCard b={tickets} onOpenMetricRows={onOpenMetricRows} />
               : <EmptySectionCard label="Tickets" icon={IconTicket} color="blue" />}
           </Grid.Col>
 
           {/* Calls — always shown */}
           <Grid.Col span={{ base: 12, md: 6 }}>
             {calls && calls.rowCount > 0
-              ? <MemberCallCard b={calls} />
+              ? <MemberCallCard b={calls} onOpenMetricRows={onOpenMetricRows} />
               : <EmptySectionCard label="Calls" icon={IconPhone} color="green" />}
           </Grid.Col>
 
           {/* Tasks — always shown */}
           <Grid.Col span={{ base: 12, md: 6 }}>
             {summary?.byType.tasks && summary.byType.tasks.rowCount > 0
-              ? <MemberTaskCard b={summary.byType.tasks} />
+              ? <MemberTaskCard b={summary.byType.tasks} onOpenMetricRows={onOpenMetricRows} />
               : <EmptySectionCard label="Tasks" icon={IconClipboardList} color="violet" />}
           </Grid.Col>
 
@@ -1867,7 +2179,18 @@ function EmptySectionCard({ label, icon: Icon, color }: { label: string; icon: C
   );
 }
 
-function MemberTicketCard({ b }: { b: SourceBucket }) {
+function MemberTicketCard({
+  b,
+  onOpenMetricRows,
+}: {
+  b: SourceBucket;
+  onOpenMetricRows: (
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
+}) {
   const avgAck =
     b.ackMinutesSamples > 0 ? b.ackMinutesSum / b.ackMinutesSamples : null;
   const avgMttr =
@@ -1898,6 +2221,12 @@ function MemberTicketCard({ b }: { b: SourceBucket }) {
           <IconTicket size={16} />
         </ThemeIcon>
         <Text fw={600}>Tickets</Text>
+      </Group>
+      <Group gap="xs" mb="sm" wrap="wrap">
+        <Button size="compact-xs" variant="light" color="blue" onClick={() => onOpenMetricRows("tickets_acked", "tickets", "Member Ticket Rows", "Ticket rows for this member under the active filters.")}>All rows</Button>
+        <Button size="compact-xs" variant="light" color="gray" onClick={() => onOpenMetricRows("avg_ack_time", "tickets", "Member Ack Samples", "Ticket rows contributing to Avg Ack Time for this member.")}>Ack samples</Button>
+        <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows("carrier_under_15", "tickets", "Member Carrier Rows", "Ticket rows with carrier timing data for this member.")}>Carrier rows</Button>
+        <Button size="compact-xs" variant="light" color="grape" onClick={() => onOpenMetricRows("within_24h", "tickets", "Member Within-24h Rows", "Ticket rows contributing to the Within 24h KPI for this member.")}>Within 24h rows</Button>
       </Group>
       <Grid gutter="sm">
         <Grid.Col span={6}>
@@ -1950,7 +2279,18 @@ function MemberTicketCard({ b }: { b: SourceBucket }) {
   );
 }
 
-function MemberCallCard({ b }: { b: SourceBucket }) {
+function MemberCallCard({
+  b,
+  onOpenMetricRows,
+}: {
+  b: SourceBucket;
+  onOpenMetricRows: (
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
+}) {
   const avgHandle =
     b.handleSecondsSamples > 0
       ? b.handleSecondsSum / b.handleSecondsSamples
@@ -1973,6 +2313,12 @@ function MemberCallCard({ b }: { b: SourceBucket }) {
           <IconPhone size={16} />
         </ThemeIcon>
         <Text fw={600}>Inbound Calls</Text>
+      </Group>
+      <Group gap="xs" mb="sm" wrap="wrap">
+        <Button size="compact-xs" variant="light" color="green" onClick={() => onOpenMetricRows("inbound_calls", "calls", "Member Call Rows", "Call rows for this member under the active filters.")}>All rows</Button>
+        <Button size="compact-xs" variant="light" color="red" onClick={() => onOpenMetricRows("refused_calls", "calls", "Member Refused Call Rows", "Call rows contributing to refused / no-answer counts for this member.")}>Refused rows</Button>
+        <Button size="compact-xs" variant="light" color="gray" onClick={() => onOpenMetricRows("avg_handle_time", "calls", "Member Handle Samples", "Call rows with Duration values for this member.")}>Handle samples</Button>
+        <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows("avg_speed_of_answer", "calls", "Member Wait Samples", "Call rows with Wait Time values for this member.")}>Wait samples</Button>
       </Group>
       <Grid gutter="sm">
         <Grid.Col span={6}>
@@ -2010,7 +2356,18 @@ function MemberCallCard({ b }: { b: SourceBucket }) {
   );
 }
 
-function MemberTaskCard({ b }: { b: SourceBucket }) {
+function MemberTaskCard({
+  b,
+  onOpenMetricRows,
+}: {
+  b: SourceBucket;
+  onOpenMetricRows: (
+    metricKey: KpiKey,
+    sourceTab: "tickets" | "calls" | "tasks" | "audits",
+    title?: string,
+    description?: string,
+  ) => void;
+}) {
   const slaPct =
     b.slaMetTotalCount > 0
       ? (b.slaMetCount / b.slaMetTotalCount) * 100
@@ -2029,6 +2386,10 @@ function MemberTaskCard({ b }: { b: SourceBucket }) {
           <IconClipboardList size={16} />
         </ThemeIcon>
         <Text fw={600}>Tasks</Text>
+      </Group>
+      <Group gap="xs" mb="sm" wrap="wrap">
+        <Button size="compact-xs" variant="light" color="orange" onClick={() => onOpenMetricRows("tasks_worked", "tasks", "Member Task Rows", "Task rows for this member under the active filters.")}>All rows</Button>
+        <Button size="compact-xs" variant="light" color="teal" onClick={() => onOpenMetricRows("sla_met", "tasks", "Member SLA Rows", "Task rows contributing to SLA-Met for this member.")}>SLA rows</Button>
       </Group>
       <Grid gutter="sm">
         <Grid.Col span={6}>

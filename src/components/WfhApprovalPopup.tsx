@@ -13,14 +13,14 @@ import {
   Textarea,
 } from "@mantine/core";
 import { IconAlertCircle, IconCheck, IconX } from "@tabler/icons-react";
-import { useWfhData } from "@/widgets/Wfh/data";
+import { useWfhData } from "../widgets/Wfh/data";
 import {
   dayCount,
   decideWfhRequest,
   formatDateRange,
   type WfhRequest,
-} from "@/lib/wfh";
-import { useIdentity } from "@/lib/identity";
+} from "../lib/wfh";
+import { useIdentity } from "../lib/identity";
 
 type ToastPayload = {
   color: "green" | "red" | "blue" | "yellow";
@@ -48,41 +48,58 @@ export function WfhApprovalPopup({ showToast }: Props) {
     [data?.requests],
   );
   const activeRequest = pending[requestIndex] ?? pending[0] ?? null;
+  const pendingIds = useMemo(() => pending.map((request) => request.id), [pending]);
+  const pendingIdsKey = useMemo(() => pendingIds.join("|"), [pendingIds]);
+  const seenPendingIdsKey = useMemo(() => seenPendingIds.join("|"), [seenPendingIds]);
 
   useEffect(() => {
     if (!identity?.name || !isApprover) {
-      setOpened(false);
-      setRequestIndex(0);
-      setDecision("approved");
-      setNote("");
-      setSeenPendingIds([]);
+      if (opened) setOpened(false);
+      if (requestIndex !== 0) setRequestIndex(0);
+      if (decision !== "approved") setDecision("approved");
+      if (note !== "") setNote("");
+      if (seenPendingIds.length > 0) setSeenPendingIds([]);
       return;
     }
 
-    const pendingIds = pending.map((request) => request.id);
     const hasNewPending = pendingIds.some((id) => !seenPendingIds.includes(id));
 
     if (pendingIds.length === 0) {
-      setOpened(false);
-      setRequestIndex(0);
-      setDecision("approved");
-      setNote("");
-      setSeenPendingIds([]);
+      if (opened) setOpened(false);
+      if (requestIndex !== 0) setRequestIndex(0);
+      if (decision !== "approved") setDecision("approved");
+      if (note !== "") setNote("");
+      if (seenPendingIds.length > 0) setSeenPendingIds([]);
       return;
     }
 
     if (hasNewPending) {
-      setOpened(true);
-      setRequestIndex(0);
-      setDecision("approved");
-      setNote("");
-      setSeenPendingIds(pendingIds);
+      if (!opened) setOpened(true);
+      if (requestIndex !== 0) setRequestIndex(0);
+      if (decision !== "approved") setDecision("approved");
+      if (note !== "") setNote("");
+      if (seenPendingIdsKey !== pendingIdsKey) setSeenPendingIds(pendingIds);
       return;
     }
 
-    setSeenPendingIds((prev) => prev.filter((id) => pendingIds.includes(id)));
-    setRequestIndex((prev) => Math.min(prev, Math.max(0, pendingIds.length - 1)));
-  }, [identity?.name, isApprover, pending, seenPendingIds]);
+    const trimmedSeen = seenPendingIds.filter((id) => pendingIds.includes(id));
+    const trimmedSeenKey = trimmedSeen.join("|");
+    if (trimmedSeenKey !== seenPendingIdsKey) setSeenPendingIds(trimmedSeen);
+
+    const clampedIndex = Math.min(requestIndex, Math.max(0, pendingIds.length - 1));
+    if (clampedIndex !== requestIndex) setRequestIndex(clampedIndex);
+  }, [
+    identity?.name,
+    isApprover,
+    pendingIds,
+    pendingIdsKey,
+    seenPendingIds,
+    seenPendingIdsKey,
+    opened,
+    requestIndex,
+    decision,
+    note,
+  ]);
 
   async function processDecision(request: WfhRequest, nextDecision: "approved" | "denied", nextNote: string) {
     const result = await decideWfhRequest(request.id, {

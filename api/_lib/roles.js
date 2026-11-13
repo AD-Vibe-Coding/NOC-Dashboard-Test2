@@ -85,13 +85,13 @@ export const ROSTER_BY_EMAIL = {
   "akash.hanvate@appdirect.com": { name: "Akash Hanvate", role: "tier2" },
   "karthik.radhakrishnan@appdirect.com": { name: "Karthik Radhakrishnan", role: "tier2" },
   "zubair.mohd@appdirect.com": { name: "Mohammed Zubairuddin", role: "tier2" },
-  "abishek.benarji@appdirect.com": { name: "Abishek Benarji", role: "tier2" },
+  "abishek.benarji@appdirect.com": { name: "Abhishek Benarji", role: "tier2" },
 
   // ---- Tier 1 ----
   "ashraf.mohammed@appdirect.com": { name: "Mohammed Ashraf", role: "tier1" },
   "hamza.umme@appdirect.com": { name: "Hamza Rahmani", role: "tier1" },
   "karthik.damagalla@appdirect.com": { name: "Karthik Damagalla", role: "tier1" },
-  "lokesh.banavath@appdirect.com": { name: "Lokesh Banavath", role: "tier1" },
+  "lokesh.banavath@appdirect.com": { name: "Lokesh Naik Banavath", role: "tier1" },
   "pranav.dandibhotla@appdirect.com": { name: "Pranav Dandibhotla", role: "tier1" },
   "sriram.parisa@appdirect.com": { name: "Sriram Parisa", role: "tier1" },
   "akram.mohammed@appdirect.com": { name: "Akram Ahmed", role: "tier1" },

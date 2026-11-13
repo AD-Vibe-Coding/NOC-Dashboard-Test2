@@ -543,6 +543,14 @@ export function WorkAllotmentGeneratorWidget() {
     void loadStatus();
   }, [identity, isManager]);
 
+  useEffect(() => {
+    if (!identity || !isManager) return;
+    const timer = window.setInterval(() => {
+      void loadStatus();
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, [identity, isManager]);
+
   if (!identity) {
     return (
       <WidgetFrame title="Work Allotment Generator" subtitle="Sign in required" icon={IconClipboardList} iconColor="indigo">
@@ -552,26 +560,29 @@ export function WorkAllotmentGeneratorWidget() {
   }
 
   const result = data?.result ?? null;
+  const persistedJobsByShift = new Map((automationStatus?.jobs ?? []).map((job) => [String(job.shift ?? ""), job]));
   const previewJobs = (result?.shifts ?? [])
-    .filter((shift) => shift.status === "ok")
-    .map((shift, index) => ({
-      id: `preview-${shift.slot}-${index}`,
-      operational_date: result?.dateKey ?? "",
-      post_date: result?.dateKey ?? "",
-      shift: shift.slot,
-      primary: shift.primary ?? null,
-      backup: shift.backup ?? null,
-      status: "planned",
-      slack_ts: null,
-      last_error: null,
-      post_time_label: shift.nextPostTime ?? null,
-      posted_at: null,
-      generated_at: null,
-      message: shift.message ?? null,
-      continuing_from: shift.continuingFrom ?? null,
-      carry_path_used: shift.carryPathUsed ?? null,
-      carry_path_rule: shift.carryPathRule ?? null,
-    }));
+    .map((shift, index) => {
+      const persisted = persistedJobsByShift.get(String(shift.slot ?? ""));
+      return {
+        id: persisted?.id ?? `preview-${shift.slot}-${index}`,
+        operational_date: persisted?.operational_date ?? result?.dateKey ?? "",
+        post_date: persisted?.post_date ?? result?.dateKey ?? "",
+        shift: shift.slot,
+        primary: persisted?.primary ?? shift.primary ?? null,
+        backup: persisted?.backup ?? shift.backup ?? null,
+        status: persisted?.status ?? (shift.status === "ok" ? "planned" : shift.status),
+        slack_ts: persisted?.slack_ts ?? null,
+        last_error: persisted?.last_error ?? (shift.status !== "ok" ? shift.message ?? null : null),
+        post_time_label: persisted?.post_time_label ?? shift.nextPostTime ?? null,
+        posted_at: persisted?.posted_at ?? null,
+        generated_at: persisted?.generated_at ?? null,
+        message: persisted?.message ?? shift.message ?? null,
+        continuing_from: persisted?.continuing_from ?? shift.continuingFrom ?? null,
+        carry_path_used: persisted?.carry_path_used ?? shift.carryPathUsed ?? null,
+        carry_path_rule: persisted?.carry_path_rule ?? shift.carryPathRule ?? null,
+      };
+    });
   const displayJobs = previewJobs.length > 0 ? previewJobs : (automationStatus?.jobs ?? []);
   const readyShiftCount = result?.shifts?.filter((shift) => shift.status === "ok").length
     ?? automationStatus?.jobs?.length
@@ -721,7 +732,7 @@ export function WorkAllotmentGeneratorWidget() {
                         Server-side schedule for today&apos;s generated work allotments and Slack posting state.
                       </Text>
                       <Text size="xs" c="dimmed">
-                        Cron schedule: generates the full day at 3:10 AM PT, then checks for due shifts every 5 minutes and posts anything whose scheduled time has passed.
+                        Daily generation runs at 1:10 AM PST / 2:10 AM PDT so assignments are ready before the earliest shift post; the cron then checks every 5 minutes and posts anything due.
                       </Text>
                       <Text size="xs" c="dimmed">
                         Last cron activity: {formatTimestamp(latestCronActivity)}
@@ -924,7 +935,9 @@ export function WorkAllotmentGeneratorWidget() {
                               <Table.Td ta="right">{Number(task.reminder_count ?? 0)}</Table.Td>
                               <Table.Td>
                                 <Text size="sm" c="dimmed">
-                                  {task.last_reminded_at ? formatTimestamp(task.last_reminded_at) : (task.completed_at ? `Completed ${formatTimestamp(task.completed_at)}` : "—")}
+                                  {String(task.status ?? "") === "completed"
+                                    ? (task.completed_at ? `Completed ${formatTimestamp(task.completed_at)}` : "Completed")
+                                    : (task.last_reminded_at ? formatTimestamp(task.last_reminded_at) : "—")}
                                 </Text>
                               </Table.Td>
                             </Table.Tr>

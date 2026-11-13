@@ -20,11 +20,11 @@ export const SHIFTS: ShiftDef[] = [
   {
     id: 1,
     name: "Early Morning",
-    startHour: 3,
+    startHour: 2,
     startMinute: 0,
-    endHour: 12,
+    endHour: 11,
     endMinute: 0,
-    postingTime: "3:45 AM",
+    postingTime: "2:45 AM",
   },
   {
     id: 2,
@@ -47,20 +47,20 @@ export const SHIFTS: ShiftDef[] = [
   {
     id: 4,
     name: "Afternoon",
-    startHour: 11,
+    startHour: 10,
     startMinute: 0,
-    endHour: 20,
+    endHour: 19,
     endMinute: 0,
-    postingTime: "11:45 AM",
+    postingTime: "10:45 AM",
   },
   {
     id: 5,
     name: "Overnight",
-    startHour: 19, // 7 PM
+    startHour: 18, // 6 PM
     startMinute: 0,
-    endHour: 4, // crosses midnight
+    endHour: 3, // crosses midnight
     endMinute: 0,
-    postingTime: "7:45 PM",
+    postingTime: "6:45 PM",
   },
 ];
 
@@ -87,7 +87,7 @@ export interface ShiftTransition {
    * Offset (in days) from the analysis date to use when looking up source
    * agents in the roster. 0 = same day; -1 = previous day.
    *
-   * The Shift 5 (Overnight) team starts at 7 PM the PREVIOUS calendar day,
+   * The Shift 5 (Overnight) team starts at 6 PM the PREVIOUS calendar day,
    * so when running the 5→1 handoff at 3:45 AM on day D, the agents
    * actually working overnight are listed in column D-1 of the roster
    * (their "today" cell on day D is typically blank, WO, or a daytime
@@ -105,7 +105,7 @@ export const SHIFT_TRANSITIONS: ShiftTransition[] = [
     sourceShifts: [5],
     targetShift: 1,
     sourceGoingOff: true,
-    // Overnight agents clocked in at 7 PM the previous day — their roster
+    // Overnight agents clocked in at 6 PM the previous day — their roster
     // cell lives in YESTERDAY's column.
     sourceDateOffset: -1,
     context: "Overnight team handing off to Early Morning",

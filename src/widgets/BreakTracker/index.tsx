@@ -41,7 +41,7 @@ import {
   formatTime,
 } from "../../lib/format";
 import { WidgetFrame } from "../WidgetFrame";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
 import { useBreakData } from "./data";
 
 export { BreakTrackerTile } from "./Tile";
@@ -88,6 +88,12 @@ export function BreakTrackerWidget() {
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const samePerson = (a?: string | null, b?: string | null) => {
+    const left = a ? (resolveTeamMember(a) ?? a).trim().toLowerCase() : "";
+    const right = b ? (resolveTeamMember(b) ?? b).trim().toLowerCase() : "";
+    return !!left && !!right && left === right;
+  };
 
   function showToast(t: Omit<Toast, "id">) {
     const id = Date.now() + Math.random();
@@ -168,13 +174,13 @@ export function BreakTrackerWidget() {
       slack_posted: slackPosted,
     });
     setPosting(false);
-    refresh();
+    await refresh();
   }
 
   async function endBreak(b: Break) {
     const viewerName = identity?.name?.trim();
     const breakOwner = b.employee_name.trim();
-    if (!viewerIsManager && (!viewerName || viewerName !== breakOwner)) {
+    if (!viewerIsManager && (!viewerName || !samePerson(viewerName, breakOwner))) {
       showToast({
         color: "red",
         title: "You can only end your own break",
@@ -184,11 +190,6 @@ export function BreakTrackerWidget() {
     }
 
     const end = new Date();
-    const start = new Date(b.start_time);
-    const duration = Math.max(
-      1,
-      Math.round((end.getTime() - start.getTime()) / 60000),
-    );
     setPosting(true);
 
     const threadTs =
@@ -232,13 +233,20 @@ export function BreakTrackerWidget() {
       });
     }
 
-    await db.breaks.updateById(b.id, {
-      end_time: end.toISOString(),
-      duration_minutes: duration,
-      is_active: false,
+    const activeRows = await db.breaks.list({
+      filter: { is_active: true },
+      orderBy: { column: "start_time", ascending: false },
     });
+    const matchingRows = activeRows.filter((row) => samePerson(row.employee_name, b.employee_name));
+    for (const row of matchingRows) {
+      await db.breaks.updateById(row.id, {
+        end_time: end.toISOString(),
+        duration_minutes: Math.max(1, Math.round((end.getTime() - new Date(row.start_time).getTime()) / 60000)),
+        is_active: false,
+      });
+    }
     setPosting(false);
-    refresh();
+    await refresh();
   }
 
   const avgDuration =

@@ -1,6 +1,6 @@
 // Dashboard shell — featured tiles in the main area + sidebar tools list.
 //
-//   - The 3 "featured" widgets (My Day, Zoom Queue, Break Tracker) render as
+//   - The 3 "featured" widgets (My Day, Team Availability, Break Tracker) render as
 //     large tiles in the main pane.
 //   - Every other widget is surfaced as a sidebar entry under "Tools". Click
 //     to expand it into the main pane (full view), click the dashboard

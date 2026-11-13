@@ -1,18 +1,58 @@
 import { useEffect, useRef, useState } from "react";
-import { fetchZoomQueue, type ZoomQueueData } from "../../lib/zoom";
+import { fetchJson } from "../../lib/fetch-resilient";
+import type { ZoomQueueData } from "../../lib/zoom";
 
 /**
  * Hours in queue per agent per queue for today.
  * agent_name → queue_name → hours (decimal, e.g. 3.25)
- * Combines Supabase snapshot history + live session accumulation.
+ * Combines persisted snapshot history + live RingCentral session accumulation.
  */
 export type QueueHours = Record<string, Record<string, number>>;
 
-const POLL_INTERVAL_MS    = 15_000;       // 15 s between data refreshes
-const SNAPSHOT_INTERVAL_MS = 5 * 60_000; // save to Supabase every 5 min
+const POLL_INTERVAL_MS = 60_000;
+const SNAPSHOT_INTERVAL_MS = 5 * 60_000;
 
-export function useZoomQueue() {
-  const [data, setData]         = useState<ZoomQueueData | null>(null);
+// Share the latest live result between hook instances in this browser tab and
+// avoid multiplying identical RingCentral refreshes across mounted widgets.
+let lastLiveQueueData: ZoomQueueData | null = null;
+let queueRequestInFlight: Promise<ZoomQueueData> | null = null;
+let queueRetryAfter = 0;
+
+async function fetchRingCentralQueue(): Promise<ZoomQueueData> {
+  if (lastLiveQueueData && Date.now() < queueRetryAfter) return lastLiveQueueData;
+  if (queueRequestInFlight) return queueRequestInFlight;
+
+  queueRequestInFlight = (async () => {
+    try {
+      const result = await fetchJson<ZoomQueueData>("/api/ringcentral/queue");
+      if (result.source === "live") {
+        lastLiveQueueData = result;
+        queueRetryAfter = 0;
+        return result;
+      }
+      if (lastLiveQueueData && result.warning?.includes("429")) {
+        queueRetryAfter = Date.now() + 60_000;
+        return { ...lastLiveQueueData, warning: result.warning };
+      }
+      return result;
+    } catch (error) {
+      if (lastLiveQueueData) {
+        queueRetryAfter = Date.now() + 60_000;
+        return {
+          ...lastLiveQueueData,
+          warning: `RingCentral refresh failed; showing the last successful live data. ${error instanceof Error ? error.message : String(error)}`,
+        };
+      }
+      throw error;
+    } finally {
+      queueRequestInFlight = null;
+    }
+  })();
+  return queueRequestInFlight;
+}
+
+export function useTeamAvailability() {
+  const [data, setData] = useState<ZoomQueueData | null>(null);
   const [queueHours, setQueueHours] = useState<QueueHours>({});
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
@@ -93,7 +133,7 @@ export function useZoomQueue() {
         body: JSON.stringify({ agents }),
       });
     } catch (e) {
-      console.warn("[ZoomQueue] snapshot save failed:", e);
+      console.warn("[TeamAvailability] snapshot save failed:", e);
     }
   }
 
@@ -108,7 +148,7 @@ export function useZoomQueue() {
         recalcHours();
       }
     } catch (e) {
-      console.warn("[ZoomQueue] availability fetch failed:", e);
+      console.warn("[TeamAvailability] availability fetch failed:", e);
     }
   }
 
@@ -116,7 +156,7 @@ export function useZoomQueue() {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetchZoomQueue();
+      const r = await fetchRingCentralQueue();
       setData(r);
       accumulateSession(r);
       saveSnapshot(r);

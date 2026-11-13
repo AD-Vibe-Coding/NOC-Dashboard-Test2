@@ -1,7 +1,83 @@
 import { useEffect, useState } from "react";
 import { db, dbReady, schema } from "../../db";
+import { resolveTeamMember } from "../PerformanceTracker/team";
 
 type Break = typeof schema.breaks.$inferSelect;
+
+function canonicalBreakKey(name: string) {
+  return (resolveTeamMember(name) ?? name).trim().toLowerCase();
+}
+
+function dedupeActiveBreaks(rows: Break[]) {
+  const latestByPerson = new Map<string, Break>();
+  for (const row of rows) {
+    const key = canonicalBreakKey(row.employee_name);
+    const current = latestByPerson.get(key);
+    if (!current) {
+      latestByPerson.set(key, row);
+      continue;
+    }
+    const currentStarted = new Date(current.start_time).getTime();
+    const nextStarted = new Date(row.start_time).getTime();
+    if (nextStarted >= currentStarted) {
+      latestByPerson.set(key, row);
+    }
+  }
+  return [...latestByPerson.values()].sort(
+    (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime(),
+  );
+}
+
+async function reconcileActiveBreakRows(activeRows: Break[], historyRows: Break[]) {
+  const latestEndedAtByPerson = new Map<string, number>();
+  for (const row of historyRows) {
+    if (!row.end_time) continue;
+    const key = canonicalBreakKey(row.employee_name);
+    const endedAt = new Date(row.end_time).getTime();
+    const current = latestEndedAtByPerson.get(key) ?? 0;
+    if (endedAt > current) latestEndedAtByPerson.set(key, endedAt);
+  }
+
+  const rowsByPerson = new Map<string, Break[]>();
+  for (const row of activeRows) {
+    const key = canonicalBreakKey(row.employee_name);
+    const group = rowsByPerson.get(key) ?? [];
+    group.push(row);
+    rowsByPerson.set(key, group);
+  }
+
+  let repaired = false;
+  const now = new Date();
+
+  for (const group of rowsByPerson.values()) {
+    group.sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime());
+    const keep = group[0];
+    const latestEndedAt = latestEndedAtByPerson.get(canonicalBreakKey(keep.employee_name)) ?? 0;
+
+    // If an ended row exists after this active row started, the active row is stale.
+    if (latestEndedAt > new Date(keep.start_time).getTime()) {
+      const duration = Math.max(1, Math.round((now.getTime() - new Date(keep.start_time).getTime()) / 60000));
+      await db.breaks.updateById(keep.id, {
+        end_time: now.toISOString(),
+        duration_minutes: duration,
+        is_active: false,
+      });
+      repaired = true;
+    }
+
+    for (const duplicate of group.slice(1)) {
+      const duration = Math.max(1, Math.round((now.getTime() - new Date(duplicate.start_time).getTime()) / 60000));
+      await db.breaks.updateById(duplicate.id, {
+        end_time: now.toISOString(),
+        duration_minutes: duration,
+        is_active: false,
+      });
+      repaired = true;
+    }
+  }
+
+  return repaired;
+}
 
 /**
  * Data hook for the Break Tracker widget. Persists to Supabase via the
@@ -17,7 +93,7 @@ export function useBreakData() {
 
   async function refresh() {
     try {
-      const [activeRows, historyRows] = await Promise.all([
+      let [activeRows, historyRows] = await Promise.all([
         db.breaks.list({
           filter: { is_active: true },
           orderBy: { column: "start_time", ascending: false },
@@ -28,7 +104,23 @@ export function useBreakData() {
           limit: 50,
         }),
       ]);
-      setActive(activeRows);
+
+      const repaired = await reconcileActiveBreakRows(activeRows, historyRows);
+      if (repaired) {
+        [activeRows, historyRows] = await Promise.all([
+          db.breaks.list({
+            filter: { is_active: true },
+            orderBy: { column: "start_time", ascending: false },
+          }),
+          db.breaks.list({
+            filter: { is_active: false },
+            orderBy: { column: "start_time", ascending: false },
+            limit: 50,
+          }),
+        ]);
+      }
+
+      setActive(dedupeActiveBreaks(activeRows));
       setHistory(historyRows);
     } catch (e) {
       console.warn("[useBreakData] refresh failed:", e);

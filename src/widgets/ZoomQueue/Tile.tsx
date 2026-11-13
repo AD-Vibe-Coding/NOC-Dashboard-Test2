@@ -7,8 +7,9 @@ import { BREAK_TYPE_COLORS, emojiForBreak, formatBreakStartMessage, postSlackMes
 import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 import { useBreakData } from "../BreakTracker/data";
 import { WidgetTile } from "../WidgetTile";
-import { useZoomQueue } from "./data";
+import { useTeamAvailability } from "./data";
 import { useRosterShift } from "../../lib/use-roster-shift";
+import { resolveTeamMember } from "../PerformanceTracker/team";
 
 const TOTAL_BREAK_MINUTES = 90;
 const BREAK_ONLY_TYPES = new Set(["Coffee", "Lunch", "Restroom", "Personal", "Other"]);
@@ -34,7 +35,7 @@ const QUICK_STATUS_TYPES = [
 ];
 
 export function ZoomQueueTile({ onExpand }: Props) {
-  const { data } = useZoomQueue();
+  const { data } = useTeamAvailability();
   const { active, history, refresh } = useBreakData();
   const { data: rosterData } = useRosterShift();
   const { identity } = useIdentity();
@@ -59,8 +60,14 @@ export function ZoomQueueTile({ onExpand }: Props) {
     (!!identity?.name && ROLE_BY_NAME[identity.name.trim()] === "manager") ||
     (!!normalizedEmail && ROSTER_BY_EMAIL[normalizedEmail]?.role === "manager");
 
+  const samePerson = (a?: string | null, b?: string | null) => {
+    const left = a ? (resolveTeamMember(a) ?? a).trim().toLowerCase() : "";
+    const right = b ? (resolveTeamMember(b) ?? b).trim().toLowerCase() : "";
+    return !!left && !!right && left === right;
+  };
+
   const youOnBreak = identity?.name
-    ? active.find((b) => b.employee_name === identity.name) ?? null
+    ? active.find((b) => samePerson(b.employee_name, identity.name)) ?? null
     : null;
   const canQuickControl = !isManager && !!identity?.name;
   const isPunchedIn = lastPunchAction === "punch_in";
@@ -70,7 +77,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
   const myBreakRows = useMemo(() => {
     if (!identity?.name) return [] as typeof active;
     const rows = [...active, ...history].filter(
-      (row) => row.employee_name === identity.name && BREAK_ONLY_TYPES.has(row.break_type) && isSameLocalDay(row.start_time),
+      (row) => samePerson(row.employee_name, identity.name) && BREAK_ONLY_TYPES.has(row.break_type) && isSameLocalDay(row.start_time),
     );
     const deduped = new Map<number, (typeof rows)[number]>();
     for (const row of rows) deduped.set(row.id, row);
@@ -288,7 +295,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
               color: data.source === "live" ? "green" : "yellow",
               tooltip:
                 data.source === "live"
-                  ? "Live data from Zoom Phone API"
+                  ? "Live data from RingCentral queue presence"
                   : "Snapshot — set ZOOM_* in .env for live data",
             }
           : undefined

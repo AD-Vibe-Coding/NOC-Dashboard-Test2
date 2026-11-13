@@ -6,7 +6,7 @@
  * weekday/weekend, shift). Supports sorting by any column and CSV export.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ActionIcon,
   Anchor,
@@ -42,6 +42,7 @@ import {
   type AggregateOptions,
   type PerformanceMetric,
 } from "./data";
+import { KPI_BY_KEY, type KpiKey } from "./kpiConfig";
 import type { DisputeField } from "./DisputeForm";
 
 // ---------------------------------------------------------------------------
@@ -60,12 +61,22 @@ export interface DisputeInfo {
 }
 
 interface Props {
-  /** Member name to show data for, or null to close the modal. */
+  /** Member name to show data for; null means team-wide rows. */
   memberName: string | null;
   /** Full metrics array (pre-loaded). */
   metrics: PerformanceMetric[];
   /** Current filter options — used to pre-filter the rows. */
   filterOptions?: AggregateOptions;
+  /** Optional explicit open state so team-wide drill-down can open with no member selected. */
+  opened?: boolean;
+  /** Optional metric/month/source drill-down context. */
+  drillContext?: {
+    metricKey?: KpiKey | null;
+    month?: string | null;
+    sourceTab?: SourceTab;
+    title?: string;
+    description?: string;
+  };
   onClose: () => void;
   /** Callback to open a dispute form for a specific metric + field. */
   onDispute?: (metric: PerformanceMetric, field: DisputeField) => void;
@@ -836,22 +847,36 @@ export function RawDataModal({
   memberName,
   metrics,
   filterOptions,
+  opened,
+  drillContext,
   onClose,
   onDispute,
   disputesByMetricId,
 }: Props) {
-  const [activeTab, setActiveTab] = useState<SourceTab>("tickets");
+  const [activeTab, setActiveTab] = useState<SourceTab>(drillContext?.sourceTab ?? "tickets");
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
 
-  // Pre-filter to this member + apply current dashboard filters
+  useEffect(() => {
+    if (drillContext?.sourceTab) {
+      setActiveTab(drillContext.sourceTab);
+      setSortCol(null);
+    }
+  }, [drillContext?.sourceTab]);
+
+  // Pre-filter to this member/team + apply current dashboard filters
   const memberRows = useMemo(() => {
-    if (!memberName) return [];
-    const memberFiltered = metrics.filter(
-      (m) => m.member_name === memberName,
-    );
-    return filterMetrics(memberFiltered, filterOptions);
-  }, [memberName, metrics, filterOptions]);
+    const baseRows = memberName
+      ? metrics.filter((m) => m.member_name === memberName)
+      : metrics;
+    const mergedOptions = drillContext?.month
+      ? { ...filterOptions, period: { type: "month", value: drillContext.month } as const }
+      : filterOptions;
+    const filtered = filterMetrics(baseRows, mergedOptions);
+    if (!drillContext?.metricKey) return filtered;
+    const def = KPI_BY_KEY[drillContext.metricKey];
+    return filtered.filter((metric) => def.rowMatches(metric));
+  }, [memberName, metrics, filterOptions, drillContext]);
 
   // Split by source type
   const bySource = useMemo(() => {
@@ -899,7 +924,7 @@ export function RawDataModal({
 
   // CSV export
   const handleExport = () => {
-    if (!memberName || sortedRows.length === 0) return;
+    if (sortedRows.length === 0) return;
     const header = cols.map((c) => c.label).join(",");
     const rows = sortedRows.map((m) =>
       cols
@@ -915,23 +940,22 @@ export function RawDataModal({
     );
     const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
-    const safeName = memberName.replace(/[^a-zA-Z0-9]/g, "_");
+    const safeName = (memberName ?? "team").replace(/[^a-zA-Z0-9]/g, "_");
     downloadBlob(blob, `${safeName}_${activeTab}_raw.csv`);
   };
 
+  const modalOpened = opened ?? memberName != null;
+  const titleText = drillContext?.title ?? (memberName ? `Raw Data — ${memberName}` : "Raw Data");
+
   return (
     <Modal
-      opened={memberName != null}
+      opened={modalOpened}
       onClose={onClose}
       title={
-        memberName ? (
-          <Group gap="xs">
-            <IconTable size={18} />
-            <Text fw={600}>Raw Data — {memberName}</Text>
-          </Group>
-        ) : (
-          "Raw Data"
-        )
+        <Group gap="xs">
+          <IconTable size={18} />
+          <Text fw={600}>{titleText}</Text>
+        </Group>
       }
       size="95vw"
       styles={{
@@ -941,6 +965,25 @@ export function RawDataModal({
       withinPortal
     >
       <Stack gap="sm">
+        {drillContext?.description && (
+          <Card withBorder radius="md" p="sm">
+            <Stack gap={4}>
+              <Group gap="xs" wrap="wrap">
+                {drillContext.metricKey && (
+                  <Badge size="xs" variant="light" color="blue">
+                    KPI: {KPI_BY_KEY[drillContext.metricKey].label}
+                  </Badge>
+                )}
+                {drillContext.month && (
+                  <Badge size="xs" variant="outline" color="grape">
+                    Month: {drillContext.month}
+                  </Badge>
+                )}
+              </Group>
+              <Text size="xs" c="dimmed">{drillContext.description}</Text>
+            </Stack>
+          </Card>
+        )}
         {/* Source tabs + export button */}
         <Group justify="space-between" wrap="nowrap">
           <SegmentedControl
@@ -988,7 +1031,7 @@ export function RawDataModal({
         {/* Active filter summary */}
         <Group gap={4} wrap="wrap">
           <Text size="xs" c="dimmed">
-            Showing {sortedRows.length} {activeTab} rows
+            Showing {sortedRows.length} {activeTab} row{sortedRows.length === 1 ? "" : "s"}{memberName ? ` for ${memberName}` : " for whole team"}
           </Text>
           {filterOptions?.queue && filterOptions.queue !== "all" && (
             <Badge size="xs" variant="light">
@@ -1021,7 +1064,7 @@ export function RawDataModal({
         {sortedRows.length === 0 ? (
           <Box p="xl" style={{ textAlign: "center" }}>
             <Text c="dimmed" size="sm">
-              No {activeTab} data for {memberName} with current filters.
+              No {activeTab} data {memberName ? `for ${memberName}` : "for the current team scope"} with current filters.
             </Text>
           </Box>
         ) : (

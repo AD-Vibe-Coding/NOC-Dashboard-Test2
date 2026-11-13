@@ -1,14 +1,11 @@
 /**
  * GET /api/zoom/queue
  *
- * Returns who is currently in queue vs not in queue.
- * Uses only:
- *   phone:read:list_call_queues:admin
- *   phone:read:list_call_queue_members:admin
+ * Returns the current Zoom Phone queue membership used by the main
+ * Team Availability experience.
  *
- * Status is derived purely from receive_call on each queue member:
- *   receive_call = true  → in_queue
- *   receive_call = false → not_in_queue
+ * RingCentral testing lives on the dedicated /api/ringcentral/* endpoints so
+ * experiments there do not affect the working Zoom widget.
  */
 
 let _token: { value: string; expiresAt: number } | null = null;
@@ -49,16 +46,16 @@ async function paginate(token: string, path: string, key: string): Promise<any[]
 
 function buildSnapshot(queueName: string) {
   const rows = [
-    { n: "Sriram Parisa",          inQueue: true  },
-    { n: "Mohammed Akram Ahmed",   inQueue: true  },
-    { n: "Karthik Damagalla",      inQueue: true  },
-    { n: "Kenya Gentry",           inQueue: true  },
-    { n: "Karthik Radhakrishnan",  inQueue: true  },
-    { n: "Mohammed Ashraf",        inQueue: true  },
-    { n: "Otukho Olembo",          inQueue: false },
-    { n: "Perry Cox",              inQueue: false },
-    { n: "Akash Hanvate",          inQueue: false },
-    { n: "Pranav Dandibhotla",     inQueue: false },
+    { n: "Sriram Parisa", inQueue: true },
+    { n: "Mohammed Akram Ahmed", inQueue: true },
+    { n: "Karthik Damagalla", inQueue: true },
+    { n: "Kenya Gentry", inQueue: true },
+    { n: "Karthik Radhakrishnan", inQueue: true },
+    { n: "Mohammed Ashraf", inQueue: true },
+    { n: "Otukho Olembo", inQueue: false },
+    { n: "Perry Cox", inQueue: false },
+    { n: "Akash Hanvate", inQueue: false },
+    { n: "Pranav Dandibhotla", inQueue: false },
   ];
   const agents = rows.map((r, i) => ({
     agent_id: `snap-${i + 1}`,
@@ -70,25 +67,17 @@ function buildSnapshot(queueName: string) {
   return {
     agents,
     totals: {
-      in_queue:     agents.filter((a) => a.status === "in_queue").length,
+      in_queue: agents.filter((a) => a.status === "in_queue").length,
       not_in_queue: agents.filter((a) => a.status === "not_in_queue").length,
     },
   };
 }
 
-export default async function handler(req: any, res: any) {
-  res.setHeader("Content-Type", "application/json");
-  res.setHeader("Cache-Control", "no-store");
-
-  if (req.method && req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const accountId    = String(process.env.ZOOM_ACCOUNT_ID    ?? "").trim();
-  const clientId     = String(process.env.ZOOM_CLIENT_ID     ?? "").trim();
+async function handleZoom(res: any) {
+  const accountId = String(process.env.ZOOM_ACCOUNT_ID ?? "").trim();
+  const clientId = String(process.env.ZOOM_CLIENT_ID ?? "").trim();
   const clientSecret = String(process.env.ZOOM_CLIENT_SECRET ?? "").trim();
-  const queueIdFilter = String(process.env.ZOOM_QUEUE_ID     ?? "").trim() || undefined;
+  const queueIdFilter = String(process.env.ZOOM_QUEUE_ID ?? "").trim() || undefined;
 
   if (!accountId || !clientId || !clientSecret) {
     const { agents, totals } = buildSnapshot("NOC Queue");
@@ -101,12 +90,9 @@ export default async function handler(req: any, res: any) {
 
   try {
     const token = await getToken(accountId, clientId, clientSecret);
-
-    // 1. List all queues
     const allQueues = await paginate(token, "/phone/call_queues", "call_queues");
     if (allQueues.length === 0) throw new Error("No Zoom Phone call queues found.");
 
-    // 2. Filter by ZOOM_QUEUE_ID if set
     let targetQueues = allQueues;
     if (queueIdFilter) {
       const match = allQueues.find(
@@ -120,7 +106,6 @@ export default async function handler(req: any, res: any) {
       ? String(targetQueues[0].name)
       : targetQueues.map((q: any) => q.name).join(" + ");
 
-    // 3. Collect members, de-duplicate by user ID
     const memberMap = new Map<string, {
       id: string; name: string;
       receive_call: boolean; queues: string[];
@@ -151,7 +136,6 @@ export default async function handler(req: any, res: any) {
       }
     }));
 
-    // 4. Build agent list — two statuses only
     const agents = Array.from(memberMap.values())
       .filter((u) => !u.name.toLowerCase().includes("overflow"))
       .map((u, i) => ({
@@ -167,7 +151,7 @@ export default async function handler(req: any, res: any) {
       });
 
     const totals = {
-      in_queue:     agents.filter((a) => a.status === "in_queue").length,
+      in_queue: agents.filter((a) => a.status === "in_queue").length,
       not_in_queue: agents.filter((a) => a.status === "not_in_queue").length,
     };
 
@@ -179,7 +163,6 @@ export default async function handler(req: any, res: any) {
       totals,
       warning: null,
     });
-
   } catch (err: any) {
     const msg = String(err?.message ?? "Zoom API error");
     const { agents, totals } = buildSnapshot("NOC Queue");
@@ -189,4 +172,16 @@ export default async function handler(req: any, res: any) {
       warning: `Zoom API error — showing snapshot: ${msg.slice(0, 200)}`,
     });
   }
+}
+
+export default async function handler(req: any, res: any) {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cache-Control", "no-store");
+
+  if (req.method && req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  return handleZoom(res);
 }

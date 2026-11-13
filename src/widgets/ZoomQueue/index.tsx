@@ -36,9 +36,9 @@ import {
   IconUserCheck,
   IconUserOff,
 } from "@tabler/icons-react";
-import { ZOOM_STATUS_COLORS, ZOOM_STATUS_LABELS, type ZoomAgent } from "../../lib/zoom";
+import { ZOOM_STATUS_COLORS, type ZoomAgent } from "../../lib/zoom";
 import { WidgetFrame } from "../WidgetFrame";
-import { useZoomQueue } from "./data";
+import { useTeamAvailability } from "./data";
 import { useBreakData } from "../BreakTracker/data";
 import { useRosterShift, type ShiftWindow } from "../../lib/use-roster-shift";
 import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../PerformanceTracker/team";
@@ -47,16 +47,17 @@ import { db } from "../../db";
 import { postSlackMessage } from "../../lib/slack";
 import { formatElapsedIso } from "../../lib/format";
 import { BreakScheduleModal } from "./BreakScheduleModal";
+import { RingCentralTestPanel } from "./RingCentralTestPanel";
 import { defaultRoleFor, ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 
 export { ZoomQueueTile } from "./Tile";
 
 type ActiveStatusRow = Awaited<ReturnType<typeof db.breaks.list>>[number];
 
-const TRACKED_QUEUES = ["Network Tech Support", "Mobility Tech Support"];
+const DEFAULT_QUEUE_ORDER = ["VCom: Network Support", "VCom: Mobility Support"];
 const QUEUE_SHORT: Record<string, string> = {
-  "Network Tech Support": "NOC",
-  "Mobility Tech Support": "Mobility",
+  "VCom: Network Support": "NOC",
+  "VCom: Mobility Support": "Mobility",
 };
 
 const BREAK_EMOJI: Record<string, string> = {
@@ -117,7 +118,7 @@ const QUEUE_ESCALATION_STAGE_DELAYS_MS = [0, 10 * 60_000, 20 * 60_000] as const;
 const REMINDERS_PAUSED_STORAGE_KEY = "team-availability-reminders-paused-v1";
 
 // Canonical roster-name -> Slack user ID.
-// We key by canonical names used in LOCKED_TEAM/resolveTeamMember so Zoom and roster names resolve consistently.
+// We key by canonical names used in LOCKED_TEAM/resolveTeamMember so RingCentral and roster names resolve consistently.
 const SLACK_USER_BY_CANONICAL_MEMBER: Record<string, string> = {
   "abhishek benarji": "U09PWVD4BU6",
   "akash hanvate": "U09PVHEKRGV",
@@ -137,16 +138,28 @@ const SLACK_USER_BY_CANONICAL_MEMBER: Record<string, string> = {
   "mohammed zubairuddin": "U09PZ1M7QM8",
 };
 
-// Extra direct aliases seen in Zoom/Slack display names.
+// Extra direct aliases seen in queue/Slack display names.
 const SLACK_NAME_ALIASES: Record<string, string> = {
   "abishek benarji": "abhishek benarji",
+  "abhishek benarji teegala": "abhishek benarji",
+  "abishek benarji teegala": "abhishek benarji",
   "abhishek benarji - ab": "abhishek benarji",
   "ashraf mohammed": "mohammed ashraf",
   "hamza rahmani umme": "hamza rahmani",
   "lokesh banavath": "lokesh naik banavath",
   "mohammed akram ahmed": "akram ahmed",
+  "akram ahmed mohammed": "akram ahmed",
   "samiti mahalakshmi": "mahalakshmi samiti",
   "zubair mohammed": "mohammed zubairuddin",
+  "bala pranav dandibhotla": "pranav dandibhotla",
+  "m akram ahmed": "akram ahmed",
+  "mohammed akram a": "akram ahmed",
+  "otukho s olembo": "otukho olembo",
+  "perry a cox": "perry cox",
+  "karthik r": "karthik radhakrishnan",
+  "karthik d": "karthik damagalla",
+  "pranav d": "pranav dandibhotla",
+  "anirudh k": "anirudh kukudala",
 };
 
 function normalizeMemberName(name: string) {
@@ -178,7 +191,7 @@ function managerSlackIds(): string[] {
   return [...new Set(MANAGER_ESCALATION_IDS)];
 }
 
-// Normalise names for fuzzy matching between Zoom display names and Break Tracker employee names
+// Normalise names for fuzzy matching between RingCentral display names and Break Tracker employee names
 function normName(n: string) {
   return n.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -268,7 +281,8 @@ function todayPacificIso() {
 }
 
 export function ZoomQueueWidget() {
-  const { data, loading, error, refresh } = useZoomQueue();
+  const { data, loading, error, refresh } = useTeamAvailability();
+  const [activeProviderTab, setActiveProviderTab] = useState<"live" | "diagnostics">("live");
   const [viewMode, setViewMode] = useState<"fit" | "zoom">("zoom");
   const [zoomPercent, setZoomPercent] = useState<string>("110");
   const [fitScale, setFitScale] = useState(1);
@@ -505,11 +519,12 @@ export function ZoomQueueWidget() {
 
     try {
       const existingActiveRows = await db.breaks.list({
-        filter: { employee_name: trimmed, is_active: true },
+        filter: { is_active: true },
         orderBy: { column: "start_time", ascending: false },
       });
+      const matchingActiveRows = existingActiveRows.filter((row) => samePerson(row.employee_name, trimmed));
       const nowIso = new Date().toISOString();
-      for (const row of existingActiveRows) {
+      for (const row of matchingActiveRows) {
         const duration = Math.max(1, Math.round((new Date(nowIso).getTime() - new Date(row.start_time).getTime()) / 60000));
         await db.breaks.updateById(row.id, {
           end_time: nowIso,
@@ -526,7 +541,7 @@ export function ZoomQueueWidget() {
         slack_message_ts: slackTs,
         slack_posted: slackPosted,
       });
-      refreshBreaks();
+      await refreshBreaks();
     } finally {
       setPosting(false);
     }
@@ -545,7 +560,6 @@ export function ZoomQueueWidget() {
     }
 
     const end = new Date();
-    const duration = Math.max(1, Math.round((end.getTime() - new Date(activeStatus.start_time).getTime()) / 60000));
     const threadTs = activeStatus.slack_message_ts && !activeStatus.slack_message_ts.startsWith("demo-")
       ? activeStatus.slack_message_ts
       : null;
@@ -579,12 +593,21 @@ export function ZoomQueueWidget() {
         });
       }
 
-      await db.breaks.updateById(activeStatus.id, {
-        end_time: end.toISOString(),
-        duration_minutes: duration,
-        is_active: false,
+      const allActiveRows = await db.breaks.list({
+        filter: { is_active: true },
+        orderBy: { column: "start_time", ascending: false },
       });
-      refreshBreaks();
+      const matchingActiveRows = allActiveRows.filter((row) => samePerson(row.employee_name, activeStatus.employee_name));
+
+      for (const row of matchingActiveRows) {
+        const rowDuration = Math.max(1, Math.round((end.getTime() - new Date(row.start_time).getTime()) / 60000));
+        await db.breaks.updateById(row.id, {
+          end_time: end.toISOString(),
+          duration_minutes: rowDuration,
+          is_active: false,
+        });
+      }
+      await refreshBreaks();
     } finally {
       setPosting(false);
     }
@@ -725,7 +748,7 @@ export function ZoomQueueWidget() {
     activeBreaks.map((b) => [normName(resolveTeamMember(b.employee_name) ?? b.employee_name), b.break_type]),
   );
 
-  // All Zoom agents, enriched with roster identity and filtered to current shift
+  // All live RingCentral agents, enriched with roster identity and filtered to current shift
   const allAgents: Array<ZoomAgent & { rosterName?: string | null }> = (data?.agents ?? [])
     .filter((a) => !a.display_name.toLowerCase().includes("overflow"))
     .map((a) => ({
@@ -740,28 +763,32 @@ export function ZoomQueueWidget() {
     return isInShift(name) || a.status === "in_queue" || breakMap.has(normName(name));
   });
   // All people on break — used for DISPLAY only (includes managers so they show in the break section)
-  const onBreakFromZoom = agents.filter((a) => breakMap.has(normName(a.rosterName ?? a.display_name)));
-  // Break Tracker entries not in Zoom — for display only (includes managers)
-  const onBreakExtraNames = activeBreaks
-    .filter((b) => {
-      const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
-      return !onBreakFromZoom.some((a) => normName(a.rosterName ?? a.display_name) === resolved);
-    })
-    .map((b) => b.employee_name);
-  const onBreak = onBreakFromZoom;
+  const onBreakFromQueue = agents.filter((a) => breakMap.has(normName(a.rosterName ?? a.display_name)));
+  // Break Tracker entries not currently matched to RingCentral — for display only (includes managers)
+  const onBreakExtraNames = [...new Map(
+    activeBreaks
+      .filter((b) => {
+        const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
+        return !onBreakFromQueue.some((a) => normName(a.rosterName ?? a.display_name) === resolved);
+      })
+      .map((b) => [normName(resolveTeamMember(b.employee_name) ?? b.employee_name), b.employee_name] as const)
+  ).values()];
+  const onBreak = onBreakFromQueue;
 
   // Non-manager break lists — used for ALL logic (lunch limit, break count badge, reminders)
-  const onBreakNonManager = onBreakFromZoom.filter((a) => {
+  const onBreakNonManager = onBreakFromQueue.filter((a) => {
     const name = a.rosterName ?? a.display_name;
     return defaultRoleFor(name) !== "manager";
   });
-  const onBreakExtraNonManager = activeBreaks
-    .filter((b) => {
-      const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
-      if (defaultRoleFor(resolveTeamMember(b.employee_name) ?? b.employee_name) === "manager") return false;
-      return !onBreakFromZoom.some((a) => normName(a.rosterName ?? a.display_name) === resolved);
-    })
-    .map((b) => b.employee_name);
+  const onBreakExtraNonManager = [...new Map(
+    activeBreaks
+      .filter((b) => {
+        const resolved = normName(resolveTeamMember(b.employee_name) ?? b.employee_name);
+        if (defaultRoleFor(resolveTeamMember(b.employee_name) ?? b.employee_name) === "manager") return false;
+        return !onBreakFromQueue.some((a) => normName(a.rosterName ?? a.display_name) === resolved);
+      })
+      .map((b) => [normName(resolveTeamMember(b.employee_name) ?? b.employee_name), b.employee_name] as const)
+  ).values()];
   const inShiftAndInQueue = agents.filter((a) => {
     const name = a.rosterName ?? a.display_name;
     return a.status === "in_queue" && (isInShift(name) || isRosterListed(name));
@@ -777,8 +804,8 @@ export function ZoomQueueWidget() {
   // Group labels added to LOCKED_TEAM_NAMES for dropdowns — exclude from queue view
   const GROUP_LABELS = new Set(["Team", "NOC Seniors", "Automation", "Automation - Failed"]);
 
-  // Synthetic entries: roster members who are in shift but not in Zoom data at all
-  // (e.g. not logged in to the Zoom Phone client)
+  // Synthetic entries: roster members who are in shift but not in RingCentral data at all
+  // (e.g. not logged in or not visible in the RingCentral queue presence response)
   // Exclude anyone who already has an active break — they belong in "On break" only.
   const syntheticNotInQueue: Array<ZoomAgent & { rosterName?: string | null }> = LOCKED_TEAM_NAMES
     .filter((canonicalName) => {
@@ -810,9 +837,15 @@ export function ZoomQueueWidget() {
   const pct = currentShiftCount > 0 ? Math.round((inShiftAndInQueue.length / currentShiftCount) * 100) : 0;
 
   // Per-queue counts
-  const allQueues = TRACKED_QUEUES.filter((q) =>
-    agents.some((a) => a.queue_opt_in && q in a.queue_opt_in),
+  const discoveredQueues = Array.from(
+    new Set(
+      agents.flatMap((agent) => Object.keys(agent.queue_opt_in ?? {})),
+    ),
   );
+  const allQueues = [
+    ...DEFAULT_QUEUE_ORDER.filter((queueName) => discoveredQueues.includes(queueName)),
+    ...discoveredQueues.filter((queueName) => !DEFAULT_QUEUE_ORDER.includes(queueName)),
+  ];
   const queueCounts = Object.fromEntries(
     allQueues.map((q) => [q, agents.filter((a) => a.queue_opt_in?.[q] === true).length]),
   );
@@ -927,7 +960,7 @@ export function ZoomQueueWidget() {
 
         // Deduplicate agents by normalized name — a person in both NOC and Mobility
         // queues would otherwise trigger one reminder per queue membership.
-        // Synthetic agents (in roster but not in Zoom) are included so they also
+        // Synthetic agents (in roster but not in RingCentral) are included so they also
         // get queue reminders.
         const seenAgentNames = new Set<string>();
         const uniqueAgents = [...allAgents, ...synthetic].filter((a) => {
@@ -1228,7 +1261,7 @@ export function ZoomQueueWidget() {
     };
 
     // Fire once immediately, then every 60 seconds
-    // The interval is STABLE — it never re-mounts when Zoom data refreshes (every 15s)
+    // The interval is STABLE — it never re-mounts when live queue data refreshes (every 15s)
     // because this effect has no dependencies. Latest values are read from refs inside tick().
     void tick();
     const id = window.setInterval(() => { void tick(); }, 60_000);
@@ -1244,94 +1277,109 @@ export function ZoomQueueWidget() {
       subtitle={undefined}
       icon={IconHeadset}
       iconColor="blue"
-      loading={loading}
-      onRefresh={refresh}
+      loading={activeProviderTab === "live" ? loading : false}
+      onRefresh={activeProviderTab === "live" ? refresh : undefined}
       headerActions={
         <Group gap="xs" wrap="wrap" justify="flex-end">
           <SegmentedControl
             size="xs"
-            value={viewMode}
-            onChange={(value: string) => setViewMode(value as "fit" | "zoom")}
+            value={activeProviderTab}
+            onChange={(value: string) => setActiveProviderTab(value as "live" | "diagnostics")}
             data={[
-              { value: "fit", label: "Fit whole" },
-              { value: "zoom", label: "Zoom + scroll" },
+              { value: "live", label: "RingCentral" },
+              { value: "diagnostics", label: "Diagnostics" },
             ]}
           />
-          {viewMode === "zoom" && (
-            <Select
-              size="xs"
-              w={110}
-              value={zoomPercent}
-              onChange={(value) => value && setZoomPercent(value)}
-              data={[
-                { value: "100", label: "100%" },
-                { value: "110", label: "110%" },
-                { value: "125", label: "125%" },
-                { value: "140", label: "140%" },
-              ]}
-              allowDeselect={false}
-            />
+          {activeProviderTab === "live" && (
+            <>
+              <SegmentedControl
+                size="xs"
+                value={viewMode}
+                onChange={(value: string) => setViewMode(value as "fit" | "zoom")}
+                data={[
+                  { value: "fit", label: "Fit whole" },
+                  { value: "zoom", label: "Scale + scroll" },
+                ]}
+              />
+              {viewMode === "zoom" && (
+                <Select
+                  size="xs"
+                  w={110}
+                  value={zoomPercent}
+                  onChange={(value) => value && setZoomPercent(value)}
+                  data={[
+                    { value: "100", label: "100%" },
+                    { value: "110", label: "110%" },
+                    { value: "125", label: "125%" },
+                    { value: "140", label: "140%" },
+                  ]}
+                  allowDeselect={false}
+                />
+              )}
+              {isManager && (
+                <Switch
+                  size="sm"
+                  label="Pause reminders"
+                  checked={remindersPaused}
+                  onChange={(event) => {
+                    const checked = event.currentTarget.checked;
+                    setRemindersPaused(checked);
+                    try {
+                      window.localStorage.setItem(REMINDERS_PAUSED_STORAGE_KEY, checked ? "1" : "0");
+                    } catch {
+                      // ignore storage failures
+                    }
+                  }}
+                />
+              )}
+              <Tooltip label="Add manual break timing">
+                <Button
+                  size="xs"
+                  variant="light"
+                  color="blue"
+                  leftSection={<IconClockEdit size={14} />}
+                  onClick={() => setBreakScheduleOpen(true)}
+                >
+                  Break timing
+                </Button>
+              </Tooltip>
+            </>
           )}
-          {isManager && (
-            <Switch
-              size="sm"
-              label="Pause reminders"
-              checked={remindersPaused}
-              onChange={(event) => {
-                const checked = event.currentTarget.checked;
-                setRemindersPaused(checked);
-                try {
-                  window.localStorage.setItem(REMINDERS_PAUSED_STORAGE_KEY, checked ? "1" : "0");
-                } catch {
-                  // ignore storage failures
-                }
-              }}
-            />
-          )}
-          <Tooltip label="Add manual break timing">
-            <Button
-              size="xs"
-              variant="light"
-              color="blue"
-              leftSection={<IconClockEdit size={14} />}
-              onClick={() => setBreakScheduleOpen(true)}
-            >
-              Break timing
-            </Button>
-          </Tooltip>
         </Group>
       }
       status={
-        data
+        activeProviderTab === "live" && data
           ? {
               label: data.source,
               color: data.source === "live" ? "green" : "yellow",
               tooltip: data.source === "live"
-                ? "Live data from Zoom Phone API"
-                : "Snapshot — set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET in .env",
+                ? "Live data from the RingCentral queue presence API"
+                : "Snapshot fallback — reconnect RingCentral or refresh diagnostics if live queue data is unavailable",
             }
           : undefined
       }
     >
       <>
-        <BreakScheduleModal
-          opened={breakScheduleOpen}
-          onClose={() => setBreakScheduleOpen(false)}
-          identityName={identity?.name}
-          isManager={isManager}
-        />
-        <Box style={{ zoom: contentScale, transformOrigin: "top left" }}>
-        <Stack gap="md">
-        {data?.warning && (
-          <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" radius="md">
-            {data.warning}
-          </Alert>
-        )}
-        {error && (
-          <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light" radius="md">
-            Failed to load: {error}
-          </Alert>
-        )}
+        {activeProviderTab === "live" ? (
+          <>
+            <BreakScheduleModal
+              opened={breakScheduleOpen}
+              onClose={() => setBreakScheduleOpen(false)}
+              identityName={identity?.name}
+              isManager={isManager}
+            />
+            <Box style={{ zoom: contentScale, transformOrigin: "top left" }}>
+            <Stack gap="md">
+            {data?.warning && (
+              <Alert icon={<IconAlertCircle size={16} />} color="yellow" variant="light" radius="md">
+                <Text size="sm">{data.warning}</Text>
+              </Alert>
+            )}
+            {error && (
+              <Alert icon={<IconAlertCircle size={16} />} color="red" variant="light" radius="md">
+                Failed to load: {error}
+              </Alert>
+            )}
 
         <Box
           style={{
@@ -1377,7 +1425,7 @@ export function ZoomQueueWidget() {
                 <Text size="10px" fw={800} tt="uppercase" c="blue.4" style={{ letterSpacing: "0.12em" }}>Status controls</Text>
                 <Text fw={800} size="lg" style={{ letterSpacing: "-0.02em" }}>My status</Text>
                 <Text size="xs" c="dimmed">
-                  Quickly set a break or meeting status while keeping live queue visibility below.
+                  Quickly set a break or meeting status while keeping live RingCentral queue visibility below.
                 </Text>
               </Stack>
               <Group gap="xs" align="center" wrap="nowrap">
@@ -1502,7 +1550,7 @@ export function ZoomQueueWidget() {
                       </Badge>
                     )}
                     {isManager && remindersPaused && (
-                      <Badge size="xs" color="yellow" variant="filled">Reminders paused</Badge>
+                      <Badge size="xs" color="yellow" variant="filled">RingCentral reminders paused</Badge>
                     )}
                   </Group>
                 </Stack>
@@ -1628,7 +1676,7 @@ export function ZoomQueueWidget() {
             </Group>
             <Divider />
             {inShiftAndInQueue.length === 0 ? (
-              <Text size="xs" c="dimmed" ta="center" py="lg">No visible agents currently in queue</Text>
+              <Text size="xs" c="dimmed" ta="center" py="lg">No visible RingCentral agents are currently in queue</Text>
             ) : (
               <ScrollArea.Autosize mah={360}>
                 <Table striped highlightOnHover withRowBorders={false} verticalSpacing="xs" horizontalSpacing="md">
@@ -1671,7 +1719,7 @@ export function ZoomQueueWidget() {
             </Group>
             <Divider />
             {inShiftNotInQueueAll.length === 0 ? (
-              <Text size="xs" c="dimmed" ta="center" py="lg">No in-shift agents are currently out of queue</Text>
+              <Text size="xs" c="dimmed" ta="center" py="lg">No in-shift RingCentral agents are currently out of queue</Text>
             ) : (
               <ScrollArea.Autosize mah={360}>
                 <Table striped highlightOnHover withRowBorders={false} verticalSpacing="xs" horizontalSpacing="md">
@@ -1697,7 +1745,7 @@ export function ZoomQueueWidget() {
                         activeStatus={activeStatusMap.get(normName(a.rosterName ?? a.display_name))}
                         onEndStatus={endStatus}
                         endDisabled={posting}
-                        canEndStatus={isManager || identity?.name?.trim() === (a.rosterName ?? a.display_name).trim()}
+                        canEndStatus={isManager || (!!identity?.name && samePerson(identity.name, a.rosterName ?? a.display_name))}
                         showReason
                         showReminderTimer
                         reminderMeta={queueReminderMetaForAgent(a)}
@@ -1749,11 +1797,11 @@ export function ZoomQueueWidget() {
                       activeStatus={activeStatusMap.get(normName(a.rosterName ?? a.display_name))}
                       onEndStatus={endStatus}
                       endDisabled={posting}
-                      canEndStatus={isManager || identity?.name?.trim() === (a.rosterName ?? a.display_name).trim()}
+                      canEndStatus={isManager || (!!identity?.name && samePerson(identity.name, a.rosterName ?? a.display_name))}
                       showReason
                     />
                   ))}
-                  {/* Break Tracker members not matched to a Zoom agent — show them here too */}
+                  {/* Break Tracker members not matched to a RingCentral agent — show them here too */}
                   {onBreakExtraNames.map((employeeName) => {
                     const breakRow = activeBreaks.find((b) => b.employee_name === employeeName);
                     if (!breakRow) return null;
@@ -1767,7 +1815,7 @@ export function ZoomQueueWidget() {
                               <IconCoffee size={12} />
                             </ThemeIcon>
                             <Text size="sm" fw={600}>{employeeName}</Text>
-                            <Badge size="xs" variant="dot" color="gray">tracker only</Badge>
+                            <Badge size="xs" variant="dot" color="gray">break tracker only</Badge>
                           </Group>
                         </Table.Td>
                         <Table.Td>
@@ -1779,7 +1827,7 @@ export function ZoomQueueWidget() {
                           <Text size="xs" c="dimmed">{elapsedMin}m</Text>
                         </Table.Td>
                         <Table.Td>
-                          {(isManager || identity?.name?.trim() === employeeName.trim()) && (
+                          {(isManager || (!!identity?.name && samePerson(identity.name, employeeName))) && (
                             <Button size="compact-xs" variant="light" color="orange" leftSection={<IconPlayerStop size={12} />}
                               onClick={() => void endStatus(breakRow)} disabled={posting}>
                               End
@@ -1869,13 +1917,17 @@ export function ZoomQueueWidget() {
           );
         })()}
 
-        {data && (
-          <Text size="xs" c="dimmed" ta="right">
-            {currentShiftCount} in shift (Zoom) · roster: {rosterData?.inShiftNow.length ?? "?"} · refreshed {new Date(data.fetched_at).toLocaleTimeString()}
-          </Text>
+            {data && (
+              <Text size="xs" c="dimmed" ta="right">
+                {currentShiftCount} in shift (RingCentral) · roster: {rosterData?.inShiftNow.length ?? "?"} · refreshed {new Date(data.fetched_at).toLocaleTimeString()}
+              </Text>
+            )}
+              </Stack>
+            </Box>
+          </>
+        ) : (
+          <RingCentralTestPanel />
         )}
-          </Stack>
-        </Box>
       </>
     </WidgetFrame>
   );
@@ -1919,7 +1971,7 @@ function AgentRow({
           <Group gap="xs" wrap="nowrap">
             <Badge size="xs" variant="dot" color={isSynthetic ? "orange" : ZOOM_STATUS_COLORS[agent.status]} />
             <Text size="sm" fw={500}>{canonicalName ?? agent.display_name}</Text>
-            {isSynthetic && <Badge size="xs" color="orange" variant="light">Not in Zoom</Badge>}
+            {isSynthetic && <Badge size="xs" color="orange" variant="light">Missing from RingCentral</Badge>}
           </Group>
           <Group gap={6}>
             {team && (
@@ -1934,7 +1986,7 @@ function AgentRow({
             )}
             {canonicalName && canonicalName !== agent.display_name && (
               <Text size="xs" c="dimmed">
-                Zoom: {agent.display_name}
+                RingCentral: {agent.display_name}
               </Text>
             )}
           </Group>
@@ -2021,5 +2073,3 @@ function AgentRow({
   );
 }
 
-// Suppress unused import warnings
-void ZOOM_STATUS_LABELS;

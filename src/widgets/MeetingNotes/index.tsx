@@ -1521,12 +1521,16 @@ export function MeetingNotesWidget() {
           ? (individualSections[0]?.key ?? favoriteSections[0]?.key ?? managementSections[0]?.key ?? otherSections[0]?.key ?? null)
           : (otherSections[0]?.key ?? managementSections[0]?.key ?? favoriteSections[0]?.key ?? individualSections[0]?.key ?? null))
       : (sectionRecords.find((s) => s.notebook_group === "other")?.key ?? null);
+
     if (!activeSectionKey) {
-      setActiveSectionKey(firstKey);
+      if (firstKey !== activeSectionKey) setActiveSectionKey(firstKey);
       return;
     }
+
     const valid = sectionRecords.some((section) => section.key === activeSectionKey);
-    if (!valid) setActiveSectionKey(firstKey);
+    if (!valid && firstKey !== activeSectionKey) {
+      setActiveSectionKey(firstKey);
+    }
   }, [isManager, workspaceView, activeSectionKey, favoriteSections, individualSections, managementSections, otherSections, sectionRecords]);
 
   const activeSection = useMemo(() => sectionRecords.find((section) => section.key === activeSectionKey) ?? null, [sectionRecords, activeSectionKey]);
@@ -1580,10 +1584,10 @@ export function MeetingNotesWidget() {
   useEffect(() => {
     const firstPageId = pageList[0]?.id ?? null;
     if (!selectedPageId) {
-      setSelectedPageId(firstPageId);
+      if (firstPageId !== selectedPageId) setSelectedPageId(firstPageId);
       return;
     }
-    if (selectedPageId && !pageList.some((note) => note.id === selectedPageId)) {
+    if (selectedPageId && !pageList.some((note) => note.id === selectedPageId) && firstPageId !== selectedPageId) {
       setSelectedPageId(firstPageId);
     }
   }, [pageList, selectedPageId]);
@@ -1622,7 +1626,8 @@ export function MeetingNotesWidget() {
 
   useEffect(() => {
     if (!yearOptions.some((option) => option.value === selectedYear)) {
-      setSelectedYear(yearOptions[0]?.value ?? String(new Date().getFullYear()));
+      const fallbackYear = yearOptions[0]?.value ?? String(new Date().getFullYear());
+      if (fallbackYear !== selectedYear) setSelectedYear(fallbackYear);
     }
   }, [yearOptions, selectedYear]);
 

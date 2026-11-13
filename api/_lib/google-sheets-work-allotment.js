@@ -2,6 +2,13 @@ import { google } from "googleapis";
 import { readRosterDailyEntries, readRosterMonthEntries } from "../roster-shift.js";
 import { supabaseAdmin } from "./supabase-admin.js";
 import { postSlackMessage } from "./slack.js";
+import {
+  selectHandoffCandidatePool,
+  selectNextHandoffRecipient,
+  selectS5HandoffPool,
+  selectS6HandoffPool,
+} from "./handoff-selection.js";
+import { mergeOvernightS6Carryover } from "./shift-roster.js";
 
 export const WORK_ALLOTMENT_CONFIG = {
   rosterSpreadsheetId: "14t85Jg97RXmjDg3cwBQOnYGVYoBZUPuTrHGz-SKtZA4",
@@ -63,43 +70,43 @@ export const ALL_MEMBERS = [
 export const BASE_SHIFT_ORDER = ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5", "S6"];
 
 export const SHIFT_DEFINITIONS = {
-  S1: { label: "Shift 1", rosterCode: "S1", postHour: 3, postMinute: 25, handoffHour: 3, handoffMinute: 45, start: "3:00 AM", end: "12:00 PM", next: "S2" },
+  S1: { label: "Shift 1", rosterCode: "S1", postHour: 2, postMinute: 25, handoffHour: 2, handoffMinute: 45, start: "2:00 AM", end: "11:00 AM", next: "S2" },
   S2: { label: "Shift 2", rosterCode: "S2", postHour: 6, postMinute: 25, handoffHour: 6, handoffMinute: 45, start: "6:00 AM", end: "3:00 PM", next: "S3" },
   S3: { label: "Shift 3", rosterCode: "S3", postHour: 8, postMinute: 25, handoffHour: 8, handoffMinute: 45, start: "8:00 AM", end: "5:00 PM", next: "S4" },
-  S4: { label: "Shift 4", rosterCode: "S4", postHour: 11, postMinute: 25, handoffHour: 11, handoffMinute: 45, start: "11:00 AM", end: "8:00 PM", next: "S5" },
-  "S4.1": { label: "Shift 4.1", rosterCode: "S4.1", postHour: 14, postMinute: 25, handoffHour: 14, handoffMinute: 45, start: "2:25 PM", end: "8:00 PM", next: "S4.2" },
-  "S4.2": { label: "Shift 4.2", rosterCode: "S4.2", postHour: 16, postMinute: 25, handoffHour: 16, handoffMinute: 45, start: "4:25 PM", end: "8:00 PM", next: "S5" },
-  S5: { label: "Shift 5", rosterCode: "S5", postHour: 19, postMinute: 25, handoffHour: 19, handoffMinute: 45, start: "7:00 PM", end: "4:00 AM", next: "S6" },
-  S6: { label: "Shift 6", rosterCode: "S6", postHour: 0, postMinute: 25, handoffHour: 0, handoffMinute: 45, start: "12:00 AM", end: "9:00 AM", next: "S1" },
+  S4: { label: "Shift 4", rosterCode: "S4", postHour: 10, postMinute: 25, handoffHour: 10, handoffMinute: 45, start: "10:00 AM", end: "7:00 PM", next: "S5" },
+  "S4.1": { label: "Shift 4.1", rosterCode: "S4.1", postHour: 14, postMinute: 25, handoffHour: 14, handoffMinute: 45, start: "2:25 PM", end: "7:00 PM", next: "S4.2" },
+  "S4.2": { label: "Shift 4.2", rosterCode: "S4.2", postHour: 16, postMinute: 25, handoffHour: 16, handoffMinute: 45, start: "4:25 PM", end: "7:00 PM", next: "S5" },
+  S5: { label: "Shift 5", rosterCode: "S5", postHour: 18, postMinute: 25, handoffHour: 18, handoffMinute: 45, start: "6:00 PM", end: "3:00 AM", next: "S6" },
+  S6: { label: "Shift 6", rosterCode: "S6", postHour: 23, postMinute: 25, handoffHour: 23, handoffMinute: 45, start: "11:00 PM", end: "8:00 AM", next: "S1" },
 };
 
 const SHIFT_MATCHERS = [
-  { code: "S1", patterns: [/^3:?00\s*am\s*-\s*12:?00\s*pm$/i, /^s1$/i] },
+  { code: "S1", patterns: [/^(2:?00\s*am\s*-\s*11:?00\s*am|3:?00\s*am\s*-\s*12:?00\s*pm)$/i, /^s1$/i] },
   { code: "S2", patterns: [/^6:?00\s*am\s*-\s*3:?00\s*pm$/i, /^s2$/i] },
   { code: "S3", patterns: [/^8:?00\s*am\s*-\s*5:?00\s*pm$/i, /^s3$/i] },
-  { code: "S4", patterns: [/^11:?00\s*am\s*-\s*8:?00\s*pm$/i, /^s4$/i] },
-  { code: "S5", patterns: [/^7:?00\s*pm\s*-\s*4:?00\s*am$/i, /^s5$/i] },
-  { code: "S6", patterns: [/^(12:?00\s*am\s*-\s*9:?00\s*am|12:?30\s*am\s*-\s*9:?30\s*am)$/i, /^s6$/i, /^s5\.1$/i] },
+  { code: "S4", patterns: [/^(10:?00\s*am\s*-\s*7:?00\s*pm|11:?00\s*am\s*-\s*8:?00\s*pm)$/i, /^s4$/i] },
+  { code: "S5", patterns: [/^(6:?00\s*pm\s*-\s*3:?00\s*am|7:?00\s*pm\s*-\s*4:?00\s*am)$/i, /^s5$/i] },
+  { code: "S6", patterns: [/^(11:?00\s*pm\s*-\s*8:?00\s*am|12:?00\s*am\s*-\s*9:?00\s*am|12:?30\s*am\s*-\s*9:?30\s*am)$/i, /^s6$/i, /^s5\.1$/i] },
 ];
 
 export const FAIRNESS_SHIFT_GROUPS = [
   {
     key: "late-evening",
-    label: "7:00 PM – 4:00 AM fairness",
+    label: "6:00 PM – 3:00 AM fairness",
     shiftCodes: ["S5"],
-    shiftLabels: ["7:00 PM – 4:00 AM"],
+    shiftLabels: ["6:00 PM – 3:00 AM"],
   },
   {
     key: "overnight-early",
-    label: "12:00 AM / 3:00 AM / 6:00 AM fairness",
+    label: "11:00 PM / 2:00 AM / 6:00 AM fairness",
     shiftCodes: ["S6", "S1", "S2"],
-    shiftLabels: ["12:00 AM – 9:00 AM", "3:00 AM – 12:00 PM", "6:00 AM – 3:00 PM"],
+    shiftLabels: ["11:00 PM – 8:00 AM", "2:00 AM – 11:00 AM", "6:00 AM – 3:00 PM"],
   },
   {
     key: "day-swing",
-    label: "8:00 AM / 11:00 AM fairness",
+    label: "8:00 AM / 10:00 AM fairness",
     shiftCodes: ["S3", "S4", "S4.1", "S4.2"],
-    shiftLabels: ["8:00 AM – 5:00 PM", "11:00 AM – 8:00 PM"],
+    shiftLabels: ["8:00 AM – 5:00 PM", "10:00 AM – 7:00 PM"],
   },
 ];
 
@@ -285,12 +292,12 @@ function shiftCodeFromWindow(shift) {
   const start = Number(shift.start);
   const end = Number(shift.end);
   const windows = {
-    S1: [[180, 720]],
+    S1: [[120, 660], [180, 720]],
     S2: [[360, 900]],
     S3: [[480, 1020]],
-    S4: [[660, 1200]],
-    S5: [[1140, 240]],
-    S6: [[0, 540], [30, 570], [1410, 510]],
+    S4: [[600, 1140], [660, 1200]],
+    S5: [[1080, 180], [1140, 240]],
+    S6: [[1380, 480], [0, 540], [30, 570], [1410, 510]],
   };
   return Object.entries(windows).find(([, ranges]) =>
     ranges.some((values) => values[0] === start && values[1] === end)
@@ -303,12 +310,12 @@ function inferShiftCodeFromWindow(shift) {
   if (exact) return exact;
   const start = Number(shift.start);
   if (!Number.isFinite(start)) return null;
-  if (start >= 1410 || start < 180) return "S6";
-  if (start >= 1140) return "S5";
-  if (start >= 660) return "S4";
+  if (start >= 1380 || start < 120) return "S6";
+  if (start >= 1080) return "S5";
+  if (start >= 600) return "S4";
   if (start >= 480) return "S3";
   if (start >= 360) return "S2";
-  if (start >= 180) return "S1";
+  if (start >= 120) return "S1";
   return null;
 }
 
@@ -630,7 +637,7 @@ export function detectDueShiftSlot(now = new Date()) {
   return match?.[0] ?? null;
 }
 
-// S5 (7:00 PM – 4:00 AM) members never hand off tickets — exclude them from
+// S5 (6:00 PM – 3:00 AM) members never hand off tickets — exclude them from
 // "Ticket Ownership - Off Members" ownership assignments entirely.
 // When a member is off (WO/PTO), their roster cell contains the off reason (e.g. "WO"),
 // NOT their shift time, so shiftCode resolves to null. We use a name-based set
@@ -650,11 +657,18 @@ function isS5Member(member) {
 const TEMP_HANDOFF_EXCLUSIONS = [
   { name: "Kenya Gentry", until: "2026-09-20", reason: "Extended PTO — no tickets assigned" },
   { name: "Hamza Rahmani", until: "2026-10-04", reason: "Leave through October 4 — no tickets assigned" },
+  { name: "Akash Hanvate", until: "2026-10-20", reason: "Temporarily excluded from Ticket Ownership - Off Members through October 20" },
+  { name: "Mohammed Zubairuddin", until: "2026-10-20", reason: "Temporarily excluded from Ticket Ownership - Off Members through October 20" },
 ];
 
 const TEMP_ASRH_EXCLUSIONS = [
   { name: "Kenya Gentry", until: "2026-09-30", reason: "Temporarily excluded from AS&RH assignment through September 30" },
 ];
+
+const KENYA_TEMP_ASRH_START = "2026-10-12";
+const KENYA_TEMP_ASRH_END = "2026-10-15";
+const KENYA_TEMP_ASRH_NAME = "Kenya Gentry";
+const KENYA_TEMP_ASRH_THURSDAY = "2026-10-15";
 
 export function isTempHandoffExcludedByName(name, dateKey) {
   return TEMP_HANDOFF_EXCLUSIONS.some(
@@ -679,7 +693,7 @@ function memberMapByShift(roster, now = new Date()) {
   for (const member of roster.members) {
     if (member.isManager) continue;
     if (member.offReason) {
-      // Skip S5 (7 PM–4 AM) members — they don't hand off tickets
+      // Skip S5 (6 PM–3 AM) members — they don't hand off tickets
       if (isS5Member(member)) continue;
       // Skip members excluded for a fixed date range (e.g. extended PTO with no tickets)
       if (isTempHandoffExcluded(member, dateKey)) continue;
@@ -726,10 +740,25 @@ function minutesSinceMidnightForSlotPost(slot) {
 
 function remainingMinutesAfterPost(member, slot) {
   const postMinutes = minutesSinceMidnightForSlotPost(slot);
+  const shiftStart = Number(member?.shiftWindow?.start);
   const shiftEnd = Number(member?.shiftWindow?.end);
-  if (!Number.isFinite(postMinutes) || !Number.isFinite(shiftEnd)) return Number.POSITIVE_INFINITY;
-  if (shiftEnd >= postMinutes) return shiftEnd - postMinutes;
-  return (24 * 60 - postMinutes) + shiftEnd;
+  if (!Number.isFinite(postMinutes) || !Number.isFinite(shiftStart) || !Number.isFinite(shiftEnd)) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  // Only true overnight windows (for example 6:00 PM → 3:00 AM) should
+  // wrap into the next day. Same-day overrides like 12:00 AM → 4:30 AM
+  // must expire after 4:30 AM and should not remain eligible for later
+  // slots such as S2.
+  const wrapsPastMidnight = shiftStart > shiftEnd;
+  const normalizedPostMinutes = wrapsPastMidnight && postMinutes < shiftStart
+    ? postMinutes + (24 * 60)
+    : postMinutes;
+  const normalizedShiftEnd = wrapsPastMidnight
+    ? shiftEnd + (24 * 60)
+    : shiftEnd;
+
+  return normalizedShiftEnd - normalizedPostMinutes;
 }
 
 function isAvailableLongEnoughForSlot(member, slot, minimumMinutes = 45) {
@@ -908,11 +937,15 @@ function shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligib
     return previousScore < minScore;
   }
   if (slot === "S4") {
-    // Keep the S2 8h owner until the 2:45 PM (S4.1) handoff.
-    return carriedMember.shiftCode === "S2";
+    // Keep the S2 8h owner until S4.1 (2:45 PM) and the S3 owner until S4.2 (4:45 PM).
+    return carriedMember.shiftCode === "S2" || carriedMember.shiftCode === "S3";
   }
   if (slot === "S4.1") {
-    // 2:45 PM: S2's 8h block ends. Native S4 (e.g. Lokesh) takes over.
+    // 2:45 PM: S2's 8h block ends. Native S4 takes over.
+    return false;
+  }
+  if (slot === "S4.2") {
+    // 4:45 PM: S3's block ends. Native S4 takes over.
     return false;
   }
 
@@ -934,6 +967,7 @@ function choosePrimaryForSlot({
   previousPrimary = null,
   previousSlot = null,
   slotIndex = 0,
+  dateKey = "",
 }) {
   const eligible = sortByFairness(
     availableMembers.filter((member) => !member.asrhRestricted),
@@ -943,22 +977,37 @@ function choosePrimaryForSlot({
 
   if (eligible.length === 0) return { primary: null, backup: null, carried: false };
 
-  if (shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligible, fairness, slotIndex })) {
+  const kenyaOverrideActive = dateKey >= KENYA_TEMP_ASRH_START && dateKey <= KENYA_TEMP_ASRH_END;
+  const scopedEligible = kenyaOverrideActive && slot !== "S2"
+    ? eligible.filter((member) => member.name !== KENYA_TEMP_ASRH_NAME)
+    : eligible;
+  const kenyaEligible = scopedEligible.find((member) => member.name === KENYA_TEMP_ASRH_NAME) ?? null;
+  if (scopedEligible.length === 0) return { primary: null, backup: null, carried: false };
+
+  if (kenyaOverrideActive && slot === "S2" && kenyaEligible) {
+    return {
+      primary: KENYA_TEMP_ASRH_NAME,
+      backup: chooseBackupForSlot(slot, scopedEligible, KENYA_TEMP_ASRH_NAME),
+      carried: false,
+    };
+  }
+
+  if (shouldCarryPrimaryForSlot({ slot, previousPrimary, previousSlot, eligible: scopedEligible, fairness, slotIndex })) {
     return {
       primary: previousPrimary,
-      backup: chooseBackupForSlot(slot, eligible, previousPrimary),
+      backup: chooseBackupForSlot(slot, scopedEligible, previousPrimary),
       carried: true,
     };
   }
 
-  const slotPrimaryEligible = preferredPrimaryPoolForSlot(slot, eligible);
+  const slotPrimaryEligible = preferredPrimaryPoolForSlot(slot, scopedEligible);
   const primaryPool = sortByFairness(
-    slotPrimaryEligible.length > 0 ? slotPrimaryEligible : eligible,
+    slotPrimaryEligible.length > 0 ? slotPrimaryEligible : scopedEligible,
     fairness,
     slot,
   );
   const primary = primaryPool[0]?.name ?? null;
-  const backup = chooseBackupForSlot(slot, eligible, primary);
+  const backup = chooseBackupForSlot(slot, scopedEligible, primary);
   return { primary, backup, carried: false };
 }
 
@@ -982,19 +1031,29 @@ function displayShiftLabel(slot) {
 
 export function getDailyShiftOrderForDate(date = new Date()) {
   const weekday = formatInZone(date, { weekday: "long" });
-  if (weekday === "Friday") return BASE_SHIFT_ORDER.filter((slot) => slot !== "S5" && slot !== "S6");
-  if (weekday === "Saturday") return [];
-  if (weekday === "Sunday") return ["S5", "S6"];
+  if (weekday === "Friday") return ["S1", "S2", "S3", "S4", "S4.1", "S4.2", "S5"];
+  if (weekday === "Saturday") return ["S1", "S4", "S5"];
+  if (weekday === "Sunday") return ["S1", "S4", "S5", "S6"];
   return [...BASE_SHIFT_ORDER];
 }
 
 function nextSlotInfo(date, slot) {
   const order = getDailyShiftOrderForDate(date);
   const idx = order.indexOf(slot);
-  const nextSlot = idx >= 0 ? (order[(idx + 1) % order.length] ?? order[0] ?? "S1") : "S1";
+  if (idx >= 0 && idx + 1 < order.length) {
+    return { slot: order[idx + 1], date: new Date(date) };
+  }
+
   const nextDate = new Date(date);
-  if (slot === "S6") nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-  return { slot: nextSlot, date: nextDate };
+  for (let daysAhead = 1; daysAhead <= 7; daysAhead += 1) {
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const nextOrder = getDailyShiftOrderForDate(nextDate);
+    if (nextOrder.length > 0) {
+      return { slot: nextOrder[0] ?? "S1", date: new Date(nextDate) };
+    }
+  }
+
+  return { slot: "S1", date: new Date(date) };
 }
 
 function formatClockTime(hour = 0, minute = 0) {
@@ -1017,13 +1076,14 @@ function formatHandoffTime(slot) {
   return formatClockTime(def.handoffHour ?? def.postHour, def.handoffMinute ?? def.postMinute);
 }
 
-function buildDailyOffOwnershipAssignments(offMembers, byShift) {
+function buildDailyOffOwnershipAssignments(offMembers, byShift, dateKey = "") {
   if (!offMembers.length) return [];
 
   const coverageCandidates = ["S1", "S2", "S3", "S4"]
     .flatMap((code) => byShift.get(code) ?? [])
     .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
     .filter((member) => !member.asrhRestricted)
+    .filter((member) => !isTempHandoffExcludedByName(member?.name, dateKey))
     .map((member) => ({
       name: member.name,
       shiftCode: member.shiftCode ?? null,
@@ -1108,7 +1168,7 @@ function formatMessage({ slot, date, primary, backup, ntPrimary, offAssignments,
       `${dateLabel} (${dayName})`,
       "",
       "Active Service & Rolling Handoff:",
-      `• Primary: ${primary}${handingClause}`,
+      `• Primary: ${primary}${continuingClause}`,
       `• Backup: —`,
       "",
       "📋 New Tickets / Tasks:",
@@ -1145,34 +1205,68 @@ function formatMessage({ slot, date, primary, backup, ntPrimary, offAssignments,
   ].join("\n");
 }
 
-function determineNextHandoffCandidates({ slot, primaryShiftCode, byShift, fairness }) {
+function s4NativePool(byShift) {
+  return (byShift.get("S4") ?? []).filter((member) => !member.asrhRestricted);
+}
+
+export function determineNextHandoffCandidates({ slot, primaryShiftCode, byShift, fairness, date }) {
   if (slot === "S1") {
-    const targetSlot = primaryShiftCode === "S6" ? "S3" : "S2";
-    let pool = (byShift.get(targetSlot) ?? []).filter((member) => !member.asrhRestricted);
-    if (primaryShiftCode === "S6" && pool.length === 0) {
-      pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
+    // S6-on-S1 continues toward S3 (S2 only if no S3).
+    if (primaryShiftCode === "S6") {
+      let pool = (byShift.get("S3") ?? []).filter((member) => !member.asrhRestricted);
+      if (pool.length === 0) {
+        pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
+        return { pool, targetSlot: pool.length > 0 ? "S2" : "S3" };
+      }
+      return { pool, targetSlot: "S3" };
     }
-    return { pool, targetSlot: pool.length > 0 ? targetSlot : (primaryShiftCode === "S6" ? "S2" : targetSlot) };
+
+    // S1 owner: prefer S3, then S4. Hand to S2 only when S2 is strictly behind on hours.
+    const s2Pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
+    const s3Pool = (byShift.get("S3") ?? []).filter((member) => !member.asrhRestricted);
+    const s4Pool = s4NativePool(byShift);
+    const s2Best = s2Pool.length ? sortByFairness(s2Pool, fairness, "S2")[0] : null;
+    const s3Best = s3Pool.length ? sortByFairness(s3Pool, fairness, "S3")[0] : null;
+    const s4Best = s4Pool.length ? sortByFairness(s4Pool, fairness, "S4")[0] : null;
+    const s2Score = s2Best ? fairnessScoreFor(s2Best.name, fairness, "S2") : Number.POSITIVE_INFINITY;
+    const s3Score = s3Best ? fairnessScoreFor(s3Best.name, fairness, "S3") : Number.POSITIVE_INFINITY;
+    const s4Score = s4Best ? fairnessScoreFor(s4Best.name, fairness, "S4") : Number.POSITIVE_INFINITY;
+    const s2HasFewerHours = Boolean(s2Best) && s2Score < s3Score && s2Score < s4Score;
+    if (s2HasFewerHours) return { pool: s2Pool, targetSlot: "S2" };
+    if (s3Pool.length > 0) return { pool: s3Pool, targetSlot: "S3" };
+    if (s4Pool.length > 0) return { pool: s4Pool, targetSlot: "S4" };
+    if (s2Pool.length > 0) return { pool: s2Pool, targetSlot: "S2" };
+    return { pool: [], targetSlot: "S3" };
+  }
+
+  if (slot === "S5") {
+    // At the S5→S6 overlap, only the 11 PM–8 AM S6 roster is eligible.
+    const s6Pool = selectHandoffCandidatePool(["S6"], byShift);
+    return selectS5HandoffPool(s6Pool);
   }
 
   if (slot === "S6") {
-    const s2Pool = (byShift.get("S2") ?? []).filter((member) => !member.asrhRestricted);
-    const s3Pool = (byShift.get("S3") ?? []).filter((member) => !member.asrhRestricted);
-    if (s2Pool.length > 0) return { pool: s2Pool, targetSlot: "S2" };
-    if (s3Pool.length > 0) return { pool: s3Pool, targetSlot: "S3" };
+    // Overnight ownership hands to the early shift, never S2/S3: those shifts
+    // are not the next eligible owners at the S5/S6 boundary. Prefer S1; if
+    // no S1 agent is available, keep the handoff within the S6 coverage pool.
     const s1Pool = (byShift.get("S1") ?? []).filter((member) => !member.asrhRestricted);
-    return { pool: s1Pool, targetSlot: "S1" };
+    const s6Pool = (byShift.get("S6") ?? []).filter((member) => !member.asrhRestricted);
+    return selectS6HandoffPool(s1Pool, s6Pool);
   }
 
-  const next = nextSlotInfo(new Date(), slot);
-  const pool = asrhShiftCodesForSlot(next.slot)
-    .flatMap((code) => byShift.get(code) ?? [])
-    .filter((member, index, all) => all.findIndex((entry) => entry.name === member.name) === index)
-    .filter((member) => !member.asrhRestricted);
+  if (primaryShiftCode === "S2" && (slot === "S2" || slot === "S3" || slot === "S4")) {
+    return { pool: s4NativePool(byShift), targetSlot: "S4.1" };
+  }
+  if (primaryShiftCode === "S3" && (slot === "S3" || slot === "S4" || slot === "S4.1")) {
+    return { pool: s4NativePool(byShift), targetSlot: "S4.2" };
+  }
+
+  const next = nextSlotInfo(date ?? new Date(), slot);
+  const pool = selectHandoffCandidatePool(asrhShiftCodesForSlot(next.slot), byShift);
   return { pool, targetSlot: next.slot };
 }
 
-export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, preferredPrimarySlot = null, slotIndex = 0, fixedOffAssignments = null, fixedOffOwnershipAssignments = null, fixedOffGroups = null, previousDayS5Members = [] }) {
+export function generateWorkAllotmentFromData({ now = new Date(), slotOverride = null, roster, fairness, scheduledPosts = [], preferredPrimary = null, preferredPrimarySlot = null, slotIndex = 0, fixedOffAssignments = null, fixedOffOwnershipAssignments = null, fixedOffGroups = null, previousDayS5Members = [], previousDayS6Members = [] }) {
   const slot = slotOverride ?? detectDueShiftSlot(now);
   if (!slot) return { status: "no_post", message: "NO_POST_REQUIRED" };
 
@@ -1181,7 +1275,13 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     return { status: "no_post", slot, message: "NO_POST_REQUIRED", dateKey };
   }
 
-  const { byShift, offMembers } = memberMapByShift(roster, now);
+  const rosterForSlot = mergeOvernightS6Carryover(
+    roster,
+    previousDayS6Members,
+    slot,
+    minutesSinceMidnightForSlotPost(slot),
+  );
+  const { byShift, offMembers } = memberMapByShift(rosterForSlot, now);
   const previous = previousPostedPrimary(scheduledPosts, dateKey, slot);
   const carryPrimary = preferredPrimary ?? previous?.primary ?? null;
   const carrySourceSlot = preferredPrimarySlot ?? previous?.shift ?? null;
@@ -1196,7 +1296,7 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     .filter((member) => isAvailableLongEnoughForSlot(member, slot, 45));
 
   const fallbackCarryMember = carryPrimary
-    ? roster.members.find((member) => (
+    ? rosterForSlot.members.find((member) => (
       member.name === carryPrimary
       && !member.asrhRestricted
       && isAvailableLongEnoughForSlot(member, slot, 45)
@@ -1238,6 +1338,7 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     previousPrimary: carryPrimary,
     previousSlot: carrySourceSlot,
     slotIndex,
+    dateKey,
   });
 
   const fallbackRollingPool = sortByFairness(
@@ -1275,21 +1376,25 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     : (resolvedBackupNames ? [resolvedBackupNames] : []);
   const backup = backupNames.length > 0 ? backupNames.join(", ") : null;
   const asrhUnassigned = !primary;
-  const primaryShiftCode = primary ? shiftCodeForMember(roster, primary) : null;
+  const primaryShiftCode = primary ? shiftCodeForMember(rosterForSlot, primary) : null;
 
   const { pool: nextPool, targetSlot: nextTargetSlot } = determineNextHandoffCandidates({
     slot,
     primaryShiftCode,
     byShift,
     fairness,
+    date: now,
   });
   const nextCandidates = sortByFairness(
     nextPool.filter((member) => isAvailableLongEnoughForSlot(member, nextTargetSlot, 45)),
     fairness,
     nextTargetSlot,
   );
-  const nextPrimary = nextCandidates[0]?.name ?? carryPrimary ?? "next shift lead";
-  const nextPostTime = formatPostTime(nextTargetSlot);
+  const isSinglePersonCoverage = effectiveAvailableMembers.length === 1 && Boolean(primary);
+  const nextPrimary = isSinglePersonCoverage
+    ? null
+    : selectNextHandoffRecipient(nextCandidates);
+  const nextPostTime = formatHandoffTime(nextTargetSlot);
 
   const effectiveCarrySourceSlot = preferredPrimary && preferredPrimary === primary
     ? (preferredPrimarySlot ?? previous?.shift ?? null)
@@ -1319,7 +1424,7 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     }
   }
   const effectiveNtPrimary = ntPrimary.length > 0 ? ntPrimary : (primary ? [primary] : effectiveAvailableMembers.map((member) => member.name));
-  const offOwnershipAssignments = fixedOffOwnershipAssignments ?? buildDailyOffOwnershipAssignments(offMembers, byShift);
+  const offOwnershipAssignments = fixedOffOwnershipAssignments ?? buildDailyOffOwnershipAssignments(offMembers, byShift, dateKey);
   const offAssignments = fixedOffAssignments ?? formatOwnershipAssignments(offOwnershipAssignments);
   const offGroups = fixedOffGroups ?? buildOffGroups(offMembers);
 
@@ -1334,7 +1439,7 @@ export function generateWorkAllotmentFromData({ now = new Date(), slotOverride =
     nextPrimary,
     nextPostTime,
     continuingFrom,
-    onePersonShift: effectiveAvailableMembers.length === 1 && Boolean(primary),
+    onePersonShift: isSinglePersonCoverage,
     asrhUnassigned,
   });
 
@@ -1581,15 +1686,48 @@ async function computeWeekendCoverageFairnessHours(date, coveredSlots = new Set(
   return { totals, slots: activeSlots };
 }
 
+async function loadPostedWorkAllotmentJobsForDate(operationalDate) {
+  const { data, error } = await supabaseAdmin
+    .from("work_allotment_jobs")
+    .select("id, shift, primary, backup, status, operational_date, posted_at")
+    .eq("operational_date", operationalDate)
+    .eq("status", "posted");
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+async function loadSavedWorkAllotmentJobsForDate(operationalDate) {
+  const { data, error } = await supabaseAdmin
+    .from("work_allotment_jobs")
+    .select("id, shift, primary, backup, status, operational_date, posted_at")
+    .eq("operational_date", operationalDate)
+    .not("primary", "is", null);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 export async function syncFairnessSheetForOperationalDate({ operationalDate, jobs = [] } = {}) {
   const dateKey = String(operationalDate ?? "").trim();
   if (!dateKey) {
     throw new Error("operationalDate is required for AS&RH hours sync.");
   }
 
+  const postedJobs = Array.isArray(jobs)
+    ? jobs.filter((job) => String(job?.status ?? "") === "posted")
+    : [];
   const syncDate = dateFromDateKey(dateKey);
+  const todayKey = localDateKey(new Date());
+  const dbPostedJobs = postedJobs.length > 0 ? [] : await loadPostedWorkAllotmentJobsForDate(dateKey);
+  const canUseSavedJobsFallback = dateKey < todayKey;
+  const fallbackJobs = postedJobs.length === 0 && dbPostedJobs.length === 0 && canUseSavedJobsFallback
+    ? await loadSavedWorkAllotmentJobsForDate(dateKey)
+    : [];
+  const sourceJobs = postedJobs.length > 0
+    ? postedJobs
+    : (dbPostedJobs.length > 0 ? dbPostedJobs : fallbackJobs.map((job) => ({ ...job, status: "posted" })));
+
   const targetMonthKey = String(dateKey).slice(0, 7);
-  const { totals: jobTotals, coveredSlots } = computeFairnessHoursFromJobs(jobs, dateKey);
+  const { totals: jobTotals, coveredSlots } = computeFairnessHoursFromJobs(sourceJobs, dateKey);
   const { totals: weekendTotals, slots: weekendCoverageSlots } = await computeWeekendCoverageFairnessHours(syncDate, coveredSlots);
   const totals = mergeFairnessTotals(new Map(jobTotals), weekendTotals);
   if (totals.size === 0) {
@@ -1711,11 +1849,15 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
   const previousRoster = await readRosterForDate(previousDate);
   const { byShift: previousByShift } = memberMapByShift(previousRoster, previousDate);
   const previousDayS5Members = previousByShift.get("S5") ?? [];
+  const previousDayS6Members = (previousByShift.get("S6") ?? []).filter((member) => (
+    Number(member?.shiftWindow?.start) > Number(member?.shiftWindow?.end)
+  ));
 
   return {
     roster,
     previousRoster,
     previousDayS5Members,
+    previousDayS6Members,
     monthRoster,
     fairness,
     scheduledPosts,
@@ -1729,8 +1871,8 @@ async function loadPlanningInputs(now = new Date(), tracker = {}) {
 }
 
 export async function generateDueWorkAllotment({ now = new Date(), slotOverride = null, tracker = {} } = {}) {
-  const { roster, fairness, scheduledPosts, fairnessWarning, previousDayS5Members } = await loadPlanningInputs(now, tracker);
-  const result = generateWorkAllotmentFromData({ now, slotOverride, roster, fairness, scheduledPosts, previousDayS5Members });
+  const { roster, fairness, scheduledPosts, fairnessWarning, previousDayS5Members, previousDayS6Members } = await loadPlanningInputs(now, tracker);
+  const result = generateWorkAllotmentFromData({ now, slotOverride, roster, fairness, scheduledPosts, previousDayS5Members, previousDayS6Members });
   return {
     ...result,
     rosterSheet: roster.sheetName,
@@ -1756,14 +1898,21 @@ export async function getReadOnlyFairnessSnapshot({ now = new Date(), tracker = 
 }
 
 export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} } = {}) {
-  const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster, previousDayS5Members } = await loadPlanningInputs(now, tracker);
+  const { roster, fairness, scheduledPosts, fairnessEntries, fairnessSheetTitle, fairnessSpreadsheetUrl, memberNames, fairnessWarning, monthRoster, previousDayS5Members, previousDayS6Members } = await loadPlanningInputs(now, tracker);
+  const planningRoster = mergeOvernightS6Carryover(
+    roster,
+    previousDayS6Members,
+    "S1",
+    minutesSinceMidnightForSlotPost("S1"),
+  );
   const planningFairness = cloneFairnessSnapshot(fairness);
   const planningScheduledPosts = [...scheduledPosts];
   const shifts = [];
   let currentPrimary = null;
   let currentPrimarySlot = null;
-  const { byShift, offMembers } = memberMapByShift(roster, now);
-  const sharedOffOwnershipAssignments = buildDailyOffOwnershipAssignments(offMembers, byShift);
+  const dateKey = localDateKey(now);
+  const { byShift, offMembers } = memberMapByShift(planningRoster, now);
+  const sharedOffOwnershipAssignments = buildDailyOffOwnershipAssignments(offMembers, byShift, dateKey);
   const sharedOffAssignments = formatOwnershipAssignments(sharedOffOwnershipAssignments);
   const sharedOffGroups = buildOffGroups(offMembers);
 
@@ -1773,7 +1922,7 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
     const result = generateWorkAllotmentFromData({
       now,
       slotOverride: slot,
-      roster,
+      roster: planningRoster,
       fairness: planningFairness,
       scheduledPosts: planningScheduledPosts,
       preferredPrimary: currentPrimary,
@@ -1783,6 +1932,7 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
       fixedOffOwnershipAssignments: sharedOffOwnershipAssignments,
       fixedOffGroups: sharedOffGroups,
       previousDayS5Members,
+      previousDayS6Members,
     });
 
     if (result.status === "ok") {
@@ -1813,8 +1963,11 @@ export async function planWorkAllotmentsForDay({ now = new Date(), tracker = {} 
     if (shift.status !== "ok") continue;
 
     const nextShift = shifts.slice(index + 1).find((candidate) => candidate.status === "ok") ?? null;
-    const actualNextPrimary = nextShift?.primary ?? null;
-    const actualNextPostTime = nextShift ? formatHandoffTime(nextShift.slot) : null;
+    // The slot-specific handoff candidate is authoritative. Do not substitute
+    // the next scheduled post's primary: that person may belong to an unrelated
+    // shift (e.g. S4 at the S5→S6 boundary, or S2 at the S6→S1 boundary).
+    const actualNextPrimary = shift.nextPrimary ?? null;
+    const actualNextPostTime = shift.nextPostTime ?? null;
 
     shift.nextPrimary = actualNextPrimary;
     shift.nextPostTime = actualNextPostTime;

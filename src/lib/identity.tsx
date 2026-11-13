@@ -20,7 +20,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { type Role } from "./roles";
-import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "./roles";
+import { ROLE_BY_NAME, ROSTER_BY_EMAIL, defaultRoleFor } from "./roles";
 
 export interface Identity {
   /** Display name from Google profile (or roster pick in dev mode). */
@@ -31,6 +31,12 @@ export interface Identity {
   email?: string;
   /** Google profile picture URL. */
   picture?: string;
+  /** Manager-only UI impersonation marker. */
+  impersonatedBy?: {
+    name: string;
+    email?: string;
+    role: Role;
+  };
 }
 
 interface IdentityContextValue {
@@ -62,6 +68,86 @@ function getIdentityContext() {
   return g[IDENTITY_CONTEXT_KEY]!;
 }
 const IdentityContext = getIdentityContext();
+
+const IMPERSONATION_STORAGE_KEY = "noc_manager_impersonation";
+
+type StoredImpersonation = {
+  actingName: string;
+  originalName: string;
+  originalEmail?: string;
+  originalRole: Role;
+};
+
+function readStoredImpersonation(): StoredImpersonation | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(IMPERSONATION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<StoredImpersonation>;
+    if (
+      typeof parsed?.actingName !== "string" ||
+      typeof parsed?.originalName !== "string" ||
+      typeof parsed?.originalRole !== "string"
+    ) {
+      return null;
+    }
+    return {
+      actingName: parsed.actingName,
+      originalName: parsed.originalName,
+      originalEmail: typeof parsed.originalEmail === "string" ? parsed.originalEmail : undefined,
+      originalRole: parsed.originalRole as Role,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredImpersonation(value: StoredImpersonation | null) {
+  if (typeof window === "undefined") return;
+  if (!value) {
+    window.localStorage.removeItem(IMPERSONATION_STORAGE_KEY);
+    return;
+  }
+  window.localStorage.setItem(IMPERSONATION_STORAGE_KEY, JSON.stringify(value));
+}
+
+function canonicalIdentityForName(name: string, fallbackEmail?: string): Identity {
+  const trimmedName = name.trim();
+  const canonicalByEmail = fallbackEmail
+    ? ROSTER_BY_EMAIL[fallbackEmail.trim().toLowerCase()]
+    : undefined;
+  const canonicalName = canonicalByEmail?.name ?? trimmedName;
+  const canonicalRole = canonicalByEmail?.role ?? (ROLE_BY_NAME[canonicalName] as Role | undefined) ?? defaultRoleFor(canonicalName);
+  return {
+    name: canonicalName,
+    role: canonicalRole,
+    email: fallbackEmail,
+  };
+}
+
+function applyStoredImpersonation(baseIdentity: Identity): Identity {
+  const stored = readStoredImpersonation();
+  if (!stored) return baseIdentity;
+  if (baseIdentity.role !== "manager") {
+    writeStoredImpersonation(null);
+    return baseIdentity;
+  }
+  const originalMatches = baseIdentity.name === stored.originalName
+    || (!!baseIdentity.email && !!stored.originalEmail && baseIdentity.email.toLowerCase() === stored.originalEmail.toLowerCase());
+  if (!originalMatches) {
+    writeStoredImpersonation(null);
+    return baseIdentity;
+  }
+  const acting = canonicalIdentityForName(stored.actingName);
+  return {
+    ...acting,
+    impersonatedBy: {
+      name: baseIdentity.name,
+      email: baseIdentity.email,
+      role: baseIdentity.role,
+    },
+  };
+}
 
 /**
  * Wrap your app in <IdentityProvider> (once, in main.tsx).
@@ -97,12 +183,13 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
           : undefined;
         const canonicalName = canonicalByEmail?.name ?? s.name;
         const canonicalRole = canonicalByEmail?.role ?? (ROLE_BY_NAME[canonicalName] as Role | undefined) ?? (s.role as Role);
-        setIdentity({
+        const baseIdentity: Identity = {
           name: canonicalName,
           role: canonicalRole,
           email: s.email,
           picture: s.picture ?? undefined,
-        });
+        };
+        setIdentity(applyStoredImpersonation(baseIdentity));
       }
       setLoading(false);
     });
@@ -140,6 +227,7 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
     } catch {
       // ignore
     }
+    writeStoredImpersonation(null);
     setIdentity(null);
   }, []);
 
@@ -147,11 +235,46 @@ export function IdentityProvider({ children }: { children: ReactNode }) {
     setIdentity((prev) => (prev ? { ...prev, role } : null));
   }, []);
 
-  /** Client-side only — sets identity to any name without a server round-trip.
-   *  Safe because this is purely a UI gate; real auth is never bypassed. */
+  /**
+   * Manager-only UI impersonation. This intentionally does NOT mint a new
+   * server session; it lets managers preview the dashboard as another roster
+   * member while preserving the original signed-in manager for easy revert.
+   */
   const impersonate = useCallback((name: string) => {
-    const role: Role = (ROLE_BY_NAME[name] as Role) ?? "tier1";
-    setIdentity({ name, role, email: `${name.toLowerCase().replace(/\s+/g, ".")}@vcom.local` });
+    setIdentity((prev) => {
+      if (!prev) return prev;
+      const baseManager = prev.impersonatedBy
+        ? {
+            name: prev.impersonatedBy.name,
+            email: prev.impersonatedBy.email,
+            role: prev.impersonatedBy.role,
+            picture: undefined,
+          }
+        : prev;
+      if (baseManager.role !== "manager") return prev;
+      const acting = canonicalIdentityForName(name);
+      if (acting.name === baseManager.name) {
+        writeStoredImpersonation(null);
+        return {
+          ...baseManager,
+          impersonatedBy: undefined,
+        };
+      }
+      writeStoredImpersonation({
+        actingName: acting.name,
+        originalName: baseManager.name,
+        originalEmail: baseManager.email,
+        originalRole: baseManager.role,
+      });
+      return {
+        ...acting,
+        impersonatedBy: {
+          name: baseManager.name,
+          email: baseManager.email,
+          role: baseManager.role,
+        },
+      };
+    });
   }, []);
 
   const value: IdentityContextValue = {

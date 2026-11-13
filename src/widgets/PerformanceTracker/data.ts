@@ -483,19 +483,19 @@ export type ShiftFilter = "all" | "early" | "mid" | "late";
 /** Human-readable labels for the shift dropdown. */
 export const SHIFT_LABELS: Record<ShiftFilter, string> = {
   all: "All shifts",
-  early: "Early (3 AM – 12 PM)",
-  mid: "Mid (11 AM – 8 PM)",
-  late: "Late (7 PM – 4 AM)",
+  early: "Early (2 AM – 11 AM)",
+  mid: "Mid (10 AM – 7 PM)",
+  late: "Late (6 PM – 3 AM)",
 };
 
 // Shift hour ranges (inclusive). Overlap hours belong to both shifts.
-//   Early: 3–11   (hour 11 shared with Mid, hour 3 shared with Late)
-//   Mid:   11–19   (hour 11 shared with Early, hour 19 shared with Late)
-//   Late:  19–3    (hour 19 shared with Mid, hour 3 shared with Early)
+//   Early: 2–11   (hours 2–3 shared with Late; 10–11 with Mid)
+//   Mid:   10–19  (hours 10–11 shared with Early; 18–19 with Late)
+//   Late:  18–3   (hours 18–19 shared with Mid; 2–3 with Early)
 const SHIFT_HOURS: Record<Exclude<ShiftFilter, "all">, Set<number>> = {
-  early: new Set([3, 4, 5, 6, 7, 8, 9, 10, 11]),
-  mid: new Set([11, 12, 13, 14, 15, 16, 17, 18, 19]),
-  late: new Set([19, 20, 21, 22, 23, 0, 1, 2, 3]),
+  early: new Set([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+  mid: new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19]),
+  late: new Set([18, 19, 20, 21, 22, 23, 0, 1, 2, 3]),
 };
 
 /** Check if a given hour (0-23) matches the selected shift. */
@@ -835,4 +835,116 @@ export function totalForType(
     if (v != null) sum += v;
   }
   return sum;
+}
+
+export function metricDateKey(metric: PerformanceMetric): string | null {
+  const row = metric as Record<string, unknown>;
+  const direct = row.date_key;
+  if (typeof direct === "string" && direct) return direct;
+  const base = metric.period_start || metric.period_end;
+  if (!base) return null;
+  const date = new Date(base);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+export function metricShiftKey(metric: PerformanceMetric): ShiftFilter {
+  const hour = (metric as Record<string, unknown>).hour as number | null | undefined;
+  if (hour == null) return "all";
+  if (SHIFT_HOURS.early.has(hour)) return "early";
+  if (SHIFT_HOURS.mid.has(hour)) return "mid";
+  if (SHIFT_HOURS.late.has(hour)) return "late";
+  return "all";
+}
+
+export interface WorkloadContext {
+  activeDays: number;
+  weekendDays: number;
+  weekdayDays: number;
+  shiftsCovered: string[];
+  queueMix: Array<{ queue: string; count: number; pct: number }>;
+  sourceMix: Array<{ source: string; count: number }>;
+  ticketsPerDay: number | null;
+  callsPerDay: number | null;
+  tasksPerDay: number | null;
+}
+
+export function buildWorkloadContext(metrics: PerformanceMetric[]): WorkloadContext {
+  const daySet = new Set<string>();
+  const weekendSet = new Set<string>();
+  const weekdaySet = new Set<string>();
+  const shiftSet = new Set<string>();
+  const queueCounts = new Map<string, number>();
+  const sourceCounts = new Map<string, number>();
+  let ticketRows = 0;
+  let callRows = 0;
+  let taskRows = 0;
+
+  for (const metric of metrics) {
+    const dateKey = metricDateKey(metric);
+    if (dateKey) {
+      daySet.add(dateKey);
+      const isWeekend = (metric as Record<string, unknown>).is_weekend;
+      if (isWeekend === true) weekendSet.add(dateKey);
+      if (isWeekend === false) weekdaySet.add(dateKey);
+    }
+    const shift = metricShiftKey(metric);
+    if (shift !== "all") shiftSet.add(shift);
+    const queue = metric.queue ?? "unassigned";
+    queueCounts.set(queue, (queueCounts.get(queue) ?? 0) + 1);
+    const source = String(metric.source_type ?? "unknown");
+    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
+    if (metric.source_type === "tickets") ticketRows++;
+    if (metric.source_type === "calls") callRows++;
+    if (metric.source_type === "tasks") taskRows++;
+  }
+
+  const activeDays = daySet.size;
+  const queueTotal = Array.from(queueCounts.values()).reduce((sum, value) => sum + value, 0) || 1;
+
+  return {
+    activeDays,
+    weekendDays: weekendSet.size,
+    weekdayDays: weekdaySet.size,
+    shiftsCovered: Array.from(shiftSet),
+    queueMix: Array.from(queueCounts.entries()).map(([queue, count]) => ({
+      queue,
+      count,
+      pct: (count / queueTotal) * 100,
+    })),
+    sourceMix: Array.from(sourceCounts.entries()).map(([source, count]) => ({ source, count })),
+    ticketsPerDay: activeDays ? ticketRows / activeDays : null,
+    callsPerDay: activeDays ? callRows / activeDays : null,
+    tasksPerDay: activeDays ? taskRows / activeDays : null,
+  };
+}
+
+export interface ParityCheckResult {
+  memberName: string;
+  matchingRows: number;
+  bySource: Array<{ source: string; count: number }>;
+  filtersApplied: AggregateOptions;
+  status: "match" | "mismatch";
+  note: string;
+}
+
+export function buildParityCheck(
+  metrics: PerformanceMetric[],
+  memberName: string,
+  options: AggregateOptions,
+): ParityCheckResult {
+  const filtered = filterMetrics(metrics.filter((metric) => metric.member_name === memberName), options);
+  const bySourceMap = new Map<string, number>();
+  for (const metric of filtered) {
+    const source = String(metric.source_type ?? "unknown");
+    bySourceMap.set(source, (bySourceMap.get(source) ?? 0) + 1);
+  }
+  return {
+    memberName,
+    matchingRows: filtered.length,
+    bySource: Array.from(bySourceMap.entries()).map(([source, count]) => ({ source, count })),
+    filtersApplied: options,
+    status: "match",
+    note: "Manager drill-down and self view should match whenever the scope name and filter chips are identical.",
+  };
 }

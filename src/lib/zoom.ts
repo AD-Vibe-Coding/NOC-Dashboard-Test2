@@ -1,12 +1,12 @@
-// Client-side helpers for the Zoom Queue widget.
-// All Zoom API calls happen server-side — credentials never reach the browser.
+// Client-side queue helpers reused by the Team Availability widget.
+// The live provider is now RingCentral; these legacy names remain for compatibility.
 
-export type ZoomAgentStatus = "in_queue" | "not_in_queue";
+export type QueueAgentStatus = "in_queue" | "not_in_queue";
 
 export interface ZoomAgent {
   agent_id: string;
   display_name: string;
-  status: ZoomAgentStatus;
+  status: QueueAgentStatus;
   queues: string[];
   queue_opt_in?: Record<string, boolean>;
 }
@@ -29,12 +29,12 @@ export async function fetchZoomQueue(): Promise<ZoomQueueData> {
   return fetchJson<ZoomQueueData>("/api/zoom/queue");
 }
 
-export const ZOOM_STATUS_COLORS: Record<ZoomAgentStatus, string> = {
+export const ZOOM_STATUS_COLORS: Record<QueueAgentStatus, string> = {
   in_queue:     "green",
   not_in_queue: "gray",
 };
 
-export const ZOOM_STATUS_LABELS: Record<ZoomAgentStatus, string> = {
+export const ZOOM_STATUS_LABELS: Record<QueueAgentStatus, string> = {
   in_queue:     "In Queue",
   not_in_queue: "Not in Queue",
 };

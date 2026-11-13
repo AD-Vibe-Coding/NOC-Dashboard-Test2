@@ -7,6 +7,7 @@ import { BREAK_TYPE_COLORS, emojiForBreak, formatBreakStartMessage, postSlackMes
 import { useIdentity } from "../../lib/identity";
 import { formatElapsedIso } from "../../lib/format";
 import { db } from "../../db";
+import { resolveTeamMember } from "../PerformanceTracker/team";
 
 interface Props {
   onExpand: () => void;
@@ -26,8 +27,14 @@ export function BreakTrackerTile({ onExpand }: Props) {
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
 
+  const samePerson = (a?: string | null, b?: string | null) => {
+    const left = a ? (resolveTeamMember(a) ?? a).trim().toLowerCase() : "";
+    const right = b ? (resolveTeamMember(b) ?? b).trim().toLowerCase() : "";
+    return !!left && !!right && left === right;
+  };
+
   const youOnBreak = identity?.name
-    ? active.find((b) => b.employee_name === identity.name) ?? null
+    ? active.find((b) => samePerson(b.employee_name, identity.name)) ?? null
     : null;
 
   const preview = active.slice(0, 3);
@@ -64,14 +71,22 @@ export function BreakTrackerTile({ onExpand }: Props) {
   }
 
   async function endBreakQuick() {
-    if (!youOnBreak) return;
+    if (!youOnBreak || !identity?.name) return;
     setPosting(true);
     try {
-      await db.breaks.updateById(youOnBreak.id, {
-        end_time: new Date().toISOString(),
-        duration_minutes: Math.max(1, Math.round((Date.now() - new Date(youOnBreak.start_time).getTime()) / 60000)),
-        is_active: false,
+      const end = new Date();
+      const activeRows = await db.breaks.list({
+        filter: { is_active: true },
+        orderBy: { column: "start_time", ascending: false },
       });
+      const matchingRows = activeRows.filter((row) => samePerson(row.employee_name, identity.name));
+      for (const row of matchingRows) {
+        await db.breaks.updateById(row.id, {
+          end_time: end.toISOString(),
+          duration_minutes: Math.max(1, Math.round((end.getTime() - new Date(row.start_time).getTime()) / 60000)),
+          is_active: false,
+        });
+      }
       await refresh();
     } finally {
       setPosting(false);

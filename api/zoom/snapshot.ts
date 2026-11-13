@@ -41,13 +41,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const rows: any[] = [];
   for (const agent of agents) {
-    for (const queue of agent.queues ?? []) {
-      if (!agent.id || !agent.name || !queue.name) continue;
+    const agentId = String(agent?.id ?? agent?.agent_id ?? "").trim();
+    const agentName = String(agent?.name ?? agent?.display_name ?? "").trim();
+    const queues = Array.isArray(agent?.queues) ? agent.queues : [];
+
+    for (const queue of queues) {
+      const queueName = String(queue?.name ?? queue?.queue_name ?? "").trim();
+      if (!agentId || !agentName || !queueName) continue;
       rows.push({
-        agent_id:      agent.id,
-        agent_name:    agent.name,
-        queue_name:    queue.name,
-        receive_call:  !!queue.receive_call,
+        agent_id:      agentId,
+        agent_name:    agentName,
+        queue_name:    queueName,
+        receive_call:  !!queue?.receive_call,
         snapshot_date: date,
         snapshot_hour: hour,
         snapshot_time: now,

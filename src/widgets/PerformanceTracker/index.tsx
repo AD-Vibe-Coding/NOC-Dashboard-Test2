@@ -21,6 +21,7 @@ import {
 } from "@mantine/core";
 import {
   IconAlertCircle,
+  IconBook2,
   IconCalendarStats,
   IconCalendarTime,
   IconHistory,
@@ -39,6 +40,7 @@ import { WidgetFrame } from "../WidgetFrame";
 import { ImportFlow } from "./ImportFlow";
 import { PerformanceDashboard } from "./Dashboard";
 import { PerformanceTrends } from "./Trends";
+import { GlossaryModal } from "./GlossaryModal";
 import { DisputesPanel } from "./DisputesPanel";
 import {
   clearAllPerformanceData,
@@ -363,6 +365,7 @@ export function PerformanceTrackerWidget() {
     : canonicalSelf;
 
   const [activeTab, setActiveTab] = useState<string | null>("overview");
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"fit" | "zoom">("zoom");
   const [zoomPercent, setZoomPercent] = useState<string>("110");
@@ -643,6 +646,17 @@ export function PerformanceTrackerWidget() {
                       Reload
                     </Button>
                   </Tooltip>
+                  <Tooltip label="Open KPI glossary and formulas">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="grape"
+                      leftSection={<IconBook2 size={14} />}
+                      onClick={() => setGlossaryOpen(true)}
+                    >
+                      KPI glossary
+                    </Button>
+                  </Tooltip>
                   <SegmentedControl
                     size="xs"
                     value={viewMode}
@@ -684,24 +698,51 @@ export function PerformanceTrackerWidget() {
           ) : (
             canonicalSelf && (
               <Card withBorder radius="md" p="sm" mt="md" mb={0}>
-                <Group gap="xs">
-                  <ThemeIcon variant="light" color="blue" radius="md" size="sm">
-                    <IconUser size={14} />
-                  </ThemeIcon>
-                  <Text size="sm">
-                    Viewing your metrics:{" "}
-                    <Text component="span" fw={600}>
-                      {canonicalSelf}
+                <Stack gap={8}>
+                  <Group gap="xs" wrap="wrap">
+                    <ThemeIcon variant="light" color="blue" radius="md" size="sm">
+                      <IconUser size={14} />
+                    </ThemeIcon>
+                    <Text size="sm">
+                      Viewing your metrics:{" "}
+                      <Text component="span" fw={600}>
+                        {canonicalSelf}
+                      </Text>
                     </Text>
+                    <Badge
+                      size="xs"
+                      color={TIER_COLORS[LOCKED_TEAM.find((m) => m.name === canonicalSelf)?.tier ?? "tier1"]}
+                      variant="light"
+                    >
+                      {TIER_LABELS[LOCKED_TEAM.find((m) => m.name === canonicalSelf)?.tier ?? "tier1"]}
+                    </Badge>
+                  </Group>
+                  <Group gap="xs" wrap="wrap">
+                    <Badge size="xs" variant="light" color="blue">
+                      Debug scope: {canonicalSelf}
+                    </Badge>
+                    <Badge size="xs" variant="outline" color="gray">
+                      Identity: {identity?.name ?? "—"}
+                    </Badge>
+                    {identity?.email && (
+                      <Badge size="xs" variant="outline" color="gray">
+                        Email: {identity.email}
+                      </Badge>
+                    )}
+                    <Button
+                      size="compact-xs"
+                      variant="light"
+                      color="violet"
+                      leftSection={<IconBook2 size={12} />}
+                      onClick={() => setGlossaryOpen(true)}
+                    >
+                      KPI glossary
+                    </Button>
+                  </Group>
+                  <Text size="xs" c="dimmed">
+                    This self view is locked to the canonical roster member shown above. Use the Trends tab to compare the exact scope and active filters against a manager drill-down.
                   </Text>
-                  <Badge
-                    size="xs"
-                    color={TIER_COLORS[LOCKED_TEAM.find((m) => m.name === canonicalSelf)?.tier ?? "tier1"]}
-                    variant="light"
-                  >
-                    {TIER_LABELS[LOCKED_TEAM.find((m) => m.name === canonicalSelf)?.tier ?? "tier1"]}
-                  </Badge>
-                </Group>
+                </Stack>
               </Card>
             )
           ))}
@@ -769,6 +810,7 @@ export function PerformanceTrackerWidget() {
               <PerformanceDashboard
                 metrics={effectiveMetrics}
                 scopedMember={scopedMember}
+                isManager={isManager}
                 onRederive={isManager ? handleRederivePeriods : undefined}
                 isRederiving={isRederiving}
                 currentUserName={canonicalSelf ?? undefined}
@@ -798,6 +840,7 @@ export function PerformanceTrackerWidget() {
               <PerformanceTrends
                 metrics={effectiveMetrics}
                 scopedMember={scopedMember}
+                isManager={isManager}
               />
             </Box>
           </Tabs.Panel>
@@ -826,6 +869,7 @@ export function PerformanceTrackerWidget() {
             />
           </Tabs.Panel>
         </Tabs>
+        <GlossaryModal opened={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
         </>
       )}
 

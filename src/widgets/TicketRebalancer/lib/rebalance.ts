@@ -601,7 +601,7 @@ export function rebalanceShiftHandoff(
   options: Partial<RebalanceOptions> = {},
   // Optional previous-day roster — used for transitions whose source agents
   // clocked in the previous calendar day (e.g. Shift 5 overnight, which
-  // starts at 7 PM the day before).
+  // starts at 6 PM the day before).
   rosterPrev?: RosterEntry[],
   dateContext?: Date,
 ): RebalanceResult {
@@ -637,7 +637,7 @@ export function rebalanceShiftHandoff(
   // Pick the roster used for SOURCE-agent identification. For overnight
   // transitions (sourceDateOffset === -1), source agents are listed in
   // yesterday's column — their "today" cell is typically blank/WO/another
-  // shift after they finish at 4 AM.
+  // shift after they finish at 3 AM.
   const usePrev = transition.sourceDateOffset === -1;
   const sourceRoster = usePrev && rosterPrev ? rosterPrev : roster;
   if (usePrev && !rosterPrev) {
@@ -646,7 +646,7 @@ export function rebalanceShiftHandoff(
     );
   } else if (usePrev && rosterPrev) {
     warnings.push(
-      "Source shift (Overnight) agents pulled from the PREVIOUS day's roster column, since they clocked in at 7 PM yesterday.",
+      "Source shift (Overnight) agents pulled from the PREVIOUS day's roster column, since they clocked in at 6 PM yesterday.",
     );
   }
 

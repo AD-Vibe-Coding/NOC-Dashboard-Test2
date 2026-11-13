@@ -14,6 +14,7 @@ import {
 function zonedParts(date) {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: WORK_ALLOTMENT_CONFIG.timeZone,
+    weekday: "long",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -24,6 +25,7 @@ function zonedParts(date) {
   }).formatToParts(date);
   const get = (type) => parts.find((part) => part.type === type)?.value ?? "";
   return {
+    weekday: get("weekday"),
     year: Number(get("year")),
     month: Number(get("month")),
     day: Number(get("day")),
@@ -59,8 +61,10 @@ function isWeekendOwnershipBlocked(operationalDate) {
   return weekday === "Saturday" || weekday === "Sunday";
 }
 
-function shiftPostDateKey(operationalDate, shift) {
-  return shift === "S6" ? addDaysToDateKey(operationalDate, 1) : operationalDate;
+function shiftPostDateKey(operationalDate) {
+  // After the Pacific daylight-saving transition, S6 starts at 11:00 PM on
+  // its operational date rather than 12:00 AM the following calendar day.
+  return operationalDate;
 }
 
 function statusPriority(status) {
@@ -83,13 +87,14 @@ function uniqueJobs(rows = []) {
 
 function isGenerationWindow(now) {
   const p = zonedParts(now);
-  return p.hour === 3 && p.minute === 10;
+  // Vercel's 09:10 UTC cron maps to 01:10 PST or 02:10 PDT.
+  return p.minute === 10 && (p.hour === 1 || p.hour === 2);
 }
 
 function isGenerationDue(now, existingJobs = []) {
   const p = zonedParts(now);
   const currentMinutes = p.hour * 60 + p.minute;
-  const triggerMinutes = 3 * 60 + 10;
+  const triggerMinutes = 1 * 60 + 10;
   const hasAnyJobs = Array.isArray(existingJobs) && existingJobs.length > 0;
   return !hasAnyJobs && currentMinutes >= triggerMinutes;
 }
@@ -109,12 +114,29 @@ function isJobDue(job, now = new Date()) {
   return currentMinutes >= postMinutes;
 }
 
+function fairnessSyncTriggerShiftForWeekday(weekday) {
+  if (weekday === "Friday" || weekday === "Saturday") return "S5";
+  if (weekday === "Sunday") return "S6";
+  return "S6";
+}
+
 function shouldRunWeekendFairnessSync(now = new Date()) {
   const p = zonedParts(now);
   const weekday = String(p.weekday ?? "");
+  if (!["Friday", "Saturday", "Sunday"].includes(weekday)) return false;
   const currentMinutes = p.hour * 60 + p.minute;
-  const cutoffMinutes = (Number(SHIFT_DEFINITIONS.S5.handoffHour) * 60) + Number(SHIFT_DEFINITIONS.S5.handoffMinute);
-  return ["Friday", "Saturday", "Sunday"].includes(weekday) && currentMinutes >= cutoffMinutes;
+  const triggerShift = fairnessSyncTriggerShiftForWeekday(weekday);
+  const cutoffMinutes = (Number(SHIFT_DEFINITIONS[triggerShift]?.handoffHour ?? 0) * 60)
+    + Number(SHIFT_DEFINITIONS[triggerShift]?.handoffMinute ?? 0);
+  return currentMinutes >= cutoffMinutes;
+}
+
+function shouldSyncFairnessAfterPostedJob(job) {
+  const operationalDate = String(job?.operational_date ?? "");
+  const shift = String(job?.shift ?? "");
+  const weekday = weekdayForDateKey(operationalDate);
+  const triggerShift = fairnessSyncTriggerShiftForWeekday(weekday);
+  return shift === triggerShift;
 }
 
 async function listJobsForOperationalDate(operationalDate) {
@@ -540,7 +562,9 @@ async function syncOwnershipTasksForPlan(plan, operationalDate, generatedAt) {
     }, new Date(generatedAt));
     const nextReminderAt = (policy.reachedMaxReminders || policy.pastShiftCutoff)
       ? null
-      : (hasReminderHistory ? (existing.next_reminder_at || row.next_reminder_at) : row.next_reminder_at);
+      : (hasReminderHistory
+        ? (existing.next_reminder_at ?? null)
+        : row.next_reminder_at);
 
     const { error } = await supabaseAdmin
       .from("ownership_tasks")
@@ -633,41 +657,47 @@ export async function reconcilePlannedWorkAllotmentJobs({ now = new Date() } = {
   };
 }
 
-export async function ensureDailyWorkAllotmentJobs({ now = new Date(), force = false } = {}) {
-  const operationalDate = localDateKey(now);
-  const existing = await listJobsForOperationalDate(operationalDate);
-  const expectedSlots = getDailyShiftOrderForDate(now);
+export async function ensureWorkAllotmentJobsForDate({ now = new Date(), operationalDate, force = false } = {}) {
+  const resolvedNow = now instanceof Date ? now : new Date(now);
+  const resolvedDate = String(operationalDate ?? localDateKey(resolvedNow)).trim() || localDateKey(resolvedNow);
+  const targetNow = new Date(`${resolvedDate}T12:00:00.000Z`);
+  const existing = await listJobsForOperationalDate(resolvedDate);
+  const expectedSlots = getDailyShiftOrderForDate(targetNow);
   const hasFullPlan = expectedSlots.every((slot) => existing.some((job) => job.shift === slot));
   if (hasFullPlan && !force) {
-    return { ok: true, skipped: true, operationalDate, jobs: existing, reason: "already_generated" };
+    return { ok: true, skipped: true, operationalDate: resolvedDate, jobs: existing, reason: "already_generated" };
   }
-  if (!force && !isGenerationDue(now, existing) && !isGenerationWindow(now)) {
-    return { ok: true, skipped: true, operationalDate, jobs: existing, reason: "before_generation_window" };
+  if (!force && !isGenerationDue(targetNow, existing) && !isGenerationWindow(targetNow)) {
+    return { ok: true, skipped: true, operationalDate: resolvedDate, jobs: existing, reason: "before_generation_window" };
   }
 
-  const plan = await planWorkAllotmentsForDay({ now });
+  const plan = await planWorkAllotmentsForDay({ now: targetNow });
   const okShifts = (plan.shifts ?? []).filter((shift) => shift.status === "ok");
   const generatedAt = new Date().toISOString();
-  const jobs = okShifts.map((shift) => serializeShiftJob(shift, operationalDate, generatedAt));
+  const jobs = okShifts.map((shift) => serializeShiftJob(shift, resolvedDate, generatedAt));
 
-  await supabaseAdmin.from("work_allotment_jobs").delete().eq("operational_date", operationalDate);
+  await supabaseAdmin.from("work_allotment_jobs").delete().eq("operational_date", resolvedDate);
   const { data, error } = await supabaseAdmin
     .from("work_allotment_jobs")
     .insert(jobs)
     .select("*");
   if (error) throw new Error(error.message);
 
-  const ownershipTasks = await syncOwnershipTasksForPlan(plan, operationalDate, generatedAt);
+  const ownershipTasks = await syncOwnershipTasksForPlan(plan, resolvedDate, generatedAt);
 
   return {
     ok: true,
     skipped: false,
-    operationalDate,
+    operationalDate: resolvedDate,
     generatedCount: jobs.length,
     jobs: uniqueJobs(data ?? []),
     plan,
     ownershipTasks,
   };
+}
+
+export async function ensureDailyWorkAllotmentJobs({ now = new Date(), force = false } = {}) {
+  return ensureWorkAllotmentJobsForDate({ now, operationalDate: localDateKey(now), force });
 }
 
 async function autoCloseStaleOwnershipTasks({ now = new Date() } = {}) {
@@ -712,6 +742,7 @@ export async function dispatchDueOwnershipTaskReminders({ now = new Date() } = {
     .select("*")
     .eq("task_type", "work_allotment_off_members")
     .eq("status", "open")
+    .is("completed_at", null)
     .eq("operational_date", today)
     .lte("next_reminder_at", nowIso)
     .order("next_reminder_at", { ascending: true })
@@ -879,7 +910,7 @@ export async function postDueScheduledWorkAllotments({ now = new Date() } = {}) 
       if (updateError) throw new Error(updateError.message);
       posted.push({ id: job.id, shift: job.shift, slackTs });
 
-      if (String(job.shift ?? "") === "S6") {
+      if (shouldSyncFairnessAfterPostedJob(job)) {
         try {
           const finalDayJobs = await listJobsForOperationalDate(String(job.operational_date ?? ""));
           const allPostedForDay = finalDayJobs.length > 0 && finalDayJobs.every((row) => String(row.status ?? "") === "posted");
