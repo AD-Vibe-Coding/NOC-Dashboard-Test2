@@ -327,7 +327,7 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "zoom-call-metrics",
-    title: "Zoom Call Metrics",
+    title: "RingCentral Call Metrics",
     description: "May 2026 Mobility + Network queue call data",
     icon: IconPhone,
     iconColor: "green",

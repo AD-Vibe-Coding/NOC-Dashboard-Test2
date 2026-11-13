@@ -830,7 +830,7 @@ const MANAGER_QUICK_GROUPS: Array<{
     items: [
       { id: "logic-monitor",            emoji: "🔔", label: "LogicMonitor",             desc: "Alerts & alert analyzer",              color: "red" },
       { id: "velocloud-api",            emoji: "🌐", label: "VeloCloud API",            desc: "SD-WAN alerts & link status",          color: "cyan" },
-      { id: "zoom-call-metrics",        emoji: "📈", label: "Zoom Call Metrics",        desc: "Queue call data",                      color: "green" },
+      { id: "zoom-call-metrics",        emoji: "📈", label: "RingCentral Call Metrics", desc: "Queue call analytics",               color: "green" },
       { id: "data-health",              emoji: "🗄️", label: "Data Health",              desc: "App data table counts",                color: "orange" },
       { id: "ticket-audit",             emoji: "🔍", label: "Ticket Audit",             desc: "AI-powered QA audits",                 color: "pink" },
       { id: "performance-discussions",  emoji: "🗓️", label: "Half-Yearly Discussions", desc: "Manager performance discussion records", color: "red" },

@@ -1,52 +1,71 @@
-import { useEffect, useMemo, useState } from "react";
-import { Badge, Card, Group, Skeleton, Stack, Text, ThemeIcon } from "@mantine/core";
-import { IconPhone, IconPhoneIncoming } from "@tabler/icons-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Badge, Button, Card, Group, Select, Skeleton, Stack, Text, ThemeIcon, ActionIcon } from "@mantine/core";
+import { IconAlertTriangle, IconPhone, IconPhoneIncoming, IconRefresh } from "@tabler/icons-react";
+import { fetchRingCentralAnalytics, type RingCentralAnalyticsResponse } from "../../lib/ringcentral-analytics";
 
-type Classified = "answered" | "refused" | "missed";
-
-interface RawRecord {
-  queue_name: string;
-  classified_as: Classified;
+function currentPacificMonth() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date());
+  return `${parts.find((part) => part.type === "year")?.value}-${parts.find((part) => part.type === "month")?.value}`;
 }
 
-interface RawResponse {
-  source: string;
-  records: RawRecord[];
-  warning?: string;
+function availableMonths() {
+  const [year, month] = currentPacificMonth().split("-").map(Number);
+  const earliest = Date.now() - 184 * 24 * 60 * 60 * 1000;
+  const options: { value: string; label: string }[] = [];
+  for (let offset = 0; offset < 12; offset += 1) {
+    const date = new Date(Date.UTC(year, month - 1 - offset, 1));
+    if (date.getTime() < earliest) break;
+    const value = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+    options.push({
+      value,
+      label: new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" }).format(date),
+    });
+  }
+  return options;
 }
 
-const MAY_2026 = "2026-05";
-const TARGET_QUEUE_MATCHERS = ["mobility tech support", "network tech support"];
-
-function isTargetQueue(name: string) {
-  const lower = name.toLowerCase();
-  return TARGET_QUEUE_MATCHERS.some((q) => lower.includes(q));
-}
+type AnalyticsError = { message: string; code?: string };
 
 export function ZoomCallMetricsTile() {
-  const [data, setData] = useState<RawResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [month, setMonth] = useState(currentPacificMonth);
+  const [data, setData] = useState<RingCentralAnalyticsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<AnalyticsError | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     setLoading(true);
-    fetch(`/api/zoom/call-logs-raw?month=${MAY_2026}`)
-      .then((r) => r.json())
-      .then((json) => setData(json))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    setError(null);
+    try {
+      setData(await fetchRingCentralAnalytics(month));
+    } catch (err) {
+      setError({
+        message: err instanceof Error ? err.message : String(err),
+        code: err instanceof Error ? (err as Error & { code?: string }).code : undefined,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [month]);
 
-  const totals = useMemo(() => {
-    const records = (data?.records ?? []).filter((record) => isTargetQueue(record.queue_name));
-    return records.reduce(
-      (acc, record) => {
-        acc.total += 1;
-        acc[record.classified_as] += 1;
-        return acc;
-      },
-      { total: 0, answered: 0, refused: 0, missed: 0 },
-    );
-  }, [data]);
+  useEffect(() => { void load(); }, [load]);
+
+  const totals = useMemo(() => (data?.records ?? []).reduce(
+    (acc, row) => ({
+      total: acc.total + row.total,
+      answered: acc.answered + row.answered,
+      abandoned: acc.abandoned + row.abandoned,
+      missed: acc.missed + row.missed,
+      system_handled: acc.system_handled + row.system_handled,
+    }),
+    { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0 },
+  ), [data]);
+
+  const notConnected = error?.code === "RINGCENTRAL_NOT_CONNECTED";
+  const permissionIssue = error?.code === "RINGCENTRAL_ANALYTICS_SCOPE_REQUIRED";
 
   return (
     <Card withBorder radius="lg" p="md" h="100%">
@@ -56,28 +75,47 @@ export function ZoomCallMetricsTile() {
             <IconPhone size={16} />
           </ThemeIcon>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <Text fw={600} size="sm" truncate>Zoom Call Metrics</Text>
-            <Group gap={6}>
-              <Text size="xs" c="dimmed">May 2026</Text>
-              {data && (
-                <Badge size="xs" color={data.source === "live" ? "green" : "yellow"} variant="dot">
-                  {data.source === "live" ? "live" : "snapshot"}
-                </Badge>
-              )}
-            </Group>
+            <Text fw={600} size="sm" truncate>RingCentral Call Metrics</Text>
+            <Badge size="xs" color="green" variant="dot">RingCentral</Badge>
           </div>
+          <Select
+            aria-label="Analytics month"
+            size="xs"
+            w={106}
+            data={availableMonths()}
+            value={month}
+            onChange={(value) => value && setMonth(value)}
+            allowDeselect={false}
+            comboboxProps={{ withinPortal: true }}
+          />
+          <ActionIcon aria-label="Refresh RingCentral call analytics" variant="subtle" onClick={() => void load()} loading={loading}>
+            <IconRefresh size={16} />
+          </ActionIcon>
         </Group>
 
-        {loading ? (
+        {error && (
+          <Alert color={permissionIssue ? "yellow" : "red"} icon={<IconAlertTriangle size={16} />} title={permissionIssue ? "Analytics permission required" : "RingCentral analytics unavailable"}>
+            <Stack gap={6}>
+              <Text size="xs">{error.message}</Text>
+              {(notConnected || permissionIssue) && (
+                <Button component="a" href="/api/ringcentral/auth-start" size="compact-xs" variant="light" color={permissionIssue ? "yellow" : "red"} w="fit-content">
+                  {permissionIssue ? "Reconnect RingCentral" : "Connect RingCentral"}
+                </Button>
+              )}
+            </Stack>
+          </Alert>
+        )}
+
+        {loading && !data ? (
           <>
             <Skeleton height={20} radius="sm" />
             <Skeleton height={20} radius="sm" />
             <Skeleton height={20} radius="sm" />
           </>
-        ) : (
+        ) : data ? (
           <Stack gap={8} style={{ flex: 1 }}>
             <Group justify="space-between">
-              <Text size="xs" c="dimmed">Mobility + Network queues</Text>
+              <Text size="xs" c="dimmed">{data.queues_found.length ? data.queues_found.join(" + ") : "Mobility + Network queues"}</Text>
               <Text size="lg" fw={700} ff="monospace">{totals.total.toLocaleString()}</Text>
             </Group>
             <Group justify="space-between">
@@ -85,16 +123,22 @@ export function ZoomCallMetricsTile() {
               <Text size="sm" fw={700} ff="monospace" c="green.4">{totals.answered.toLocaleString()}</Text>
             </Group>
             <Group justify="space-between">
-              <Text size="sm">Refused</Text>
-              <Text size="sm" fw={700} ff="monospace" c="red.4">{totals.refused.toLocaleString()}</Text>
+              <Text size="sm">Abandoned</Text>
+              <Text size="sm" fw={700} ff="monospace" c="red.4">{totals.abandoned.toLocaleString()}</Text>
             </Group>
             <Group justify="space-between">
               <Text size="sm">Missed</Text>
               <Text size="sm" fw={700} ff="monospace" c="orange.4">{totals.missed.toLocaleString()}</Text>
             </Group>
-            {data?.warning && <Text size="xs" c="dimmed" lineClamp={2}>{data.warning}</Text>}
+            <Group justify="space-between">
+              <Text size="sm">Voicemail / auto-response</Text>
+              <Text size="sm" fw={700} ff="monospace" c="dimmed">{totals.system_handled.toLocaleString()}</Text>
+            </Group>
+            {data.warning && <Text size="xs" c="dimmed" lineClamp={2}>{data.warning}</Text>}
           </Stack>
-        )}
+        ) : !loading ? (
+          <Text size="sm" c="dimmed">Connect RingCentral to load monthly call analytics.</Text>
+        ) : null}
       </Stack>
     </Card>
   );

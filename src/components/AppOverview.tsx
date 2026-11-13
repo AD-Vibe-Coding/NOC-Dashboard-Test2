@@ -75,7 +75,7 @@ const TOOLS = [
   { icon: IconLayoutDashboard, color: "appdirect", label: "My Day",            desc: "Google Calendar + personal task planner for the shift" },
   { icon: IconHeadset,         color: "blue",       label: "Team Availability", desc: "Live in-queue vs out, per-queue breakdown, break reasons" },
   { icon: IconCoffee,          color: "orange",     label: "Break Tracker",     desc: "Start/end breaks with Slack alerts and live duration timers" },
-  { icon: IconPhone,           color: "green",      label: "Zoom Call Metrics", desc: "Jan–Apr 2026 inbound call volume, handle time, and trends" },
+  { icon: IconPhone,           color: "green",      label: "RingCentral Call Metrics", desc: "Inbound queue volume, answer outcomes, handle time, and wait time" },
   { icon: IconChartBar,        color: "green",      label: "Performance",       desc: "Excel-imported scorecards with per-agent drill-down" },
   { icon: IconCheckbox,        color: "violet",     label: "Ticket Audit",      desc: "AI QA scoring from MHTML tickets pushed to the tracker" },
   { icon: IconActivityHeartbeat,color: "red",       label: "LogicMonitor",      desc: "Live network alerts, device health, and alert analyzer" },
