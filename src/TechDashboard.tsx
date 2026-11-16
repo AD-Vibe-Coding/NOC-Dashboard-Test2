@@ -74,6 +74,7 @@ import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { FloatingWindow } from "./components/FloatingWindow";
 import { Taskbar } from "./components/Taskbar";
 import {
+  isAlwaysPinnedSection,
   type DashboardSectionKey,
   useDashboardPreferences,
 } from "./lib/dashboard-preferences";
@@ -552,6 +553,7 @@ function TechHome({
           key={section.key}
           section={section}
           onExpand={onExpand}
+          alwaysPinned={isAlwaysPinnedSection(section.key)}
           onTogglePinned={() => onTogglePinned(section.key)}
           onToggleCollapsed={() => onToggleCollapsed(section.key)}
           onMoveUp={() => onMoveSection(section.key, -1)}
@@ -568,6 +570,7 @@ function TechHome({
 function DashboardSection({
   section,
   onExpand,
+  alwaysPinned,
   onTogglePinned,
   onToggleCollapsed,
   onMoveUp,
@@ -578,6 +581,7 @@ function DashboardSection({
 }: {
   section: { key: DashboardSectionKey; title: string; items: NavItem[]; pinned: boolean; collapsed: boolean };
   onExpand: (id: string) => void;
+  alwaysPinned: boolean;
   onTogglePinned: () => void;
   onToggleCollapsed: () => void;
   onMoveUp: () => void;
@@ -599,8 +603,8 @@ function DashboardSection({
             {section.pinned && <Badge size="xs" variant="light" color="appdirect">Pinned</Badge>}
           </Group>
           <Group gap={4}>
-            <Tooltip label={section.pinned ? "Unpin section" : "Pin section to the top"} withArrow>
-              <ActionIcon aria-label={section.pinned ? `Unpin ${section.title}` : `Pin ${section.title}`} aria-pressed={section.pinned} size="sm" variant={section.pinned ? "light" : "subtle"} color={section.pinned ? "appdirect" : "gray"} onClick={onTogglePinned}>
+            <Tooltip label={alwaysPinned ? "Always pinned for your dashboard" : section.pinned ? "Unpin section" : "Pin section to the top"} withArrow>
+              <ActionIcon aria-label={alwaysPinned ? `${section.title} is always pinned` : section.pinned ? `Unpin ${section.title}` : `Pin ${section.title}`} aria-pressed={section.pinned} disabled={alwaysPinned} size="sm" variant={section.pinned ? "light" : "subtle"} color={section.pinned ? "appdirect" : "gray"} onClick={onTogglePinned}>
                 <IconPin size={15} />
               </ActionIcon>
             </Tooltip>
@@ -610,8 +614,8 @@ function DashboardSection({
             <Tooltip label="Move section down" withArrow>
               <ActionIcon aria-label={`Move ${section.title} down`} size="sm" variant="subtle" disabled={!canMoveDown} onClick={onMoveDown}><IconArrowDown size={15} /></ActionIcon>
             </Tooltip>
-            <Tooltip label={section.collapsed ? "Expand section" : "Collapse section"} withArrow>
-              <ActionIcon aria-label={section.collapsed ? `Expand ${section.title}` : `Collapse ${section.title}`} aria-expanded={!section.collapsed} size="sm" variant="subtle" onClick={onToggleCollapsed}>
+            <Tooltip label={alwaysPinned ? "Always expanded on your dashboard" : section.collapsed ? "Expand section" : "Collapse section"} withArrow>
+              <ActionIcon aria-label={alwaysPinned ? `${section.title} is always expanded` : section.collapsed ? `Expand ${section.title}` : `Collapse ${section.title}`} aria-expanded={!section.collapsed} disabled={alwaysPinned} size="sm" variant="subtle" onClick={onToggleCollapsed}>
                 {section.collapsed ? <IconChevronDown size={16} /> : <IconChevronUp size={16} />}
               </ActionIcon>
             </Tooltip>

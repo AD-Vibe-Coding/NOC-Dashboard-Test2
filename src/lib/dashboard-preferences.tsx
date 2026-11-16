@@ -46,10 +46,10 @@ export const DASHBOARD_TEMPLATES: Array<{
 const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   classic: {
     sections: [
-      { key: "critical-alerts", hidden: false, pinned: true, collapsed: false, itemIds: ["logic-monitor", "velocloud-api", "data-health"] },
       { key: "my-tasks", hidden: false, pinned: true, collapsed: false, itemIds: ["my-day"] },
       { key: "team-availability", hidden: false, pinned: true, collapsed: false, itemIds: ["zoom-queue"] },
-      { key: "operations", hidden: false, pinned: true, collapsed: false, itemIds: ["shift-checklist", "work-allotment-generator", "ticket-audit", "ticket-rebalancer", "maintenance-note-generator", "zoom-call-metrics"] },
+      { key: "operations", hidden: false, pinned: true, collapsed: false, itemIds: ["shift-checklist", "maintenance-note-generator", "work-allotment-generator", "ticket-audit", "ticket-rebalancer", "zoom-call-metrics"] },
+      { key: "critical-alerts", hidden: false, pinned: false, collapsed: true, itemIds: ["logic-monitor", "velocloud-api", "data-health"] },
       { key: "my-work", hidden: false, pinned: false, collapsed: true, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "break-tracker"] },
       { key: "queue-monitoring", hidden: false, pinned: false, collapsed: true, itemIds: ["building-apps-agents", "velocloud-api"] },
       { key: "ai-tools", hidden: false, pinned: false, collapsed: true, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "piab-troubleshooter", "velocloud-troubleshooter", "fortigate-troubleshooter", "kb-gap-finder"] },
@@ -187,11 +187,50 @@ function isTemplate(value: string | null | undefined): value is DashboardTemplat
   return !!value && DASHBOARD_TEMPLATES.some((item) => item.value === value);
 }
 
+export const ALWAYS_PINNED_SECTION_KEYS = ["my-tasks", "team-availability", "operations"] as const satisfies readonly DashboardSectionKey[];
+export function isAlwaysPinnedSection(sectionKey: DashboardSectionKey) {
+  return ALWAYS_PINNED_SECTION_KEYS.includes(sectionKey as (typeof ALWAYS_PINNED_SECTION_KEYS)[number]);
+}
+
+const ALWAYS_PINNED_WIDGET_IDS = new Set(
+  DEFAULT_LAYOUTS.classic.sections
+    .filter((section) => ALWAYS_PINNED_SECTION_KEYS.includes(section.key as (typeof ALWAYS_PINNED_SECTION_KEYS)[number]))
+    .flatMap((section) => section.itemIds),
+);
+
+function enforceAlwaysPinnedSections(layout: DashboardLayoutState): DashboardLayoutState {
+  const requiredSections = DEFAULT_LAYOUTS.classic.sections.filter((section) =>
+    ALWAYS_PINNED_SECTION_KEYS.includes(section.key as (typeof ALWAYS_PINNED_SECTION_KEYS)[number]),
+  );
+  const requiredKeys = new Set<DashboardSectionKey>(ALWAYS_PINNED_SECTION_KEYS);
+  const existingByKey = new Map(layout.sections.map((section) => [section.key, section]));
+  const remainingSections = layout.sections
+    .filter((section) => !requiredKeys.has(section.key))
+    .map((section) => ({
+      ...section,
+      itemIds: section.itemIds.filter((id) => !ALWAYS_PINNED_WIDGET_IDS.has(id)),
+    }));
+  const pinnedSections = requiredSections.map((fallback) => ({
+    ...fallback,
+    ...(existingByKey.get(fallback.key) ?? {}),
+    hidden: false,
+    pinned: true,
+    collapsed: false,
+    // Keep these three widget groups in the requested layout and avoid duplicates
+    // in the remaining sections, even when loading older customized layouts.
+    itemIds: [...fallback.itemIds],
+  }));
+
+  return { sections: [...pinnedSections, ...remainingSections] };
+}
+
 function cloneLayouts(): Record<DashboardTemplate, DashboardLayoutState> {
   return Object.fromEntries(
     (Object.entries(DEFAULT_LAYOUTS) as Array<[DashboardTemplate, DashboardLayoutState]>).map(([key, layout]) => [
       key,
-      { sections: layout.sections.map((section) => ({ ...section, itemIds: [...section.itemIds] })) },
+      enforceAlwaysPinnedSections({
+        sections: layout.sections.map((section) => ({ ...section, itemIds: [...section.itemIds] })),
+      }),
     ]),
   ) as Record<DashboardTemplate, DashboardLayoutState>;
 }
@@ -278,7 +317,12 @@ function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>
       };
     }
   }
-  return result;
+  return Object.fromEntries(
+    (Object.entries(result) as Array<[DashboardTemplate, DashboardLayoutState]>).map(([template, layout]) => [
+      template,
+      enforceAlwaysPinnedSections(layout),
+    ]),
+  ) as Record<DashboardTemplate, DashboardLayoutState>;
 }
 
 function readStoredPreferences(viewer: string) {
@@ -347,6 +391,7 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
   }, [template]);
 
   const moveWidget = useCallback((fromSection: DashboardSectionKey, toSection: DashboardSectionKey, itemId: string, beforeItemId?: string) => {
+    if (ALWAYS_PINNED_WIDGET_IDS.has(itemId)) return;
     setLayouts((prev) => {
       const nextSections = prev[template].sections.map((section) => ({ ...section, itemIds: [...section.itemIds] }));
       const source = nextSections.find((section) => section.key === fromSection);
@@ -372,6 +417,7 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
   }, [template]);
 
   const toggleSectionVisibility = useCallback((sectionKey: DashboardSectionKey) => {
+    if (ALWAYS_PINNED_SECTION_KEYS.includes(sectionKey as (typeof ALWAYS_PINNED_SECTION_KEYS)[number])) return;
     setLayouts((prev) => ({
       ...prev,
       [template]: {
@@ -383,6 +429,7 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
   }, [template]);
 
   const toggleSectionPinned = useCallback((sectionKey: DashboardSectionKey) => {
+    if (ALWAYS_PINNED_SECTION_KEYS.includes(sectionKey as (typeof ALWAYS_PINNED_SECTION_KEYS)[number])) return;
     setLayouts((prev) => ({
       ...prev,
       [template]: {
@@ -394,6 +441,7 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
   }, [template]);
 
   const toggleSectionCollapsed = useCallback((sectionKey: DashboardSectionKey) => {
+    if (ALWAYS_PINNED_SECTION_KEYS.includes(sectionKey as (typeof ALWAYS_PINNED_SECTION_KEYS)[number])) return;
     setLayouts((prev) => ({
       ...prev,
       [template]: {

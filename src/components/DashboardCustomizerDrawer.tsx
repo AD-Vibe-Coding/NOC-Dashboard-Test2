@@ -15,6 +15,7 @@ import {
 import { IconArrowsMove, IconEye, IconEyeOff, IconGripVertical, IconRotate } from "@tabler/icons-react";
 import {
   DASHBOARD_TEMPLATES,
+  isAlwaysPinnedSection,
   type DashboardSectionKey,
   useDashboardPreferences,
 } from "../lib/dashboard-preferences";
@@ -117,10 +118,11 @@ export function DashboardCustomizerDrawer({
                 </Group>
                 <Switch
                   checked={!section.hidden}
+                  disabled={isAlwaysPinnedSection(section.key)}
                   onChange={() => toggleSectionVisibility(section.key)}
                   onLabel={<IconEye size={12} />}
                   offLabel={<IconEyeOff size={12} />}
-                  label={section.hidden ? "Hidden" : "Visible"}
+                  label={isAlwaysPinnedSection(section.key) ? "Always visible" : section.hidden ? "Hidden" : "Visible"}
                 />
               </Group>
 
