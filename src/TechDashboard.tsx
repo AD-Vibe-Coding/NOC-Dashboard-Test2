@@ -5,12 +5,14 @@
  * drag sections and widgets into a custom order, and hide/show sections.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ActionIcon,
   AppShell,
+  Drawer,
   Badge,
   Box,
+  Button,
   Card,
   Container,
   Divider,
@@ -18,6 +20,7 @@ import {
   SimpleGrid,
   Stack,
   Text,
+  TextInput,
   ThemeIcon,
   Title,
   Tooltip,
@@ -52,6 +55,14 @@ import {
   IconClipboardList,
   IconSun,
   IconWorldPin,
+  IconAlertTriangle,
+  IconArrowUp,
+  IconArrowDown,
+  IconArrowsShuffle,
+  IconPhone,
+  IconChevronDown,
+  IconChevronUp,
+  IconPin,
 } from "@tabler/icons-react";
 import { BrandLogo } from "./widgets/BrandLogo";
 import { IdentityBadge } from "./widgets/IdentityBadge";
@@ -92,8 +103,43 @@ interface NavSection {
 
 const NAV_SECTIONS: NavSection[] = [
   {
+    key: "critical-alerts",
+    title: "Critical Alerts & Updates",
+    items: [
+      { id: "logic-monitor", label: "LogicMonitor Alerts", icon: IconAlertTriangle, color: "red", description: "Critical alert feed and device health" },
+      { id: "velocloud-api", label: "VeloCloud Health", icon: IconWorldPin, color: "cyan", description: "SD-WAN alerts and link status" },
+      { id: "data-health", label: "Data Health", icon: IconActivityHeartbeat, color: "orange", description: "Check dashboard data freshness" },
+    ],
+  },
+  {
+    key: "my-tasks",
+    title: "My Open Tasks",
+    items: [
+      { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets and calls" },
+    ],
+  },
+  {
+    key: "team-availability",
+    title: "Team Availability",
+    items: [
+      { id: "zoom-queue", label: "Team Availability", icon: IconHeadset, color: "appdirect", description: "Queue availability, breaks, and meeting status" },
+    ],
+  },
+  {
+    key: "operations",
+    title: "Frequently Used Operations Tools",
+    items: [
+      { id: "shift-checklist", label: "Shift Handover", icon: IconClipboardList, color: "teal", description: "End-of-shift checklist" },
+      { id: "work-allotment-generator", label: "Work Allotment", icon: IconClipboardList, color: "indigo", description: "View NOC shift assignments" },
+      { id: "ticket-audit", label: "Ticket Audit", icon: IconClipboardList, color: "orange", description: "Review and audit ticket handling" },
+      { id: "ticket-rebalancer", label: "Ticket Rebalancer", icon: IconArrowsShuffle, color: "cyan", description: "Help balance the ticket queue" },
+      { id: "maintenance-note-generator", label: "Maintenance Notes", icon: IconFileText, color: "blue", description: "Generate maintenance communications" },
+      { id: "zoom-call-metrics", label: "Call Metrics", icon: IconPhone, color: "green", description: "RingCentral queue analytics" },
+    ],
+  },
+  {
     key: "my-work",
-    title: "My Work",
+    title: "My Work", 
     items: [
       { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets & calls" },
       { id: "meeting-notes", label: "Notebook", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
@@ -158,9 +204,16 @@ const NAV_SECTIONS: NavSection[] = [
 
 export default function TechDashboard() {
   const { identity } = useIdentity();
-  const { currentLayout } = useDashboardPreferences();
+  const {
+    currentLayout,
+    moveSection,
+    toggleSectionPinned,
+    toggleSectionCollapsed,
+  } = useDashboardPreferences();
   const { windows, openWindow } = useWindowManager();
   const [customizeOpened, { open: openCustomize, close: closeCustomize }] = useDisclosure(false);
+  const [toolsOpened, { open: openTools, close: closeTools }] = useDisclosure(false);
+  const [toolSearch, setToolSearch] = useState("");
   const { setColorScheme } = useMantineColorScheme();
   const computedColorScheme = useComputedColorScheme("light", {
     getInitialValueInEffect: true,
@@ -223,13 +276,21 @@ export default function TechDashboard() {
           key: layoutSection.key,
           title: source.title,
           hidden: layoutSection.hidden,
+          pinned: Boolean(layoutSection.pinned),
+          collapsed: Boolean(layoutSection.collapsed),
           items: [...orderedItems, ...missingItems],
         };
       })
-      .filter((section): section is { key: DashboardSectionKey; title: string; hidden: boolean; items: NavItem[] } => !!section);
+      .filter((section): section is { key: DashboardSectionKey; title: string; hidden: boolean; pinned: boolean; collapsed: boolean; items: NavItem[] } => !!section);
   }, [currentLayout.sections, visibleSectionMap]);
 
-  const visibleSections = orderedSections.filter((section) => !section.hidden && section.items.length > 0);
+  const visibleSections = orderedSections
+    .filter((section) => !section.hidden && section.items.length > 0)
+    .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+  const matchingTools = visibleWidgets.filter((widget) => {
+    const query = toolSearch.trim().toLowerCase();
+    return !query || `${widget.title} ${widget.description}`.toLowerCase().includes(query);
+  });
 
   return (
     <AppShell header={{ height: 68 }} padding={0}>
@@ -304,6 +365,11 @@ export default function TechDashboard() {
               </Box>
             </Group>
             <Group gap="sm" wrap="nowrap">
+              <Tooltip label="Search all tools" withArrow>
+                <ActionIcon aria-label="Search all tools" variant="default" size="lg" radius="md" onClick={openTools}>
+                  <IconSearch size={18} />
+                </ActionIcon>
+              </Tooltip>
               <DashboardTemplatePicker />
               <Tooltip label="Customize layout" withArrow>
                 <ActionIcon variant="default" size="lg" radius="md" onClick={openCustomize}>
@@ -350,11 +416,58 @@ export default function TechDashboard() {
             identity={identity}
             accentColor={accentColor}
             sections={visibleSections}
-            featuredWidgets={visibleWidgets.filter((widget) => ["zoom-queue", "break-tracker"].includes(widget.id))}
             onExpand={expand}
+            onTogglePinned={toggleSectionPinned}
+            onToggleCollapsed={toggleSectionCollapsed}
+            onMoveSection={(key, direction) => {
+              const index = visibleSections.findIndex((section) => section.key === key);
+              const target = visibleSections[index + direction];
+              if (target) moveSection(key, target.key);
+            }}
           />
         </Container>
       </AppShell.Main>
+
+      <Drawer opened={toolsOpened} onClose={closeTools} position="right" size="md" title="All tools" padding="lg">
+        <Stack gap="md">
+          <Text size="sm" c="dimmed">Search every tool available to your role, then open it without leaving your dashboard.</Text>
+          <TextInput
+            autoFocus
+            value={toolSearch}
+            onChange={(event) => setToolSearch(event.currentTarget.value)}
+            placeholder="Search tools…"
+            aria-label="Search all available tools"
+            leftSection={<IconSearch size={16} />}
+          />
+          <Text size="xs" c="dimmed">{matchingTools.length} tools</Text>
+          <Stack gap="xs">
+            {matchingTools.map((widget) => (
+              <Card key={widget.id} withBorder radius="md" p="sm">
+                <Group justify="space-between" wrap="nowrap">
+                  <Group gap="sm" wrap="nowrap" style={{ minWidth: 0 }}>
+                    <ThemeIcon color={widget.iconColor} variant="light" radius="md">
+                      <widget.icon size={17} />
+                    </ThemeIcon>
+                    <Box style={{ minWidth: 0 }}>
+                      <Text size="sm" fw={600}>{widget.title}</Text>
+                      <Text size="xs" c="dimmed" lineClamp={2}>{widget.description}</Text>
+                    </Box>
+                  </Group>
+                  <Button size="xs" variant="light" onClick={() => { expand(widget.id); closeTools(); }}>
+                    Open
+                  </Button>
+                </Group>
+              </Card>
+            ))}
+            {matchingTools.length === 0 && (
+              <Card withBorder radius="md" p="lg">
+                <Text size="sm" fw={600}>No matching tools</Text>
+                <Text size="xs" c="dimmed" mt={4}>Try a different search term.</Text>
+              </Card>
+            )}
+          </Stack>
+        </Stack>
+      </Drawer>
 
       <DashboardCustomizerDrawer opened={customizeOpened} onClose={closeCustomize} sections={orderedSections} />
 
@@ -372,15 +485,19 @@ function TechHome({
   identity,
   accentColor,
   sections,
-  featuredWidgets,
   onExpand,
+  onTogglePinned,
+  onToggleCollapsed,
+  onMoveSection,
 }: {
   firstName: string;
   identity: ReturnType<typeof useIdentity>["identity"];
   accentColor: string;
-  sections: Array<{ key: DashboardSectionKey; title: string; hidden: boolean; items: NavItem[] }>;
-  featuredWidgets: Array<(typeof WIDGETS)[number]>;
+  sections: Array<{ key: DashboardSectionKey; title: string; hidden: boolean; pinned: boolean; collapsed: boolean; items: NavItem[] }>;
   onExpand: (id: string) => void;
+  onTogglePinned: (key: DashboardSectionKey) => void;
+  onToggleCollapsed: (key: DashboardSectionKey) => void;
+  onMoveSection: (key: DashboardSectionKey, direction: -1 | 1) => void;
 }) {
   const role = identity?.role ?? "tier1";
   const hour = new Date().getHours();
@@ -430,30 +547,17 @@ function TechHome({
 
       <NewsTicker />
 
-      {featuredWidgets.length > 0 && (
-        <Card withBorder radius="lg" p="lg">
-          <Stack gap="md">
-            <Box>
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>
-                Live Overview
-              </Text>
-              <Divider mt="xs" />
-            </Box>
-            <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-              {featuredWidgets.map((widget) => {
-                const Tile = widget.Tile;
-                return <Tile key={widget.id} onExpand={() => onExpand(widget.id)} />;
-              })}
-            </SimpleGrid>
-          </Stack>
-        </Card>
-      )}
-
-      {sections.map((section) => (
+      {sections.map((section, index) => (
         <DashboardSection
           key={section.key}
           section={section}
           onExpand={onExpand}
+          onTogglePinned={() => onTogglePinned(section.key)}
+          onToggleCollapsed={() => onToggleCollapsed(section.key)}
+          onMoveUp={() => onMoveSection(section.key, -1)}
+          onMoveDown={() => onMoveSection(section.key, 1)}
+          canMoveUp={index > 0}
+          canMoveDown={index < sections.length - 1}
           columns={{ base: 1, xs: 2, sm: 2, md: section.items.length <= 3 ? section.items.length : 4 }}
         />
       ))}
@@ -464,10 +568,22 @@ function TechHome({
 function DashboardSection({
   section,
   onExpand,
+  onTogglePinned,
+  onToggleCollapsed,
+  onMoveUp,
+  onMoveDown,
+  canMoveUp,
+  canMoveDown,
   columns,
 }: {
-  section: { title: string; items: NavItem[] };
+  section: { key: DashboardSectionKey; title: string; items: NavItem[]; pinned: boolean; collapsed: boolean };
   onExpand: (id: string) => void;
+  onTogglePinned: () => void;
+  onToggleCollapsed: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
   columns: { base: number; xs?: number; sm?: number; md?: number; lg?: number };
 }) {
   if (section.items.length === 0) return null;
@@ -475,17 +591,40 @@ function DashboardSection({
   return (
     <Card withBorder radius="lg" p="lg">
       <Stack gap="md">
-        <Box>
-          <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>
-            {section.title}
-          </Text>
-          <Divider mt="xs" />
-        </Box>
-        <SimpleGrid cols={columns} spacing="md">
-          {section.items.map((item) => (
-            <NavButton key={item.id} item={item} onExpand={onExpand} />
-          ))}
-        </SimpleGrid>
+        <Group justify="space-between" align="center" wrap="wrap">
+          <Group gap="xs">
+            <Text size="xs" fw={700} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>
+              {section.title}
+            </Text>
+            {section.pinned && <Badge size="xs" variant="light" color="appdirect">Pinned</Badge>}
+          </Group>
+          <Group gap={4}>
+            <Tooltip label={section.pinned ? "Unpin section" : "Pin section to the top"} withArrow>
+              <ActionIcon aria-label={section.pinned ? `Unpin ${section.title}` : `Pin ${section.title}`} aria-pressed={section.pinned} size="sm" variant={section.pinned ? "light" : "subtle"} color={section.pinned ? "appdirect" : "gray"} onClick={onTogglePinned}>
+                <IconPin size={15} />
+              </ActionIcon>
+            </Tooltip>
+            <Tooltip label="Move section up" withArrow>
+              <ActionIcon aria-label={`Move ${section.title} up`} size="sm" variant="subtle" disabled={!canMoveUp} onClick={onMoveUp}><IconArrowUp size={15} /></ActionIcon>
+            </Tooltip>
+            <Tooltip label="Move section down" withArrow>
+              <ActionIcon aria-label={`Move ${section.title} down`} size="sm" variant="subtle" disabled={!canMoveDown} onClick={onMoveDown}><IconArrowDown size={15} /></ActionIcon>
+            </Tooltip>
+            <Tooltip label={section.collapsed ? "Expand section" : "Collapse section"} withArrow>
+              <ActionIcon aria-label={section.collapsed ? `Expand ${section.title}` : `Collapse ${section.title}`} aria-expanded={!section.collapsed} size="sm" variant="subtle" onClick={onToggleCollapsed}>
+                {section.collapsed ? <IconChevronDown size={16} /> : <IconChevronUp size={16} />}
+              </ActionIcon>
+            </Tooltip>
+          </Group>
+        </Group>
+        <Divider />
+        {!section.collapsed && (
+          <SimpleGrid cols={columns} spacing="md">
+            {section.items.map((item) => (
+              <NavButton key={item.id} item={item} onExpand={onExpand} />
+            ))}
+          </SimpleGrid>
+        )}
       </Stack>
     </Card>
   );

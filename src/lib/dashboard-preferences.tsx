@@ -12,11 +12,13 @@ export type DashboardTemplate =
   | "minimalist"
   | "trainer"
   | "escalation-desk";
-export type DashboardSectionKey = "my-work" | "queue-monitoring" | "ai-tools" | "communication" | "requests" | "team";
+export type DashboardSectionKey = "critical-alerts" | "my-tasks" | "team-availability" | "operations" | "my-work" | "queue-monitoring" | "ai-tools" | "communication" | "requests" | "team";
 
 export interface DashboardLayoutSectionState {
   key: DashboardSectionKey;
   hidden: boolean;
+  pinned?: boolean;
+  collapsed?: boolean;
   itemIds: string[];
 }
 
@@ -44,12 +46,16 @@ export const DASHBOARD_TEMPLATES: Array<{
 const DEFAULT_LAYOUTS: Record<DashboardTemplate, DashboardLayoutState> = {
   classic: {
     sections: [
-      { key: "my-work", hidden: false, itemIds: ["my-day", "performance-tracker", "noc-mttr-report", "meeting-notes", "break-tracker"] },
-      { key: "queue-monitoring", hidden: false, itemIds: ["zoom-queue", "logic-monitor", "building-apps-agents"] },
-      { key: "ai-tools", hidden: false, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper"] },
-      { key: "communication", hidden: false, itemIds: ["escalation-email", "email-polisher", "shift-checklist", "qs-escalations"] },
-      { key: "requests", hidden: false, itemIds: ["wfh", "training-updates", "training-updates"] },
-      { key: "team", hidden: false, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "work-allotment-generator", "performance-discussions"] },
+      { key: "critical-alerts", hidden: false, pinned: true, collapsed: false, itemIds: ["logic-monitor", "velocloud-api", "data-health"] },
+      { key: "my-tasks", hidden: false, pinned: true, collapsed: false, itemIds: ["my-day"] },
+      { key: "team-availability", hidden: false, pinned: true, collapsed: false, itemIds: ["zoom-queue"] },
+      { key: "operations", hidden: false, pinned: true, collapsed: false, itemIds: ["shift-checklist", "work-allotment-generator", "ticket-audit", "ticket-rebalancer", "maintenance-note-generator", "zoom-call-metrics"] },
+      { key: "my-work", hidden: false, pinned: false, collapsed: true, itemIds: ["performance-tracker", "noc-mttr-report", "meeting-notes", "break-tracker"] },
+      { key: "queue-monitoring", hidden: false, pinned: false, collapsed: true, itemIds: ["building-apps-agents", "velocloud-api"] },
+      { key: "ai-tools", hidden: false, pinned: false, collapsed: true, itemIds: ["smart-search", "ticket-summary", "noc-troubleshooter", "mobility-troubleshooter", "timezone-helper", "piab-troubleshooter", "velocloud-troubleshooter", "fortigate-troubleshooter", "kb-gap-finder"] },
+      { key: "communication", hidden: false, pinned: false, collapsed: true, itemIds: ["email-assistant", "escalation-email", "email-polisher", "qs-escalations"] },
+      { key: "requests", hidden: false, pinned: false, collapsed: true, itemIds: ["wfh", "training-updates"] },
+      { key: "team", hidden: false, pinned: false, collapsed: true, itemIds: ["kudos-board", "team-feedback", "celebrations-tracker", "enhancement-tracker", "performance-discussions", "attendance-tracker"] },
     ],
   },
   focus: {
@@ -156,6 +162,8 @@ type DashboardPreferencesContextValue = {
   moveSection: (fromKey: DashboardSectionKey, toKey: DashboardSectionKey) => void;
   moveWidget: (fromSection: DashboardSectionKey, toSection: DashboardSectionKey, itemId: string, beforeItemId?: string) => void;
   toggleSectionVisibility: (sectionKey: DashboardSectionKey) => void;
+  toggleSectionPinned: (sectionKey: DashboardSectionKey) => void;
+  toggleSectionCollapsed: (sectionKey: DashboardSectionKey) => void;
   resetCurrentTemplateLayout: () => void;
 };
 
@@ -208,15 +216,49 @@ const REQUIRED_WIDGETS: Array<{ id: string; section: DashboardSectionKey; afterI
 
 function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>): Record<DashboardTemplate, DashboardLayoutState> {
   const result = { ...layouts };
+  // Preserve existing per-viewer order/visibility while adding new controls to
+  // previously saved layouts. New defaults only fill fields that did not exist.
+  for (const tmpl of Object.keys(result) as DashboardTemplate[]) {
+    const defaults = new Map(DEFAULT_LAYOUTS[tmpl].sections.map((section) => [section.key, section]));
+    const migrated = result[tmpl].sections.map((section) => {
+      const fallback = defaults.get(section.key);
+      return {
+        ...fallback,
+        ...section,
+        pinned: typeof section.pinned === "boolean" ? section.pinned : Boolean(fallback?.pinned),
+        collapsed: typeof section.collapsed === "boolean" ? section.collapsed : Boolean(fallback?.collapsed),
+      };
+    });
+    const existingKeys = new Set(migrated.map((section) => section.key));
+    const addedDefaults = DEFAULT_LAYOUTS[tmpl].sections.filter((section) => !existingKeys.has(section.key));
+    result[tmpl] = { sections: [...addedDefaults, ...migrated] };
+  }
+  // The new Classic defaults promote the four most-used areas into dedicated
+  // sections. Remove those tools from their old buckets for saved Classic layouts.
+  const classicCoreKeys = new Set<DashboardSectionKey>(["critical-alerts", "my-tasks", "team-availability", "operations"]);
+  const promotedClassicItems = new Set(
+    DEFAULT_LAYOUTS.classic.sections
+      .filter((section) => classicCoreKeys.has(section.key))
+      .flatMap((section) => section.itemIds),
+  );
+  result.classic = {
+    sections: result.classic.sections.map((section) =>
+      classicCoreKeys.has(section.key)
+        ? section
+        : { ...section, itemIds: section.itemIds.filter((id) => !promotedClassicItems.has(id)) },
+    ),
+  };
   // Check per-template (NOT globally) — a widget present in one template's stored
   // layout must not prevent injection into another template that's missing it.
   for (const tmpl of Object.keys(result) as DashboardTemplate[]) {
     for (const { id, section, afterId } of REQUIRED_WIDGETS) {
+      const targetSection = tmpl === "classic" && id === "work-allotment-generator" ? "operations" : section;
+      const targetAfterId = tmpl === "classic" && id === "work-allotment-generator" ? "shift-checklist" : afterId;
       let alreadyInTarget = false;
 
       const strippedSections = result[tmpl].sections.map((s) => {
         const filteredIds = s.itemIds.filter((itemId) => itemId !== id);
-        if (s.key === section && filteredIds.length !== s.itemIds.length) {
+        if (s.key === targetSection && filteredIds.length !== s.itemIds.length) {
           alreadyInTarget = true;
         }
         return filteredIds.length === s.itemIds.length ? s : { ...s, itemIds: filteredIds };
@@ -224,11 +266,11 @@ function migrateLayouts(layouts: Record<DashboardTemplate, DashboardLayoutState>
 
       result[tmpl] = {
         sections: strippedSections.map((s) => {
-          if (s.key !== section) return s;
+          if (s.key !== targetSection) return s;
           if (s.itemIds.includes(id) || alreadyInTarget) {
             return s.itemIds.includes(id) ? s : { ...s, itemIds: [...s.itemIds, id] };
           }
-          const idx = afterId ? s.itemIds.indexOf(afterId) : -1;
+          const idx = targetAfterId ? s.itemIds.indexOf(targetAfterId) : -1;
           const newIds = [...s.itemIds];
           newIds.splice(idx >= 0 ? idx + 1 : newIds.length, 0, id);
           return { ...s, itemIds: newIds };
@@ -340,6 +382,28 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
     }));
   }, [template]);
 
+  const toggleSectionPinned = useCallback((sectionKey: DashboardSectionKey) => {
+    setLayouts((prev) => ({
+      ...prev,
+      [template]: {
+        sections: prev[template].sections.map((section) =>
+          section.key === sectionKey ? { ...section, pinned: !section.pinned } : section,
+        ),
+      },
+    }));
+  }, [template]);
+
+  const toggleSectionCollapsed = useCallback((sectionKey: DashboardSectionKey) => {
+    setLayouts((prev) => ({
+      ...prev,
+      [template]: {
+        sections: prev[template].sections.map((section) =>
+          section.key === sectionKey ? { ...section, collapsed: !section.collapsed } : section,
+        ),
+      },
+    }));
+  }, [template]);
+
   const resetCurrentTemplateLayout = useCallback(() => {
     setLayouts((prev) => ({
       ...prev,
@@ -358,8 +422,10 @@ export function DashboardPreferencesProvider({ children }: { children: React.Rea
     moveSection,
     moveWidget,
     toggleSectionVisibility,
+    toggleSectionPinned,
+    toggleSectionCollapsed,
     resetCurrentTemplateLayout,
-  }), [currentLayout, moveSection, moveWidget, resetCurrentTemplateLayout, template, toggleSectionVisibility]);
+  }), [currentLayout, moveSection, moveWidget, resetCurrentTemplateLayout, template, toggleSectionVisibility, toggleSectionPinned, toggleSectionCollapsed]);
 
   return (
     <DashboardPreferencesContext.Provider value={{ ...value, currentLayout }}>

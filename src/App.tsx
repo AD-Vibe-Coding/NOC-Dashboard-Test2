@@ -69,6 +69,7 @@ import { WfhApprovalPopup } from "./components/WfhApprovalPopup";
 import { SmartSearchPanel } from "./widgets/SmartSearch";
 import { type DashboardTemplate, useDashboardPreferences } from "./lib/dashboard-preferences";
 import { NocMttrReportWidget } from "./widgets/NocMttrReport";
+import TechDashboard from "./TechDashboard";
 
 // AppDirect brand colors. Primary is #006080 (deep petrol teal,
 // sourced from AppDirect's Base design-system docs); the lighter mid
@@ -245,7 +246,13 @@ function AppInner() {
     return <SignInPage />;
   }
 
-  // All signed-in users now use the same dashboard shell/layout.
+  // Tier 1–3 teammates get the personal, customizable workspace. Manager and
+  // customer-service-manager dashboards keep their existing role-specific view.
+  if (["tier1", "tier2", "tier3"].includes(effectiveRole ?? "")) {
+    return <TechDashboard />;
+  }
+
+  // All remaining signed-in roles use the manager dashboard shell/layout.
   // Role-based widget visibility still comes from canAccess(...).
   function expand(id: string) {
     const w = WIDGETS.find((x) => x.id === id);
