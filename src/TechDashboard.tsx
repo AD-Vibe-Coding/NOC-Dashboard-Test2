@@ -648,31 +648,33 @@ function NavButton({
   const accentVar = `var(--mantine-color-${item.color}-6)`;
 
   return (
-    <UnstyledButton onClick={() => onExpand(item.id)} style={{ width: "100%" }}>
-      <Card
-        withBorder
-        radius="md"
-        p="md"
-        h="100%"
+    <Card
+      withBorder
+      radius="md"
+      p="md"
+      h="100%"
+      style={{
+        transition: "all 150ms ease",
+        position: "relative",
+        overflow: "hidden",
+      }}
+      className="tech-nav-button"
+    >
+      <Box
         style={{
-          cursor: "pointer",
-          transition: "all 150ms ease",
-          position: "relative",
-          overflow: "hidden",
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 3,
+          background: accentVar,
+          opacity: 0.7,
         }}
-        className="tech-nav-button"
+      />
+      <UnstyledButton
+        onClick={() => onExpand(item.id)}
+        style={{ width: "100%", textAlign: "left", position: "relative", zIndex: 1 }}
       >
-        <Box
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 3,
-            background: accentVar,
-            opacity: 0.7,
-          }}
-        />
         <Group gap="md" wrap="nowrap" align="flex-start">
           <ThemeIcon
             size="lg"
@@ -698,10 +700,10 @@ function NavButton({
             <Text size="xs" c="dimmed" lineClamp={2} mt={2}>
               {item.description}
             </Text>
-            {item.id === "my-day" && <MeetingPreview />}
           </Box>
         </Group>
-      </Card>
-    </UnstyledButton>
+      </UnstyledButton>
+      {item.id === "my-day" && <MeetingPreview />}
+    </Card>
   );
 }
