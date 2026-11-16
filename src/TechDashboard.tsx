@@ -69,6 +69,7 @@ import { NewsTicker } from "./widgets/NewsTicker";
 import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
 import { WIDGETS } from "./widgets/registry";
 import { ZoomQueueTile } from "./widgets/ZoomQueue/Tile";
+import { MeetingPreview } from "./widgets/WorkActivity/MeetingPreview";
 import { DashboardCustomizerDrawer } from "./components/DashboardCustomizerDrawer";
 import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { FloatingWindow } from "./components/FloatingWindow";
@@ -697,6 +698,7 @@ function NavButton({
             <Text size="xs" c="dimmed" lineClamp={2} mt={2}>
               {item.description}
             </Text>
+            {item.id === "my-day" && <MeetingPreview />}
           </Box>
         </Group>
       </Card>
