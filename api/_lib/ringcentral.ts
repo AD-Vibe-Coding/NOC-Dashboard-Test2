@@ -903,23 +903,31 @@ export async function setRingCentralQueueCallsEnabled(
     throw new Error(`Configured RingCentral queue not found: ${queueName ?? "none"}.`);
   }
 
-  const path = `/restapi/v1.0/account/~/extension/${encodeURIComponent(extensionId)}/call-queue-presence`;
-  const response = await ringCentralFetch(req, res, path, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      records: selectedQueues.map((queue) => ({ callqueue: { id: queue.id }, acceptCalls: enabled })),
-    }),
-  });
-  const responseText = await response.text();
-  let responseJson: any = null;
-  try {
-    responseJson = responseText ? JSON.parse(responseText) : null;
-  } catch {
-    responseJson = null;
-  }
-  if (!response.ok) {
-    throw new Error(`RingCentral queue update failed (${response.status}): ${String(responseJson?.message ?? responseText).slice(0, 200)}`);
+  for (const queue of selectedQueues) {
+    const queuePath = `/restapi/v1.0/account/~/call-queues/${encodeURIComponent(queue.id)}`;
+    const queueDetails = await ringCentralGet(req, res, queuePath);
+    if (queueDetails?.editableMemberStatus === false) {
+      throw new Error(`RingCentral queue "${queue.name}" does not allow members to change their own availability. Ask your RingCentral administrator to enable member-editable status.`);
+    }
+
+    const presencePath = `${queuePath}/presence`;
+    const response = await ringCentralFetch(req, res, presencePath, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        records: [{ member: { id: extensionId }, acceptCurrentQueueCalls: enabled }],
+      }),
+    });
+    const responseText = await response.text();
+    let responseJson: any = null;
+    try {
+      responseJson = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      responseJson = null;
+    }
+    if (!response.ok) {
+      throw new Error(`RingCentral queue update failed for "${queue.name}" (${response.status}): ${String(responseJson?.message ?? responseText).slice(0, 200)}`);
+    }
   }
 
   liveQueueDataCache = null;
