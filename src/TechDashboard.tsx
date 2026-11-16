@@ -60,7 +60,6 @@ import {
   IconArrowDown,
   IconArrowsShuffle,
   IconPhone,
-  IconChevronDown,
   IconChevronUp,
   IconPin,
 } from "@tabler/icons-react";
@@ -279,7 +278,7 @@ export default function TechDashboard() {
           title: source.title,
           hidden: layoutSection.hidden,
           pinned: Boolean(layoutSection.pinned),
-          collapsed: Boolean(layoutSection.collapsed),
+          collapsed: false,
           items: [...orderedItems, ...missingItems],
         };
       })
@@ -615,9 +614,9 @@ function DashboardSection({
             <Tooltip label="Move section down" withArrow>
               <ActionIcon aria-label={`Move ${section.title} down`} size="sm" variant="subtle" disabled={!canMoveDown} onClick={onMoveDown}><IconArrowDown size={15} /></ActionIcon>
             </Tooltip>
-            <Tooltip label={alwaysPinned ? "Always expanded on your dashboard" : section.collapsed ? "Expand section" : "Collapse section"} withArrow>
-              <ActionIcon aria-label={alwaysPinned ? `${section.title} is always expanded` : section.collapsed ? `Expand ${section.title}` : `Collapse ${section.title}`} aria-expanded={!section.collapsed} disabled={alwaysPinned} size="sm" variant="subtle" onClick={onToggleCollapsed}>
-                {section.collapsed ? <IconChevronDown size={16} /> : <IconChevronUp size={16} />}
+            <Tooltip label="Sections stay expanded on your dashboard" withArrow>
+              <ActionIcon aria-label={`${section.title} stays expanded`} aria-expanded="true" disabled size="sm" variant="subtle" onClick={onToggleCollapsed}>
+                <IconChevronUp size={16} />
               </ActionIcon>
             </Tooltip>
           </Group>
