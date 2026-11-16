@@ -69,6 +69,7 @@ import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
 import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
 import { WIDGETS } from "./widgets/registry";
+import { ZoomQueueTile } from "./widgets/ZoomQueue/Tile";
 import { DashboardCustomizerDrawer } from "./components/DashboardCustomizerDrawer";
 import { DashboardTemplatePicker } from "./components/DashboardTemplatePicker";
 import { FloatingWindow } from "./components/FloatingWindow";
@@ -641,6 +642,10 @@ function NavButton({
   item: NavItem;
   onExpand: (id: string) => void;
 }) {
+  if (item.id === "zoom-queue") {
+    return <ZoomQueueTile onExpand={() => onExpand(item.id)} />;
+  }
+
   const accentVar = `var(--mantine-color-${item.color}-6)`;
 
   return (
