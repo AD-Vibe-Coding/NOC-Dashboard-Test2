@@ -909,7 +909,7 @@ export async function setRingCentralQueueCallsEnabled(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      records: selectedQueues.map((queue) => ({ id: queue.id, acceptCalls: enabled })),
+      records: selectedQueues.map((queue) => ({ callqueue: { id: queue.id }, acceptCalls: enabled })),
     }),
   });
   const responseText = await response.text();
