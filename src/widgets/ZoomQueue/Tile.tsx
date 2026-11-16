@@ -94,6 +94,21 @@ export function ZoomQueueTile({ onExpand }: Props) {
     }, 0);
   }, [myBreakRows]);
   const breakUsed = Math.min(myBreakTakenMinutes, TOTAL_BREAK_MINUTES);
+  const inQueueNames = data?.agents.filter((agent) => agent.status === "in_queue").map((agent) => agent.display_name) ?? [];
+  const notInQueueNames = data?.agents.filter((agent) => agent.status === "not_in_queue").map((agent) => agent.display_name) ?? [];
+  const onBreakNames = useMemo(() => {
+    const unique = new Map<string, string>();
+    for (const row of active) {
+      const name = resolveTeamMember(row.employee_name) ?? row.employee_name;
+      unique.set(name.trim().toLowerCase(), name);
+    }
+    return [...unique.values()].sort((a, b) => a.localeCompare(b));
+  }, [active]);
+  const rosterGroups = [
+    { title: "In Queue", color: "green", names: inQueueNames },
+    { title: "Not in Queue", color: "gray", names: notInQueueNames },
+    { title: "On Break", color: "orange", names: onBreakNames },
+  ];
 
   useEffect(() => {
     if (!identity?.name) return;
@@ -320,128 +335,156 @@ export function ZoomQueueTile({ onExpand }: Props) {
       onExpand={onExpand}
     >
       <Stack gap={6}>
-        <SimpleGrid cols={{ base: 1, sm: canQuickControl && identity?.name ? 2 : 1 }} spacing={6}>
-          <Card withBorder radius="md" p={8} style={{ background: "color-mix(in srgb, var(--mantine-color-green-9) 8%, var(--mantine-color-body))" }}>
-            <Stack gap={1}>
-              <Text size="10px" c="dimmed" tt="uppercase" fw={700} style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>
-                In Queue
-              </Text>
-              <Title order={3} c="green" style={{ lineHeight: 1 }}>
-                {inQueue}
-                <Text component="span" size="xs" c="dimmed" fw={500}>
-                  {" "}/ {inShift}
-                </Text>
-              </Title>
-              <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>
-                {outOfQueueInShift} out of queue (in shift)
-              </Text>
-            </Stack>
-          </Card>
-
-          {canQuickControl && identity?.name && (
-            <Card
-              withBorder
-              radius="md"
-              p={8}
-              style={{
-                background: `color-mix(in srgb, var(--mantine-color-${breakUsed >= TOTAL_BREAK_MINUTES ? "red" : "blue"}-9) 10%, var(--mantine-color-body))`,
-              }}
-            >
-              <Text size="10px" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>Break Summary</Text>
-              <Group justify="space-between" align="flex-end" wrap="nowrap" mt={2} gap={8}>
-                <Stack gap={0}>
-                  <Text size="11px" c="dimmed">Taken</Text>
-                  <Text fw={800} size="lg" style={{ lineHeight: 1 }}>{myBreakTakenCount}</Text>
+        <SimpleGrid cols={{ base: 1, md: 2 }} spacing={8}>
+          <Stack gap={6}>
+            <SimpleGrid cols={{ base: 2, sm: canQuickControl && identity?.name ? 2 : 1 }} spacing={6}>
+              <Card withBorder radius="md" p={8} style={{ background: "color-mix(in srgb, var(--mantine-color-green-9) 8%, var(--mantine-color-body))" }}>
+                <Stack gap={1}>
+                  <Text size="10px" c="dimmed" tt="uppercase" fw={700} style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>
+                    In Queue
+                  </Text>
+                  <Title order={3} c="green" style={{ lineHeight: 1 }}>
+                    {inQueue}
+                    <Text component="span" size="xs" c="dimmed" fw={500}>
+                      {" "}/ {inShift}
+                    </Text>
+                  </Title>
+                  <Text size="11px" c="dimmed" style={{ lineHeight: 1.15 }}>
+                    {outOfQueueInShift} out of queue (in shift)
+                  </Text>
                 </Stack>
-                <Stack gap={0} align="flex-end" style={{ minWidth: 0 }}>
-                  <Text size="11px" c="dimmed">Used</Text>
-                  <Text fw={800} size="md" style={{ lineHeight: 1, wordBreak: "break-word" }}>{breakUsed}/{TOTAL_BREAK_MINUTES} min</Text>
-                </Stack>
-              </Group>
-            </Card>
-          )}
-        </SimpleGrid>
+              </Card>
 
-        {canQuickControl && (
-          <Card withBorder radius="md" p={8} onClick={stopTileExpand}>
-            <Stack gap={6}>
-              <Group justify="space-between" wrap="wrap" gap={6}>
-                <Badge
-                  variant="light"
-                  color={youOnBreak ? (BREAK_TYPE_COLORS[youOnBreak.break_type] ?? "orange") : "gray"}
-                  leftSection={<IconUser size={10} />}
-                  size="xs"
-                  style={{ textTransform: "none" }}
+              {canQuickControl && identity?.name && (
+                <Card
+                  withBorder
+                  radius="md"
+                  p={8}
+                  style={{
+                    background: `color-mix(in srgb, var(--mantine-color-${breakUsed >= TOTAL_BREAK_MINUTES ? "red" : "blue"}-9) 10%, var(--mantine-color-body))`,
+                  }}
                 >
-                  {identity?.name?.split(" ")[0] ?? "Agent"}
-                  {youOnBreak ? ` · ${youOnBreak.break_type}` : " · available"}
-                </Badge>
-                <Button
-                  size="compact-xs"
-                  px={6}
-                  variant="subtle"
-                  color="gray"
-                  leftSection={<IconSettings size={12} />}
-                  onClick={configurePunchMessages}
-                >
-                  Set messages
-                </Button>
-              </Group>
-
-              {!youOnBreak && (
-                <Group gap={6} wrap="nowrap" align="stretch">
-                  <Select
-                    size="xs"
-                    style={{ flex: 1, minWidth: 0 }}
-                    data={availableQuickStatusTypes}
-                    value={statusType}
-                    onChange={setStatusType}
-                    allowDeselect={false}
-                    disabled={statusControlsLocked}
-                    description={statusControlsLocked ? "Punch in to unlock all status options." : undefined}
-                  />
-                  <Button
-                    size="compact-xs"
-                    px="sm"
-                    variant="light"
-                    color="orange"
-                    leftSection={<IconCoffee size={12} />}
-                    loading={posting === "status"}
-                    disabled={statusControlsLocked}
-                    onClick={() => void startStatusQuick()}
-                  >
-                    Start
-                  </Button>
-                </Group>
+                  <Text size="10px" tt="uppercase" fw={700} c="dimmed" style={{ letterSpacing: "0.04em", lineHeight: 1.1 }}>Break Summary</Text>
+                  <Group justify="space-between" align="flex-end" wrap="nowrap" mt={2} gap={8}>
+                    <Stack gap={0}>
+                      <Text size="11px" c="dimmed">Taken</Text>
+                      <Text fw={800} size="lg" style={{ lineHeight: 1 }}>{myBreakTakenCount}</Text>
+                    </Stack>
+                    <Stack gap={0} align="flex-end" style={{ minWidth: 0 }}>
+                      <Text size="11px" c="dimmed">Used</Text>
+                      <Text fw={800} size="md" style={{ lineHeight: 1, wordBreak: "break-word" }}>{breakUsed}/{TOTAL_BREAK_MINUTES} min</Text>
+                    </Stack>
+                  </Group>
+                </Card>
               )}
+            </SimpleGrid>
 
-              <Group gap={6} justify="flex-end" wrap="nowrap">
-                <Button
-                  size="compact-xs"
-                  px={10}
-                  variant="light"
-                  color="green"
-                  loading={posting === "punch_in"}
-                  disabled={lastPunchAction === "punch_in"}
-                  onClick={() => void quickPunch("punch_in")}
-                >
-                  Punch In
-                </Button>
-                <Button
-                  size="compact-xs"
-                  px={10}
-                  variant="light"
-                  color="red"
-                  loading={posting === "punch_out"}
-                  disabled={lastPunchAction === "punch_out"}
-                  onClick={() => void quickPunch("punch_out")}
-                >
-                  Punch Out
-                </Button>
-              </Group>
-            </Stack>
-          </Card>
-        )}
+            {canQuickControl && (
+              <Card withBorder radius="md" p={8} onClick={stopTileExpand}>
+                <Stack gap={6}>
+                  <Group justify="space-between" wrap="wrap" gap={6}>
+                    <Badge
+                      variant="light"
+                      color={youOnBreak ? (BREAK_TYPE_COLORS[youOnBreak.break_type] ?? "orange") : "gray"}
+                      leftSection={<IconUser size={10} />}
+                      size="xs"
+                      style={{ textTransform: "none" }}
+                    >
+                      {identity?.name?.split(" ")[0] ?? "Agent"}
+                      {youOnBreak ? ` · ${youOnBreak.break_type}` : " · available"}
+                    </Badge>
+                    <Button
+                      size="compact-xs"
+                      px={6}
+                      variant="subtle"
+                      color="gray"
+                      leftSection={<IconSettings size={12} />}
+                      onClick={configurePunchMessages}
+                    >
+                      Set messages
+                    </Button>
+                  </Group>
+
+                  {!youOnBreak && (
+                    <Group gap={6} wrap="nowrap" align="stretch">
+                      <Select
+                        size="xs"
+                        style={{ flex: 1, minWidth: 0 }}
+                        data={availableQuickStatusTypes}
+                        value={statusType}
+                        onChange={setStatusType}
+                        allowDeselect={false}
+                        disabled={statusControlsLocked}
+                        description={statusControlsLocked ? "Punch in to unlock all status options." : undefined}
+                      />
+                      <Button
+                        size="compact-xs"
+                        px="sm"
+                        variant="light"
+                        color="orange"
+                        leftSection={<IconCoffee size={12} />}
+                        loading={posting === "status"}
+                        disabled={statusControlsLocked}
+                        onClick={() => void startStatusQuick()}
+                      >
+                        Start
+                      </Button>
+                    </Group>
+                  )}
+
+                  <Group gap={6} justify="flex-end" wrap="nowrap">
+                    <Button
+                      size="compact-xs"
+                      px={10}
+                      variant="light"
+                      color="green"
+                      loading={posting === "punch_in"}
+                      disabled={lastPunchAction === "punch_in"}
+                      onClick={() => void quickPunch("punch_in")}
+                    >
+                      Punch In
+                    </Button>
+                    <Button
+                      size="compact-xs"
+                      px={10}
+                      variant="light"
+                      color="red"
+                      loading={posting === "punch_out"}
+                      disabled={lastPunchAction === "punch_out"}
+                      onClick={() => void quickPunch("punch_out")}
+                    >
+                      Punch Out
+                    </Button>
+                  </Group>
+                </Stack>
+              </Card>
+            )}
+          </Stack>
+
+          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing={6}>
+            {rosterGroups.map((group) => (
+              <Card key={group.title} withBorder radius="md" p={8} style={{ minWidth: 0 }}>
+                <Stack gap={6}>
+                  <Group justify="space-between" wrap="nowrap" gap={4}>
+                    <Text size="xs" fw={700} c={group.color} style={{ lineHeight: 1.2 }}>{group.title}</Text>
+                    <Badge size="xs" variant="light" color={group.color}>{group.names.length}</Badge>
+                  </Group>
+                  {group.names.length > 0 ? (
+                    <Stack gap={3}>
+                      {group.names.map((name) => (
+                        <Text key={`${group.title}-${name}`} size="xs" lineClamp={1} title={name}>
+                          {name}
+                        </Text>
+                      ))}
+                    </Stack>
+                  ) : (
+                    <Text size="xs" c="dimmed">No one</Text>
+                  )}
+                </Stack>
+              </Card>
+            ))}
+          </SimpleGrid>
+        </SimpleGrid>
 
         <Modal
           opened={messagesOpen}
