@@ -153,7 +153,6 @@ const NAV_SECTIONS: NavSection[] = [
     key: "queue-monitoring",
     title: "Queue & Monitoring",
     items: [
-      { id: "zoom-queue", label: "Team Availability", icon: IconHeadset, color: "appdirect", description: "Live call queue" },
       { id: "logic-monitor", label: "LogicMonitor", icon: IconChartArea, color: "red", description: "Alerts & device health" },
       { id: "performance-discussions", label: "Half-Yearly Discussions", icon: IconCalendarStats, color: "red", description: "Manager-led performance discussion records" },
     ],
