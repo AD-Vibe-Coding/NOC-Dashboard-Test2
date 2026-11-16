@@ -16,53 +16,45 @@ function samePerson(a?: string | null, b?: string | null) {
   return !!left && !!right && left === right;
 }
 
-async function setQueueCalls(actorName: string, enabled: boolean) {
-  const result = await toggleRingCentralQueueCalls(actorName, enabled);
+async function setQueueCalls(employeeName: string, enabled: boolean) {
+  const result = await toggleRingCentralQueueCalls(employeeName, enabled);
   return result.message ?? (enabled ? "RingCentral queue calls turned on." : "RingCentral queue calls turned off.");
 }
 
-/** Sync only self-service actions; the server independently scopes the request to the signed-in extension. */
+/** Apply punch changes to the affected employee's extension; the API enforces the authorized roster. */
 export async function syncQueueCallsForPunch(
-  actorName: string,
+  _actorName: string,
   affectedName: string,
   action: PunchAction,
 ): Promise<QueueAutomationResult | null> {
-  if (!samePerson(actorName, affectedName)) return null;
-
   let enabled = action === "punch_in";
   let activeBreakRemains = false;
   if (enabled) {
     const activeBreaks = await db.breaks.list({ filter: { is_active: true } });
-    activeBreakRemains = activeBreaks.some((row) => samePerson(row.employee_name, actorName));
+    activeBreakRemains = activeBreaks.some((row) => samePerson(row.employee_name, affectedName));
     if (activeBreakRemains) enabled = false;
   }
 
-  const message = await setQueueCalls(actorName, enabled);
+  const message = await setQueueCalls(affectedName, enabled);
   return {
     enabled,
     message: action === "punch_in" && activeBreakRemains
-      ? "Punch-in saved, but queue calls remain off while your break is active."
+      ? "Punch-in saved, but queue calls remain off while the employee's break is active."
       : message,
   };
 }
 
-/** A break keeps queues off; returning enables them only while punched in and free of other active breaks. */
+/** A break keeps the affected employee's queues off; returning enables them only while punched in and free of other active breaks. */
 export async function syncQueueCallsForBreak(
-  actorName: string,
+  _actorName: string,
   affectedName: string,
   action: BreakAction,
 ): Promise<QueueAutomationResult | null> {
-  if (!samePerson(actorName, affectedName)) return null;
   if (action === "start") {
-    return { enabled: false, message: await setQueueCalls(actorName, false) };
+    return { enabled: false, message: await setQueueCalls(affectedName, false) };
   }
 
-  const [actorPunchRows, affectedPunchRows, activeBreaks] = await Promise.all([
-    db.punch_events.list({
-      filter: { employee_name: actorName },
-      orderBy: { column: "punched_at", ascending: false },
-      limit: 1,
-    }),
+  const [punchRows, activeBreaks] = await Promise.all([
     db.punch_events.list({
       filter: { employee_name: affectedName },
       orderBy: { column: "punched_at", ascending: false },
@@ -70,17 +62,15 @@ export async function syncQueueCallsForBreak(
     }),
     db.breaks.list({ filter: { is_active: true } }),
   ]);
-  const latestPunch = [...actorPunchRows, ...affectedPunchRows]
-    .sort((a, b) => new Date(b.punched_at).getTime() - new Date(a.punched_at).getTime())[0];
-  const punchedIn = latestPunch?.action === "punch_in";
-  const anotherBreakActive = activeBreaks.some((row) => samePerson(row.employee_name, actorName));
+  const punchedIn = punchRows[0]?.action === "punch_in";
+  const anotherBreakActive = activeBreaks.some((row) => samePerson(row.employee_name, affectedName));
   const enabled = punchedIn && !anotherBreakActive;
-  const message = await setQueueCalls(actorName, enabled);
+  const message = await setQueueCalls(affectedName, enabled);
 
   return {
     enabled,
     message: !punchedIn
-      ? "Back recorded, but queue calls remain off until you Punch In."
+      ? "Break ended, but queue calls remain off until the employee is punched in."
       : anotherBreakActive
         ? "Queue calls remain off because another break is still active."
         : message,

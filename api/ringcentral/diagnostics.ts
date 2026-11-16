@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
   }
 
-  if (!isRingCentralConnected(req)) {
+  if (!(await isRingCentralConnected(req))) {
     return res.status(200).json({
       ok: false,
       connected: false,

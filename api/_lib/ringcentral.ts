@@ -1,4 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { supabaseAdmin } from "./supabase-admin.js";
 
 type QueueStatus = "in_queue" | "not_in_queue";
 
@@ -325,6 +327,92 @@ function getSessionFromCookie(req: VercelRequest): RingCentralToken | null {
   }
 }
 
+const SHARED_SESSION_ROW_ID = 1;
+
+function sharedSessionEncryptionKey() {
+  const clientSecret = String(process.env.RINGCENTRAL_CLIENT_SECRET ?? "");
+  if (!clientSecret) throw new Error("Cannot protect the shared RingCentral session: client secret is not configured.");
+  return createHash("sha256").update("devsai:ringcentral:shared-session:v1:").update(clientSecret).digest();
+}
+
+function encryptSharedToken(token: RingCentralToken) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", sharedSessionEncryptionKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(JSON.stringify(token), "utf8"), cipher.final()]);
+  return JSON.stringify({
+    version: 1,
+    iv: iv.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url"),
+    data: encrypted.toString("base64url"),
+  });
+}
+
+function decryptSharedToken(payload: string): RingCentralToken {
+  try {
+    const envelope = JSON.parse(payload);
+    if (envelope?.version !== 1 || !envelope.iv || !envelope.tag || !envelope.data) throw new Error("Invalid encrypted session envelope.");
+    const decipher = createDecipheriv("aes-256-gcm", sharedSessionEncryptionKey(), Buffer.from(envelope.iv, "base64url"));
+    decipher.setAuthTag(Buffer.from(envelope.tag, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, "base64url")),
+      decipher.final(),
+    ]).toString("utf8");
+    const token = JSON.parse(plaintext) as RingCentralToken;
+    if (!token?.accessToken || !token?.expiresAt) throw new Error("Shared session token is incomplete.");
+    return token;
+  } catch (error) {
+    throw new Error(`Unable to decrypt the shared RingCentral session. Reconnect Anirudh Kukudala's account. ${error instanceof Error ? error.message : ""}`.trim());
+  }
+}
+
+async function readSharedRingCentralToken(): Promise<RingCentralToken | null> {
+  const { data, error } = await supabaseAdmin
+    .from("ringcentral_shared_sessions")
+    .select("token_ciphertext")
+    .eq("id", SHARED_SESSION_ROW_ID)
+    .maybeSingle();
+  if (error) throw new Error(`Shared RingCentral session storage is unavailable: ${error.message}`);
+  return data?.token_ciphertext ? decryptSharedToken(String(data.token_ciphertext)) : null;
+}
+
+async function saveSharedRingCentralToken(token: RingCentralToken) {
+  const { error } = await supabaseAdmin
+    .from("ringcentral_shared_sessions")
+    .upsert({
+      id: SHARED_SESSION_ROW_ID,
+      token_ciphertext: encryptSharedToken(token),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "id" });
+  if (error) throw new Error(`Could not save the shared RingCentral session: ${error.message}`);
+}
+
+async function deleteSharedRingCentralToken() {
+  const { error } = await supabaseAdmin
+    .from("ringcentral_shared_sessions")
+    .delete()
+    .eq("id", SHARED_SESSION_ROW_ID);
+  if (error) throw new Error(`Could not disconnect the shared RingCentral session: ${error.message}`);
+}
+
+async function verifyAnirudhController(req: VercelRequest, token: RingCentralToken): Promise<RingCentralToken> {
+  const config = getRingCentralConfig(req);
+  const response = await fetch(`${config.serverUrl}/restapi/v1.0/account/~/extension/~/`, {
+    headers: { Authorization: `Bearer ${token.accessToken}`, Accept: "application/json" },
+  });
+  const raw = await response.text();
+  let extension: any = null;
+  try { extension = raw ? JSON.parse(raw) : null; } catch { extension = null; }
+  if (!response.ok) {
+    throw new Error(`Could not verify the shared RingCentral account (${response.status}): ${String(extension?.message ?? raw).slice(0, 180)}`);
+  }
+  const displayName = buildExtensionDisplayName(extension);
+  const email = String(extension?.contact?.email ?? extension?.email ?? "").trim();
+  if (canonicalTeamMemberFor(displayName, email) !== "Anirudh Kukudala") {
+    throw new Error("The shared RingCentral connection must be authenticated as Anirudh Kukudala.");
+  }
+  return { ...token, ownerId: String(extension?.id ?? token.ownerId ?? "") };
+}
+
 async function oauthToken(config: RingCentralConfig, body: URLSearchParams) {
   if (!config.clientId || !config.clientSecret || !config.serverUrl || !config.redirectUri) {
     throw new Error("RingCentral OAuth settings are incomplete. Set client ID, client secret, server URL, and redirect URI.");
@@ -385,9 +473,11 @@ export async function exchangeCodeForToken(req: VercelRequest, res: VercelRespon
       redirect_uri: config.redirectUri,
     }),
   );
-  setSessionCookie(res, token);
+  const sharedToken = await verifyAnirudhController(req, token);
+  await saveSharedRingCentralToken(sharedToken);
+  setSessionCookie(res, sharedToken);
   appendSetCookie(res, clearCookie(STATE_COOKIE));
-  return token;
+  return sharedToken;
 }
 
 export async function refreshAccessToken(req: VercelRequest, res: VercelResponse, refreshToken: string) {
@@ -403,30 +493,44 @@ export async function refreshAccessToken(req: VercelRequest, res: VercelResponse
     ...token,
     refreshToken: token.refreshToken ?? refreshToken,
   };
-  setSessionCookie(res, merged);
-  return merged;
+  const sharedToken = await verifyAnirudhController(req, merged);
+  await saveSharedRingCentralToken(sharedToken);
+  setSessionCookie(res, sharedToken);
+  return sharedToken;
 }
 
-export function getCachedToken(req: VercelRequest) {
-  // OAuth credentials are browser-session scoped. Never fall back to a
-  // process-wide token: serverless instances handle requests for many users.
-  return getSessionFromCookie(req);
+export async function clearSharedRingCentralSession(res: VercelResponse) {
+  await deleteSharedRingCentralToken();
+  clearRingCentralSession(res);
+}
+
+export async function getCachedToken(req: VercelRequest) {
+  return await readSharedRingCentralToken() ?? getSessionFromCookie(req);
 }
 
 export async function getActiveToken(req: VercelRequest, res: VercelResponse) {
-  const session = getSessionFromCookie(req);
-  if (session?.accessToken && session.expiresAt > Date.now() + 60_000) {
-    return session;
+  let token = await readSharedRingCentralToken();
+  if (!token) {
+    const browserSession = getSessionFromCookie(req);
+    if (!browserSession) {
+      throw new Error("The shared RingCentral session is not connected. Connect using Anirudh Kukudala's RingCentral account.");
+    }
+    token = await verifyAnirudhController(req, browserSession);
+    await saveSharedRingCentralToken(token);
   }
 
-  if (session?.refreshToken) {
-    return refreshAccessToken(req, res, session.refreshToken);
-  }
-
-  throw new Error("RingCentral OAuth is not connected for this browser session. Connect RingCentral with your own account to update your queues.");
+  if (token.accessToken && token.expiresAt > Date.now() + 60_000) return token;
+  if (token.refreshToken) return refreshAccessToken(req, res, token.refreshToken);
+  throw new Error("The shared RingCentral session expired. Reconnect Anirudh Kukudala's RingCentral account.");
 }
 
-export function isRingCentralConnected(req: VercelRequest) {
+export async function isRingCentralConnected(req: VercelRequest) {
+  try {
+    const sharedToken = await readSharedRingCentralToken();
+    if (sharedToken?.accessToken || sharedToken?.refreshToken) return true;
+  } catch {
+    // The active browser session can bootstrap the shared record after schema setup.
+  }
   const session = getSessionFromCookie(req);
   return Boolean(session?.accessToken || session?.refreshToken);
 }
@@ -723,7 +827,7 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
     return buildRingCentralSnapshot(config.queueName, "Set RINGCENTRAL_CLIENT_ID, RINGCENTRAL_CLIENT_SECRET, RINGCENTRAL_SERVER_URL, and RINGCENTRAL_REDIRECT_URI to enable live RingCentral data.");
   }
 
-  if (!isRingCentralConnected(req)) {
+  if (!(await isRingCentralConnected(req))) {
     return buildRingCentralSnapshot(config.queueName, "RingCentral OAuth is configured but not connected yet. Click Connect RingCentral to authorize the app.");
   }
 
@@ -865,33 +969,45 @@ export async function setRingCentralQueueCallsEnabled(
   queueName?: string,
 ) {
   const token = await getActiveToken(req, res);
-  const extensionId = String(token.ownerId ?? "").trim();
-  if (!extensionId) {
+  const controllerExtensionId = String(token.ownerId ?? "").trim();
+  if (!controllerExtensionId) {
     throw new Error("RingCentral session did not identify the signed-in extension. Reconnect RingCentral and try again.");
   }
 
   const extensions = await listExtensions(req, res);
-  const extension = extensions.find((item) => String(item?.id ?? "") === extensionId);
-  if (!extension) {
-    throw new Error("The signed-in RingCentral extension could not be found.");
+  const controllerExtension = extensions.find((item) => String(item?.id ?? "") === controllerExtensionId);
+  if (!controllerExtension) {
+    throw new Error("The shared RingCentral controller extension could not be found.");
+  }
+  const controllerDisplayName = buildExtensionDisplayName(controllerExtension);
+  const controllerEmail = String(controllerExtension?.contact?.email ?? controllerExtension?.email ?? "").trim();
+  const controllerName = canonicalTeamMemberFor(controllerDisplayName, controllerEmail);
+  if (controllerName !== "Anirudh Kukudala") {
+    throw new Error("The shared RingCentral connection must be authenticated as Anirudh Kukudala. No queues were changed.");
   }
 
-  const displayName = buildExtensionDisplayName(extension);
-  const email = String(extension?.contact?.email ?? extension?.email ?? "").trim();
-  const canonicalName = canonicalTeamMemberFor(displayName, email);
+  const canonicalName = canonicalTeamMemberFor(employeeName, "");
   if (!canonicalName) {
-    throw new Error("The signed-in RingCentral extension is not associated with an authorized team member.");
-  }
-
-  const requestedCanonicalName = canonicalTeamMemberFor(employeeName, "");
-  if (!requestedCanonicalName) {
     throw new Error(`Could not match "${employeeName}" to an authorized team member; no RingCentral queues were changed.`);
   }
-  if (requestedCanonicalName !== canonicalName) {
+  const matchingExtensions = extensions.filter((item) => {
+    const name = buildExtensionDisplayName(item);
+    const email = String(item?.contact?.email ?? item?.email ?? "").trim();
+    return canonicalTeamMemberFor(name, email) === canonicalName;
+  });
+  if (matchingExtensions.length !== 1) {
     throw new Error(
-      `This RingCentral session belongs to ${canonicalName}, but the status change is for ${requestedCanonicalName}. No queues were changed. Connect RingCentral with ${requestedCanonicalName}'s own account to automate their queues.`,
+      matchingExtensions.length === 0
+        ? `No RingCentral extension was found for ${canonicalName}; no queues were changed.`
+        : `Multiple RingCentral extensions match ${canonicalName}; no queues were changed until the account mapping is unambiguous.`,
     );
   }
+  const targetExtension = matchingExtensions[0];
+  const extensionId = String(targetExtension?.id ?? "").trim();
+  if (!extensionId) {
+    throw new Error(`The RingCentral extension for ${canonicalName} has no ID; no queues were changed.`);
+  }
+  const displayName = buildExtensionDisplayName(targetExtension);
 
   const queues = await resolveCallQueues(req, res);
   const selectedQueues = queueName
@@ -901,14 +1017,18 @@ export async function setRingCentralQueueCallsEnabled(
     throw new Error(`Configured RingCentral queue not found: ${queueName ?? "none"}.`);
   }
 
+  // Validate every target membership before making the first write, so a typo
+  // or an unrelated queue cannot produce a partial cross-queue update.
   for (const queue of selectedQueues) {
-    const queuePath = `/restapi/v1.0/account/~/call-queues/${encodeURIComponent(queue.id)}`;
-    const queueDetails = await ringCentralGet(req, res, queuePath);
-    if (queueDetails?.editableMemberStatus === false) {
-      throw new Error(`RingCentral queue "${queue.name}" does not allow members to change their own availability. Ask your RingCentral administrator to enable member-editable status.`);
+    const presence = await getCallQueuePresence(req, res, queue.id);
+    const records = Array.isArray(presence?.records) ? presence.records : [];
+    if (!findQueueRecordByExtension(records, extensionId)) {
+      throw new Error(`${canonicalName} is not a member of RingCentral queue "${queue.name}"; no queues were changed.`);
     }
+  }
 
-    const presencePath = `${queuePath}/presence`;
+  for (const queue of selectedQueues) {
+    const presencePath = `/restapi/v1.0/account/~/call-queues/${encodeURIComponent(queue.id)}/presence`;
     const response = await ringCentralFetch(req, res, presencePath, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -924,7 +1044,7 @@ export async function setRingCentralQueueCallsEnabled(
       responseJson = null;
     }
     if (!response.ok) {
-      throw new Error(`RingCentral queue update failed for "${queue.name}" (${response.status}): ${String(responseJson?.message ?? responseText).slice(0, 200)}`);
+      throw new Error(`RingCentral queue update failed for ${canonicalName} in "${queue.name}" (${response.status}): ${String(responseJson?.message ?? responseText).slice(0, 200)}`);
     }
   }
 

@@ -24,8 +24,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: "RingCentral OAuth settings are incomplete." });
   }
 
-  if (!isRingCentralConnected(req)) {
-    return res.status(401).json({ error: "RingCentral OAuth is not connected. Click Connect RingCentral to sign in." });
+  if (!(await isRingCentralConnected(req))) {
+    return res.status(401).json({ error: "The shared RingCentral session is not connected in this browser. Connect using Anirudh Kukudala's RingCentral account." });
   }
 
   const body = (req.body ?? {}) as QueueToggleBody;

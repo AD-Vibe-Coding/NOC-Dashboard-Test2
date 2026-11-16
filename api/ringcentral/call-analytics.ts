@@ -195,7 +195,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       error: "RingCentral OAuth is not fully configured for this app.",
     });
   }
-  if (!isRingCentralConnected(req)) {
+  if (!(await isRingCentralConnected(req))) {
     return res.status(401).json({
       code: "RINGCENTRAL_NOT_CONNECTED",
       error: "Connect RingCentral to load call analytics.",
