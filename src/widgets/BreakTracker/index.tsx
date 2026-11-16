@@ -43,6 +43,7 @@ import {
 import { WidgetFrame } from "../WidgetFrame";
 import { PERSON_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
 import { useBreakData } from "./data";
+import { syncQueueCallsForBreak } from "../../lib/queue-automation";
 
 export { BreakTrackerTile } from "./Tile";
 
@@ -175,6 +176,12 @@ export function BreakTrackerWidget() {
     });
     setPosting(false);
     await refresh();
+    try {
+      const queueResult = await syncQueueCallsForBreak(identity?.name ?? "", trimmed, "start");
+      if (queueResult) showToast({ color: "yellow", title: "Break recorded · queues off", body: queueResult.message });
+    } catch (error) {
+      showToast({ color: "red", title: "Break recorded; queue sync failed", body: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   async function endBreak(b: Break) {
@@ -247,6 +254,18 @@ export function BreakTrackerWidget() {
     }
     setPosting(false);
     await refresh();
+    try {
+      const queueResult = await syncQueueCallsForBreak(identity?.name ?? "", b.employee_name, "back");
+      if (queueResult) {
+        showToast({
+          color: queueResult.enabled ? "green" : "yellow",
+          title: queueResult.enabled ? "Back · queues on" : "Back recorded · queues remain off",
+          body: queueResult.message,
+        });
+      }
+    } catch (error) {
+      showToast({ color: "red", title: "Back recorded; queue sync failed", body: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   const avgDuration =

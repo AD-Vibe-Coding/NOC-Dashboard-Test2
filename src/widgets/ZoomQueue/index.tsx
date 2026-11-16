@@ -46,6 +46,7 @@ import { useIdentity } from "../../lib/identity";
 import { db } from "../../db";
 import { postSlackMessage } from "../../lib/slack";
 import { formatElapsedIso } from "../../lib/format";
+import { syncQueueCallsForBreak, syncQueueCallsForPunch } from "../../lib/queue-automation";
 import { BreakScheduleModal } from "./BreakScheduleModal";
 import { RingCentralTestPanel } from "./RingCentralTestPanel";
 import { defaultRoleFor, ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
@@ -424,6 +425,18 @@ export function ZoomQueueWidget() {
       });
 
       setLastPunchAction(action);
+      try {
+        const queueResult = await syncQueueCallsForPunch(identity?.name ?? "", name, action);
+        if (queueResult) {
+          showToast({ color: queueResult.enabled ? "green" : "yellow", title: "RingCentral queues synced", body: queueResult.message });
+        }
+      } catch (error) {
+        showToast({
+          color: "red",
+          title: `${action === "punch_in" ? "Punch-in" : "Punch-out"} saved; queue sync failed`,
+          body: error instanceof Error ? error.message : String(error),
+        });
+      }
       showToast({
         color: slackPosted ? "green" : "yellow",
         title: action === "punch_in" ? "Punched in" : "Punched out",
@@ -542,6 +555,14 @@ export function ZoomQueueWidget() {
         slack_posted: slackPosted,
       });
       await refreshBreaks();
+      if (BREAK_ONLY_TYPES.has(statusType)) {
+        try {
+          const queueResult = await syncQueueCallsForBreak(identity?.name ?? "", trimmed, "start");
+          if (queueResult) showToast({ color: "yellow", title: "Break recorded · queues off", body: queueResult.message });
+        } catch (error) {
+          showToast({ color: "red", title: "Break recorded; queue sync failed", body: error instanceof Error ? error.message : String(error) });
+        }
+      }
     } finally {
       setPosting(false);
     }
@@ -608,6 +629,20 @@ export function ZoomQueueWidget() {
         });
       }
       await refreshBreaks();
+      if (BREAK_ONLY_TYPES.has(activeStatus.break_type)) {
+        try {
+          const queueResult = await syncQueueCallsForBreak(identity?.name ?? "", activeStatus.employee_name, "back");
+          if (queueResult) {
+            showToast({
+              color: queueResult.enabled ? "green" : "yellow",
+              title: queueResult.enabled ? "Back · queues on" : "Back recorded · queues remain off",
+              body: queueResult.message,
+            });
+          }
+        } catch (error) {
+          showToast({ color: "red", title: "Back recorded; queue sync failed", body: error instanceof Error ? error.message : String(error) });
+        }
+      }
     } finally {
       setPosting(false);
     }

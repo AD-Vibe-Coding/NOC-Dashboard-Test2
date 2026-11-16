@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchJson } from "../../lib/fetch-resilient";
 import type { ZoomQueueData } from "../../lib/zoom";
+import { RINGCENTRAL_QUEUE_UPDATED_EVENT } from "../../lib/ringcentral";
 
 /**
  * Hours in queue per agent per queue for today.
@@ -171,6 +172,12 @@ export function useTeamAvailability() {
     refresh();
     const id = setInterval(refresh, POLL_INTERVAL_MS);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    const onQueueUpdated = () => { void refresh(); };
+    window.addEventListener(RINGCENTRAL_QUEUE_UPDATED_EVENT, onQueueUpdated);
+    return () => window.removeEventListener(RINGCENTRAL_QUEUE_UPDATED_EVENT, onQueueUpdated);
   }, []);
 
   useEffect(() => {

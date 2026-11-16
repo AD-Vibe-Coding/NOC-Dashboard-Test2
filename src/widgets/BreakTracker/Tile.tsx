@@ -8,6 +8,7 @@ import { useIdentity } from "../../lib/identity";
 import { formatElapsedIso } from "../../lib/format";
 import { db } from "../../db";
 import { resolveTeamMember } from "../PerformanceTracker/team";
+import { syncQueueCallsForBreak } from "../../lib/queue-automation";
 
 interface Props {
   onExpand: () => void;
@@ -26,6 +27,7 @@ export function BreakTrackerTile({ onExpand }: Props) {
   const { identity } = useIdentity();
   const [breakType, setBreakType] = useState<string | null>("Coffee");
   const [posting, setPosting] = useState(false);
+  const [automationNotice, setAutomationNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   const samePerson = (a?: string | null, b?: string | null) => {
     const left = a ? (resolveTeamMember(a) ?? a).trim().toLowerCase() : "";
@@ -65,6 +67,12 @@ export function BreakTrackerTile({ onExpand }: Props) {
         slack_posted: slackPosted,
       });
       await refresh();
+      try {
+        const result = await syncQueueCallsForBreak(identity.name, identity.name, "start");
+        if (result) setAutomationNotice({ kind: "success", message: result.message });
+      } catch (error) {
+        setAutomationNotice({ kind: "error", message: `Break recorded; RingCentral queues could not be turned off: ${error instanceof Error ? error.message : String(error)}` });
+      }
     } finally {
       setPosting(false);
     }
@@ -88,6 +96,12 @@ export function BreakTrackerTile({ onExpand }: Props) {
         });
       }
       await refresh();
+      try {
+        const result = await syncQueueCallsForBreak(identity.name, identity.name, "back");
+        if (result) setAutomationNotice({ kind: "success", message: result.message });
+      } catch (error) {
+        setAutomationNotice({ kind: "error", message: `Break ended; RingCentral queues could not be updated: ${error instanceof Error ? error.message : String(error)}` });
+      }
     } finally {
       setPosting(false);
     }
@@ -167,6 +181,12 @@ export function BreakTrackerTile({ onExpand }: Props) {
               Start break
             </Button>
           </Group>
+        )}
+
+        {automationNotice && (
+          <Text size="xs" c={automationNotice.kind === "error" ? "red" : "green"} role={automationNotice.kind === "error" ? "alert" : "status"}>
+            {automationNotice.message}
+          </Text>
         )}
 
         {active.length > 0 ? (

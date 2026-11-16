@@ -11,6 +11,7 @@ import { useTeamAvailability } from "./data";
 import { useRosterShift } from "../../lib/use-roster-shift";
 import { resolveTeamMember } from "../PerformanceTracker/team";
 import { toggleRingCentralQueueCalls } from "../../lib/ringcentral";
+import { syncQueueCallsForBreak, syncQueueCallsForPunch } from "../../lib/queue-automation";
 
 const TOTAL_BREAK_MINUTES = 90;
 const BREAK_ONLY_TYPES = new Set(["Coffee", "Lunch", "Restroom", "Personal", "Other"]);
@@ -59,6 +60,7 @@ export function ZoomQueueTile({ onExpand }: Props) {
   const [queueConfirmation, setQueueConfirmation] = useState<QueueChange | null>(null);
   const [pendingQueue, setPendingQueue] = useState<string | null>(null);
   const [queueNotice, setQueueNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
+  const [automationNotice, setAutomationNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   const inQueue = data?.totals.in_queue ?? 0;
   const notInQueue = data?.totals.not_in_queue ?? 0;
@@ -246,6 +248,14 @@ export function ZoomQueueTile({ onExpand }: Props) {
         slack_posted: slackPosted,
       });
       await refresh();
+      if (BREAK_ONLY_TYPES.has(statusType)) {
+        try {
+          const result = await syncQueueCallsForBreak(identity.name, identity.name, "start");
+          if (result) setAutomationNotice({ kind: "success", message: result.message });
+        } catch (error) {
+          setAutomationNotice({ kind: "error", message: `Break recorded; RingCentral queues could not be turned off: ${error instanceof Error ? error.message : String(error)}` });
+        }
+      }
     } finally {
       setPosting(null);
     }
@@ -278,6 +288,14 @@ export function ZoomQueueTile({ onExpand }: Props) {
         is_active: false,
       });
       await refresh();
+      if (BREAK_ONLY_TYPES.has(youOnBreak.break_type) && identity?.name) {
+        try {
+          const result = await syncQueueCallsForBreak(identity.name, youOnBreak.employee_name, "back");
+          if (result) setAutomationNotice({ kind: "success", message: result.message });
+        } catch (error) {
+          setAutomationNotice({ kind: "error", message: `Break ended; RingCentral queues could not be updated: ${error instanceof Error ? error.message : String(error)}` });
+        }
+      }
     } finally {
       setPosting(null);
     }
@@ -325,6 +343,12 @@ export function ZoomQueueTile({ onExpand }: Props) {
         punched_at: new Date().toISOString(),
       });
       setLastPunchAction(action);
+      try {
+        const result = await syncQueueCallsForPunch(identity.name, identity.name, action);
+        if (result) setAutomationNotice({ kind: "success", message: result.message });
+      } catch (error) {
+        setAutomationNotice({ kind: "error", message: `${action === "punch_in" ? "Punch-in" : "Punch-out"} saved; RingCentral queues could not be updated: ${error instanceof Error ? error.message : String(error)}` });
+      }
     } finally {
       setPosting(null);
     }
@@ -506,6 +530,11 @@ export function ZoomQueueTile({ onExpand }: Props) {
                       Punch Out
                     </Button>
                   </Group>
+                  {automationNotice && (
+                    <Text size="10px" c={automationNotice.kind === "error" ? "red" : "green"} role={automationNotice.kind === "error" ? "alert" : "status"}>
+                      {automationNotice.message}
+                    </Text>
+                  )}
                 </Stack>
               </Card>
             )}
