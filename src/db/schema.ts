@@ -828,3 +828,11 @@ export const finance_cases = pgTable("finance_cases", {
   created_by: text("created_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+// Encrypted shared OAuth session for RingCentral. The server encrypts the
+// token payload before writing it; the fixed id supports a single shared account.
+export const ringcentral_shared_sessions = pgTable("ringcentral_shared_sessions", {
+  id: integer("id").primaryKey(),
+  token_ciphertext: text("token_ciphertext").notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).notNull(),
+});
