@@ -9,6 +9,7 @@ export interface ZoomAgent {
   status: QueueAgentStatus;
   queues: string[];
   queue_opt_in?: Record<string, boolean>;
+  global_queue_accept_calls?: boolean | null;
 }
 
 export interface ZoomQueueData {

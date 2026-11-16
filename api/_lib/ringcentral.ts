@@ -8,6 +8,7 @@ export interface RingCentralQueueAgent {
   status: QueueStatus;
   queues: string[];
   queue_opt_in: Record<string, boolean>;
+  global_queue_accept_calls?: boolean | null;
 }
 
 export interface RingCentralQueueData {
@@ -793,8 +794,10 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
           return {
             name,
             optIn: getMemberQueueOptIn(queueRecord),
+            globalOptIn: typeof queueRecord?.acceptQueueCalls === "boolean" ? queueRecord.acceptQueueCalls : null,
           };
         });
+        const globalQueueAcceptCalls = queueEntries.find((entry) => entry.globalOptIn !== null)?.globalOptIn ?? null;
 
         const matchedQueues = queueEntries.filter((entry) => entry.optIn === true).map((entry) => entry.name);
         const unresolvedQueues = queueEntries.filter((entry) => entry.optIn === null);
@@ -815,6 +818,7 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
           status: inQueue ? "in_queue" : "not_in_queue",
           queues: matchedQueues.length ? matchedQueues : config.queueNames,
           queue_opt_in: queueOptIn,
+          global_queue_accept_calls: globalQueueAcceptCalls,
         } satisfies RingCentralQueueAgent;
       }))).filter(Boolean) as RingCentralQueueAgent[];
 
@@ -905,7 +909,7 @@ export async function setRingCentralQueueCallsEnabled(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      records: selectedQueues.map((queue) => ({ callQueue: { id: queue.id }, acceptCalls: enabled })),
+      records: selectedQueues.map((queue) => ({ id: queue.id, acceptCalls: enabled })),
     }),
   });
   const responseText = await response.text();

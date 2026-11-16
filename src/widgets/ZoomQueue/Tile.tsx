@@ -517,6 +517,11 @@ export function ZoomQueueTile({ onExpand }: Props) {
                     <Text size="xs" fw={700}>My RingCentral call queues</Text>
                     <Badge size="xs" variant="light" color="green">LIVE</Badge>
                   </Group>
+                  {myRingCentralAgent?.global_queue_accept_calls === false && (
+                    <Text size="10px" c="orange" role="note">
+                      Global queue acceptance is off in RingCentral; per-queue settings won’t route calls until it is enabled.
+                    </Text>
+                  )}
                   {myQueueControls.map(([queueName, enabled]) => (
                     <Group key={queueName} justify="space-between" wrap="nowrap" gap="sm">
                       <Box style={{ minWidth: 0 }}>
