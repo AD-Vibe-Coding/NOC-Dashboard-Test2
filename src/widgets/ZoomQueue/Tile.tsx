@@ -94,20 +94,34 @@ export function ZoomQueueTile({ onExpand }: Props) {
     }, 0);
   }, [myBreakRows]);
   const breakUsed = Math.min(myBreakTakenMinutes, TOTAL_BREAK_MINUTES);
-  const inQueueNames = data?.agents.filter((agent) => agent.status === "in_queue").map((agent) => agent.display_name) ?? [];
-  const notInQueueNames = data?.agents.filter((agent) => agent.status === "not_in_queue").map((agent) => agent.display_name) ?? [];
-  const onBreakNames = useMemo(() => {
-    const unique = new Map<string, string>();
+  const onBreakMembers = useMemo(() => {
+    const unique = new Map<string, { name: string; status: string }>();
     for (const row of active) {
       const name = resolveTeamMember(row.employee_name) ?? row.employee_name;
-      unique.set(name.trim().toLowerCase(), name);
+      unique.set(name.trim().toLowerCase(), { name, status: row.break_type });
     }
-    return [...unique.values()].sort((a, b) => a.localeCompare(b));
+    return [...unique.values()].sort((a, b) => a.name.localeCompare(b.name));
   }, [active]);
+  const shiftMembers = rosterData?.inShiftNow ?? [];
+  const queueAgents = data?.agents ?? [];
+  const inQueueNames = queueAgents
+    .filter((agent) => agent.status === "in_queue")
+    .filter((agent) => !rosterData || shiftMembers.some((name) => samePerson(name, agent.display_name)))
+    .filter((agent) => !onBreakMembers.some((member) => samePerson(member.name, agent.display_name)))
+    .map((agent) => resolveTeamMember(agent.display_name) ?? agent.display_name);
+  const notInQueueNames = rosterData
+    ? shiftMembers
+        .filter((name) => !queueAgents.some((agent) => agent.status === "in_queue" && samePerson(name, agent.display_name)))
+        .filter((name) => !onBreakMembers.some((member) => samePerson(member.name, name)))
+        .map((name) => resolveTeamMember(name) ?? name)
+    : queueAgents
+        .filter((agent) => agent.status === "not_in_queue")
+        .filter((agent) => !onBreakMembers.some((member) => samePerson(member.name, agent.display_name)))
+        .map((agent) => resolveTeamMember(agent.display_name) ?? agent.display_name);
   const rosterGroups = [
-    { title: "In Queue", color: "green", names: inQueueNames },
-    { title: "Not in Queue", color: "gray", names: notInQueueNames },
-    { title: "On Break", color: "orange", names: onBreakNames },
+    { title: "In shift + in queue", color: "green", names: inQueueNames },
+    { title: "In shift + not in queue", color: "gray", names: notInQueueNames },
+    { title: "On break or meeting", color: "orange", names: onBreakMembers.map((member) => `${member.name} · ${member.status}`) },
   ];
 
   useEffect(() => {
@@ -461,29 +475,27 @@ export function ZoomQueueTile({ onExpand }: Props) {
             )}
           </Stack>
 
-          <SimpleGrid cols={{ base: 1, sm: 3 }} spacing={6}>
+          <Stack gap={6}>
             {rosterGroups.map((group) => (
               <Card key={group.title} withBorder radius="md" p={8} style={{ minWidth: 0 }}>
-                <Stack gap={6}>
-                  <Group justify="space-between" wrap="nowrap" gap={4}>
-                    <Text size="xs" fw={700} c={group.color} style={{ lineHeight: 1.2 }}>{group.title}</Text>
-                    <Badge size="xs" variant="light" color={group.color}>{group.names.length}</Badge>
+                <Group justify="space-between" wrap="nowrap" gap={6} align="flex-start">
+                  <Text size="xs" fw={700} c={group.color} style={{ lineHeight: 1.3 }}>{group.title}</Text>
+                  <Badge size="xs" variant="light" color={group.color}>{group.names.length}</Badge>
+                </Group>
+                {group.names.length > 0 ? (
+                  <Group gap={5} mt={6}>
+                    {group.names.map((name) => (
+                      <Badge key={`${group.title}-${name}`} size="sm" variant="light" color={group.color} style={{ textTransform: "none" }}>
+                        {name}
+                      </Badge>
+                    ))}
                   </Group>
-                  {group.names.length > 0 ? (
-                    <Stack gap={3}>
-                      {group.names.map((name) => (
-                        <Text key={`${group.title}-${name}`} size="xs" lineClamp={1} title={name}>
-                          {name}
-                        </Text>
-                      ))}
-                    </Stack>
-                  ) : (
-                    <Text size="xs" c="dimmed">No one</Text>
-                  )}
-                </Stack>
+                ) : (
+                  <Text size="xs" c="dimmed" mt={6}>No one</Text>
+                )}
               </Card>
             ))}
-          </SimpleGrid>
+          </Stack>
         </SimpleGrid>
 
         <Modal
