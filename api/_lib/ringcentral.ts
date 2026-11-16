@@ -108,8 +108,6 @@ const TEAM_VARIANT_ALIASES: Array<[string, string]> = [
   ["matt marquez", "Matt Marquez"],
 ];
 
-let tokenCache: RingCentralToken | null = null;
-
 type TimedCache<T> = {
   value: T;
   expiresAt: number;
@@ -311,7 +309,6 @@ function setStateCookie(res: VercelResponse, state: string) {
 }
 
 export function clearRingCentralSession(res: VercelResponse) {
-  tokenCache = null;
   res.setHeader("Set-Cookie", [clearCookie(STATE_COOKIE), clearCookie(SESSION_COOKIE)]);
 }
 
@@ -388,7 +385,6 @@ export async function exchangeCodeForToken(req: VercelRequest, res: VercelRespon
       redirect_uri: config.redirectUri,
     }),
   );
-  tokenCache = token;
   setSessionCookie(res, token);
   appendSetCookie(res, clearCookie(STATE_COOKIE));
   return token;
@@ -407,38 +403,30 @@ export async function refreshAccessToken(req: VercelRequest, res: VercelResponse
     ...token,
     refreshToken: token.refreshToken ?? refreshToken,
   };
-  tokenCache = merged;
   setSessionCookie(res, merged);
   return merged;
 }
 
-export function getCachedToken() {
-  return tokenCache;
+export function getCachedToken(req: VercelRequest) {
+  // OAuth credentials are browser-session scoped. Never fall back to a
+  // process-wide token: serverless instances handle requests for many users.
+  return getSessionFromCookie(req);
 }
 
 export async function getActiveToken(req: VercelRequest, res: VercelResponse) {
-  const cached = tokenCache;
-  if (cached?.accessToken && cached.expiresAt > Date.now() + 60_000) {
-    return cached;
-  }
-
   const session = getSessionFromCookie(req);
   if (session?.accessToken && session.expiresAt > Date.now() + 60_000) {
-    tokenCache = session;
     return session;
   }
 
-  const refreshToken = session?.refreshToken ?? cached?.refreshToken;
-  if (refreshToken) {
-    return refreshAccessToken(req, res, refreshToken);
+  if (session?.refreshToken) {
+    return refreshAccessToken(req, res, session.refreshToken);
   }
 
-  throw new Error("RingCentral OAuth is not connected. Click Connect RingCentral to sign in.");
+  throw new Error("RingCentral OAuth is not connected for this browser session. Connect RingCentral with your own account to update your queues.");
 }
 
 export function isRingCentralConnected(req: VercelRequest) {
-  const cached = getCachedToken();
-  if (cached?.accessToken && cached.expiresAt > Date.now() + 60_000) return true;
   const session = getSessionFromCookie(req);
   return Boolean(session?.accessToken || session?.refreshToken);
 }
@@ -893,6 +881,16 @@ export async function setRingCentralQueueCallsEnabled(
   const canonicalName = canonicalTeamMemberFor(displayName, email);
   if (!canonicalName) {
     throw new Error("The signed-in RingCentral extension is not associated with an authorized team member.");
+  }
+
+  const requestedCanonicalName = canonicalTeamMemberFor(employeeName, "");
+  if (!requestedCanonicalName) {
+    throw new Error(`Could not match "${employeeName}" to an authorized team member; no RingCentral queues were changed.`);
+  }
+  if (requestedCanonicalName !== canonicalName) {
+    throw new Error(
+      `This RingCentral session belongs to ${canonicalName}, but the status change is for ${requestedCanonicalName}. No queues were changed. Connect RingCentral with ${requestedCanonicalName}'s own account to automate their queues.`,
+    );
   }
 
   const queues = await resolveCallQueues(req, res);

@@ -43,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       serverUrl: config.serverUrl,
       redirectUri: config.redirectUri,
       oauthSessionPresent: false,
-      tokenCached: Boolean(getCachedToken()?.accessToken),
+      tokenCached: Boolean(getCachedToken(req)?.accessToken),
       warning: "RingCentral OAuth is configured but not connected yet.",
     });
   }
@@ -59,7 +59,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       serverUrl: config.serverUrl,
       redirectUri: config.redirectUri,
       oauthSessionPresent: true,
-      tokenCached: Boolean(getCachedToken()?.accessToken),
+      tokenCached: Boolean(getCachedToken(req)?.accessToken),
       tokenOwnerId: token.ownerId ?? null,
       tokenExpiresAt: new Date(token.expiresAt).toISOString(),
       extension: {
@@ -79,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       serverUrl: config.serverUrl,
       redirectUri: config.redirectUri,
       oauthSessionPresent: isRingCentralConnected(req),
-      tokenCached: Boolean(getCachedToken()?.accessToken),
+      tokenCached: Boolean(getCachedToken(req)?.accessToken),
       warning: message,
     });
   }
