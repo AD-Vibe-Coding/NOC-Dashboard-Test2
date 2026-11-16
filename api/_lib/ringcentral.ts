@@ -891,9 +891,8 @@ export async function setRingCentralQueueCallsEnabled(
   const displayName = buildExtensionDisplayName(extension);
   const email = String(extension?.contact?.email ?? extension?.email ?? "").trim();
   const canonicalName = canonicalTeamMemberFor(displayName, email);
-  const requestedCanonical = canonicalTeamMemberFor(employeeName, "");
-  if (!canonicalName || requestedCanonical !== canonicalName) {
-    throw new Error("For security, you can only change queue availability for your own RingCentral extension.");
+  if (!canonicalName) {
+    throw new Error("The signed-in RingCentral extension is not associated with an authorized team member.");
   }
 
   const queues = await resolveCallQueues(req, res);
