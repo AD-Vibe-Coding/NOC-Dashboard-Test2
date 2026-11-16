@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
-import { Badge, Button, Card, Group, Modal, Select, SimpleGrid, Stack, Text, TextInput, Title } from "@mantine/core";
+import { Badge, Box, Button, Card, Group, Loader, Modal, Select, SimpleGrid, Stack, Switch, Text, TextInput, Title } from "@mantine/core";
 import { IconCoffee, IconHeadset, IconPlayerStop, IconSettings, IconUser } from "@tabler/icons-react";
 import { db } from "../../db";
 import { useIdentity } from "../../lib/identity";
@@ -10,6 +10,7 @@ import { WidgetTile } from "../WidgetTile";
 import { useTeamAvailability } from "./data";
 import { useRosterShift } from "../../lib/use-roster-shift";
 import { resolveTeamMember } from "../PerformanceTracker/team";
+import { toggleRingCentralQueueCalls } from "../../lib/ringcentral";
 
 const TOTAL_BREAK_MINUTES = 90;
 const BREAK_ONLY_TYPES = new Set(["Coffee", "Lunch", "Restroom", "Personal", "Other"]);
@@ -21,6 +22,14 @@ function isSameLocalDay(iso: string, now = new Date()) {
 
 interface Props {
   onExpand: () => void;
+}
+
+type QueueChange = { queueName: string; enabled: boolean };
+
+function queueDisplayLabel(name: string) {
+  if (/mobility/i.test(name)) return "Mobility Queue";
+  if (/network|noc/i.test(name)) return "NOC Queue";
+  return name;
 }
 
 const QUICK_STATUS_TYPES = [
@@ -35,7 +44,7 @@ const QUICK_STATUS_TYPES = [
 ];
 
 export function ZoomQueueTile({ onExpand }: Props) {
-  const { data } = useTeamAvailability();
+  const { data, refresh: refreshQueueData } = useTeamAvailability();
   const { active, history, refresh } = useBreakData();
   const { data: rosterData } = useRosterShift();
   const { identity } = useIdentity();
@@ -47,6 +56,9 @@ export function ZoomQueueTile({ onExpand }: Props) {
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [draftPunchIn, setDraftPunchIn] = useState("Hello Team");
   const [draftPunchOut, setDraftPunchOut] = useState("Signing off for now");
+  const [queueConfirmation, setQueueConfirmation] = useState<QueueChange | null>(null);
+  const [pendingQueue, setPendingQueue] = useState<string | null>(null);
+  const [queueNotice, setQueueNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
   const inQueue = data?.totals.in_queue ?? 0;
   const notInQueue = data?.totals.not_in_queue ?? 0;
@@ -65,6 +77,13 @@ export function ZoomQueueTile({ onExpand }: Props) {
     const right = b ? (resolveTeamMember(b) ?? b).trim().toLowerCase() : "";
     return !!left && !!right && left === right;
   };
+
+  const myRingCentralAgent = data?.source === "live" && identity?.name
+    ? data.agents.find((agent) => samePerson(agent.display_name, identity.name))
+    : undefined;
+  const myQueueControls = Object.entries(myRingCentralAgent?.queue_opt_in ?? {})
+    .filter(([name]) => /mobility|network|noc/i.test(name))
+    .sort(([a], [b]) => queueDisplayLabel(a).localeCompare(queueDisplayLabel(b)));
 
   const youOnBreak = identity?.name
     ? active.find((b) => samePerson(b.employee_name, identity.name)) ?? null
@@ -311,6 +330,23 @@ export function ZoomQueueTile({ onExpand }: Props) {
     }
   }
 
+  async function confirmQueueChange() {
+    if (!queueConfirmation || !identity?.name || pendingQueue) return;
+    const change = queueConfirmation;
+    setPendingQueue(change.queueName);
+    setQueueNotice(null);
+    try {
+      const result = await toggleRingCentralQueueCalls(identity.name, change.enabled, change.queueName);
+      setQueueNotice({ kind: "success", message: result.message ?? `${queueDisplayLabel(change.queueName)} updated.` });
+      await refreshQueueData();
+    } catch (error) {
+      setQueueNotice({ kind: "error", message: error instanceof Error ? error.message : "Unable to update RingCentral queue." });
+    } finally {
+      setPendingQueue(null);
+      setQueueConfirmation(null);
+    }
+  }
+
   return (
     <WidgetTile
       title="Team Availability"
@@ -473,6 +509,39 @@ export function ZoomQueueTile({ onExpand }: Props) {
                 </Stack>
               </Card>
             )}
+
+            {identity?.name && myQueueControls.length > 0 && (
+              <Card withBorder radius="md" p={8} onClick={stopTileExpand}>
+                <Stack gap={6}>
+                  <Group justify="space-between" wrap="nowrap" gap={6}>
+                    <Text size="xs" fw={700}>My RingCentral call queues</Text>
+                    <Badge size="xs" variant="light" color="green">LIVE</Badge>
+                  </Group>
+                  {myQueueControls.map(([queueName, enabled]) => (
+                    <Group key={queueName} justify="space-between" wrap="nowrap" gap="sm">
+                      <Box style={{ minWidth: 0 }}>
+                        <Text size="xs" fw={600}>{queueDisplayLabel(queueName)}</Text>
+                        <Text size="10px" c="dimmed">Accept incoming queue calls</Text>
+                      </Box>
+                      <Switch
+                        checked={enabled}
+                        disabled={pendingQueue !== null}
+                        color="green"
+                        size="sm"
+                        aria-label={`${enabled ? "Turn off" : "Turn on"} ${queueDisplayLabel(queueName)}`}
+                        onChange={() => setQueueConfirmation({ queueName, enabled: !enabled })}
+                      />
+                      {pendingQueue === queueName && <Loader size="xs" aria-label="Updating queue" />}
+                    </Group>
+                  ))}
+                  {queueNotice && (
+                    <Text size="xs" c={queueNotice.kind === "error" ? "red" : "green"} role={queueNotice.kind === "error" ? "alert" : "status"}>
+                      {queueNotice.message}
+                    </Text>
+                  )}
+                </Stack>
+              </Card>
+            )}
           </Stack>
 
           <Stack gap={6}>
@@ -521,6 +590,32 @@ export function ZoomQueueTile({ onExpand }: Props) {
             <Group justify="flex-end" mt="xs">
               <Button variant="default" onClick={() => setMessagesOpen(false)}>Cancel</Button>
               <Button color="appdirect" onClick={savePunchMessages}>Save</Button>
+            </Group>
+          </Stack>
+        </Modal>
+
+        <Modal
+          opened={queueConfirmation !== null}
+          onClose={() => pendingQueue === null && setQueueConfirmation(null)}
+          title={`${queueConfirmation?.enabled ? "Turn on" : "Turn off"} ${queueConfirmation ? queueDisplayLabel(queueConfirmation.queueName) : "queue"}?`}
+          centered
+          onClick={stopTileExpand}
+        >
+          <Stack gap="sm">
+            <Text size="sm">
+              {queueConfirmation?.enabled
+                ? "RingCentral may route incoming calls from this queue to your extension."
+                : "Your extension will stop accepting incoming calls from this queue."}
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="default" disabled={pendingQueue !== null} onClick={() => setQueueConfirmation(null)}>Cancel</Button>
+              <Button
+                color={queueConfirmation?.enabled ? "green" : "red"}
+                loading={pendingQueue !== null}
+                onClick={() => void confirmQueueChange()}
+              >
+                {queueConfirmation?.enabled ? "Turn on queue" : "Turn off queue"}
+              </Button>
             </Group>
           </Stack>
         </Modal>

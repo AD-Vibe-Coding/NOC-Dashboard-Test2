@@ -7,6 +7,7 @@ import {
 
 type QueueToggleBody = {
   employeeName?: string;
+  queueName?: string;
   enabled?: boolean;
 };
 
@@ -29,6 +30,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body ?? {}) as QueueToggleBody;
   const employeeName = String(body.employeeName ?? "").trim();
+  const queueName = String(body.queueName ?? "").trim();
   const enabled = typeof body.enabled === "boolean" ? body.enabled : null;
 
   if (!employeeName) {
@@ -40,18 +42,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const result = await setRingCentralQueueCallsEnabled(req, res, employeeName, enabled);
+    const result = await setRingCentralQueueCallsEnabled(req, res, employeeName, enabled, queueName || undefined);
     return res.status(200).json({
       ok: true,
       employeeName: result.employeeName,
       canonicalName: result.canonicalName,
       displayName: result.displayName,
       extensionId: result.extensionId,
+      queueName: result.queueName,
       enabled: result.enabled,
       dndStatus: result.dndStatus,
       message: enabled
-        ? `${result.canonicalName} is now accepting queue calls in RingCentral.`
-        : `${result.canonicalName} is no longer accepting queue calls in RingCentral.`,
+        ? `${result.canonicalName} is now accepting calls in ${result.queueName ?? "the configured RingCentral queues"}.`
+        : `${result.canonicalName} is no longer accepting calls in ${result.queueName ?? "the configured RingCentral queues"}.`,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

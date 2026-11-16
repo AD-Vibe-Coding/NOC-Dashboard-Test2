@@ -864,3 +864,69 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
 
   return liveQueueDataInFlight;
 }
+
+export async function setRingCentralQueueCallsEnabled(
+  req: VercelRequest,
+  res: VercelResponse,
+  employeeName: string,
+  enabled: boolean,
+  queueName?: string,
+) {
+  const token = await getActiveToken(req, res);
+  const extensionId = String(token.ownerId ?? "").trim();
+  if (!extensionId) {
+    throw new Error("RingCentral session did not identify the signed-in extension. Reconnect RingCentral and try again.");
+  }
+
+  const extensions = await listExtensions(req, res);
+  const extension = extensions.find((item) => String(item?.id ?? "") === extensionId);
+  if (!extension) {
+    throw new Error("The signed-in RingCentral extension could not be found.");
+  }
+
+  const displayName = buildExtensionDisplayName(extension);
+  const email = String(extension?.contact?.email ?? extension?.email ?? "").trim();
+  const canonicalName = canonicalTeamMemberFor(displayName, email);
+  const requestedCanonical = canonicalTeamMemberFor(employeeName, "");
+  if (!canonicalName || requestedCanonical !== canonicalName) {
+    throw new Error("For security, you can only change queue availability for your own RingCentral extension.");
+  }
+
+  const queues = await resolveCallQueues(req, res);
+  const selectedQueues = queueName
+    ? queues.filter((queue) => normalizeName(queue.name) === normalizeName(queueName))
+    : queues;
+  if (selectedQueues.length === 0) {
+    throw new Error(`Configured RingCentral queue not found: ${queueName ?? "none"}.`);
+  }
+
+  const path = `/restapi/v1.0/account/~/extension/${encodeURIComponent(extensionId)}/call-queue-presence`;
+  const response = await ringCentralFetch(req, res, path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      records: selectedQueues.map((queue) => ({ callQueue: { id: queue.id }, acceptCalls: enabled })),
+    }),
+  });
+  const responseText = await response.text();
+  let responseJson: any = null;
+  try {
+    responseJson = responseText ? JSON.parse(responseText) : null;
+  } catch {
+    responseJson = null;
+  }
+  if (!response.ok) {
+    throw new Error(`RingCentral queue update failed (${response.status}): ${String(responseJson?.message ?? responseText).slice(0, 200)}`);
+  }
+
+  liveQueueDataCache = null;
+  return {
+    employeeName,
+    canonicalName,
+    displayName,
+    extensionId,
+    enabled,
+    queueName: selectedQueues.map((queue) => queue.name).join(", "),
+    dndStatus: undefined,
+  };
+}

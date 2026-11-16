@@ -5,6 +5,7 @@ export type RingCentralQueueToggleResult = {
   displayName?: string;
   extensionId?: string;
   enabled?: boolean;
+  queueName?: string;
   dndStatus?: string;
   message?: string;
   error?: string;
@@ -12,11 +13,12 @@ export type RingCentralQueueToggleResult = {
 
 export const RINGCENTRAL_QUEUE_UPDATED_EVENT = "ringcentral-queue-updated";
 
-export async function toggleRingCentralQueueCalls(employeeName: string, enabled: boolean) {
+export async function toggleRingCentralQueueCalls(employeeName: string, enabled: boolean, queueName?: string) {
   const response = await fetch("/api/ringcentral/queue-toggle", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ employeeName, enabled }),
+    credentials: "include",
+    body: JSON.stringify({ employeeName, enabled, queueName }),
   });
 
   let json: RingCentralQueueToggleResult | null = null;
