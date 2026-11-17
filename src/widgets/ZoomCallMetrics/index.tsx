@@ -8,6 +8,7 @@ import {
   Loader,
   ScrollArea,
   SegmentedControl,
+  Select,
   SimpleGrid,
   Stack,
   Table,
@@ -57,6 +58,37 @@ function formatPeriod(value: string, interval: "month" | "week") {
   return interval === "week" ? `Week of ${label}` : label;
 }
 
+const FIRST_AVAILABLE_MONTH = "2026-10";
+
+function monthOptionsFromOctober() {
+  const [startYear, startMonth] = FIRST_AVAILABLE_MONTH.split("-").map(Number);
+  const cursor = new Date(startYear, startMonth - 1, 1);
+  const current = new Date();
+  const options: Array<{ value: string; label: string }> = [];
+
+  while (cursor.getFullYear() < current.getFullYear()
+    || (cursor.getFullYear() === current.getFullYear() && cursor.getMonth() <= current.getMonth())) {
+    const value = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    options.push({
+      value,
+      label: new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric" }).format(cursor),
+    });
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+  return options;
+}
+
+function periodOverlapsMonth(periodStart: string, interval: "month" | "week", month: string) {
+  if (interval === "month") return periodStart.slice(0, 7) === month;
+
+  const [year, monthNumber] = month.split("-").map(Number);
+  const monthStart = Date.UTC(year, monthNumber - 1, 1);
+  const monthEnd = Date.UTC(year, monthNumber, 0);
+  const weekStart = Date.parse(`${periodStart}T00:00:00Z`);
+  const weekEnd = weekStart + 6 * 24 * 60 * 60 * 1000;
+  return weekStart <= monthEnd && weekEnd >= monthStart;
+}
+
 function MetricCard({ label, value, color, icon }: { label: string; value: string; color: string; icon: React.ReactNode }) {
   return (
     <Card withBorder radius="md" p="md" style={{ borderTop: `2px solid var(--mantine-color-${color}-6)` }}>
@@ -75,6 +107,9 @@ export function ZoomCallMetricsWidget() {
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [interval, setInterval] = useState<"month" | "week">("month");
+  const [selectedMonth, setSelectedMonth] = useState(FIRST_AVAILABLE_MONTH);
+  const monthOptions = useMemo(() => monthOptionsFromOctober(), []);
+  const selectedMonthLabel = monthOptions.find((option) => option.value === selectedMonth)?.label ?? selectedMonth;
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -96,7 +131,9 @@ export function ZoomCallMetricsWidget() {
   }, [refresh]);
 
   const historyRows = data?.history?.[interval === "month" ? "monthly" : "weekly"] ?? [];
-  const periodRows = [...historyRows].sort((a, b) => a.period_start.localeCompare(b.period_start));
+  const periodRows = historyRows
+    .filter((row) => periodOverlapsMonth(row.period_start, interval, selectedMonth))
+    .sort((a, b) => a.period_start.localeCompare(b.period_start));
   const queueRows = periodRows;
   const totals = useMemo(() => periodRows.reduce(
     (acc, row) => ({
@@ -122,7 +159,7 @@ export function ZoomCallMetricsWidget() {
   return (
     <WidgetFrame
       title="RingCentral Call Metrics"
-      subtitle={dateRange ? `${intervalLabel} history · ${dateRange} (Pacific time)` : `${intervalLabel} RingCentral queue call history`}
+      subtitle={dateRange ? `${intervalLabel} history · ${selectedMonthLabel} · ${dateRange} (Pacific time)` : `${intervalLabel} RingCentral queue call history · ${selectedMonthLabel}`}
       icon={IconPhone}
       iconColor="green"
       loading={loading}
@@ -138,6 +175,14 @@ export function ZoomCallMetricsWidget() {
               onChange={(value) => setInterval(value as "month" | "week")}
               data={[{ label: "Monthly", value: "month" }, { label: "Weekly", value: "week" }]}
               aria-label="Call history interval"
+            />
+            <Select
+              size="xs"
+              w={180}
+              value={selectedMonth}
+              onChange={(value) => value && setSelectedMonth(value)}
+              data={monthOptions}
+              aria-label="Select reporting month"
             />
             {dateRange && <Text size="sm" c="dimmed">{dateRange} · Pacific time</Text>}
           </Group>

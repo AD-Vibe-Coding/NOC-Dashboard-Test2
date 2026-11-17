@@ -241,7 +241,8 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
 
 async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: "Week" | "Month", targetQueues: any[]) {
   const now = new Date();
-  const from = new Date(now.getTime() - 184 * 24 * 60 * 60 * 1000);
+  // RingCentral call history is available from October 2026 onward.
+  const from = new Date("2026-10-01T00:00:00-07:00");
   const requestBody = {
     grouping: { groupBy: "Queues", keys: targetQueues.map(getQueueId) },
     timeSettings: { timeZone: TIME_ZONE, timeRange: { timeFrom: from.toISOString(), timeTo: now.toISOString() } },
