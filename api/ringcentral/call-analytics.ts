@@ -513,9 +513,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ].map((row) => ({ ...row, synced_at: syncedAt }));
 
     if (newHistory.length) {
-      const { error: upsertError } = await supabaseAdmin.from("ringcentral_call_metrics")
-        .upsert(newHistory, { onConflict: "interval_type,period_start,queue_name" });
-      if (upsertError) throw upsertError;
+      // Replace the saved snapshot only after RingCentral has returned a fresh,
+      // non-empty timeline. This removes stale/incorrect metrics while keeping
+      // old data intact if the upstream pull fails or returns no history.
+      const { error: deleteError } = await supabaseAdmin.from("ringcentral_call_metrics")
+        .delete()
+        .not("id", "is", null);
+      if (deleteError) throw deleteError;
+
+      const { error: insertError } = await supabaseAdmin.from("ringcentral_call_metrics")
+        .insert(newHistory);
+      if (insertError) throw insertError;
     }
     const history = await loadStoredHistory();
 
