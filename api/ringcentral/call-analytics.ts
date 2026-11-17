@@ -248,10 +248,12 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
     callFilters: { directions: ["Inbound"] },
     responseOptions: {
       counters: {
-        allCalls: { aggregationType: "Sum" }, callsByResponse: { aggregationType: "Sum" },
-        callsByResult: { aggregationType: "Sum" }, callsSegments: { aggregationType: "Sum" },
+        allCalls: true,
+        callsByResponse: true,
+        callsByResult: true,
+        callsSegments: true,
       },
-      timers: { callsSegmentsDuration: { aggregationType: "Sum" } },
+      timers: { callsSegmentsDuration: true },
     },
   };
   const response = await ringCentralFetch(req, res, `/analytics/calls/v1/accounts/~/timeline/fetch?interval=${interval}&page=1&perPage=100`, {
