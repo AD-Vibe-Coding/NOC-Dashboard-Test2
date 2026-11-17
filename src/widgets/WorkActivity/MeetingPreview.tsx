@@ -271,12 +271,12 @@ export function MyDayPanel() {
         ) : tasks.length === 0 ? (
           <Text size="xs" c="dimmed">You’re all caught up.</Text>
         ) : (
-          <ScrollArea.Autosize mah={356} offsetScrollbars type="auto" aria-label="Scrollable open task list">
+          <ScrollArea h={164} offsetScrollbars type="auto" aria-label="Scrollable open task list">
             <Stack gap={4} pr={4}>
               {tasks.map((task) => {
                 const due = formatDueDate(task.dueDate);
                 return (
-                  <Card key={task.key} withBorder radius="md" p={6}>
+                  <Card key={task.key} withBorder radius="md" p={6} h={52} style={{ overflow: "hidden", flexShrink: 0 }}>
                     <Group justify="space-between" wrap="nowrap" gap={6} align="flex-start">
                       <Box style={{ minWidth: 0, flex: 1 }}>
                         <Group gap={4} wrap="nowrap" align="flex-start">
@@ -294,7 +294,7 @@ export function MyDayPanel() {
                 );
               })}
             </Stack>
-          </ScrollArea.Autosize>
+          </ScrollArea>
         )}
       </Stack>
     </SimpleGrid>
