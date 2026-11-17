@@ -52,11 +52,11 @@ export function ZoomCallMetricsTile() {
             <Text fw={600} size="sm" truncate>RingCentral Call Metrics</Text>
             <Group gap={6}>
               {data && <Badge size="xs" color="green" variant="dot">Connected</Badge>}
-              <Badge size="xs" variant="light">Last 30 days</Badge>
+              <Badge size="xs" variant="light">{data?.records.length ? "Latest stored month" : "Saved history"}</Badge>
               {data && <Text size="xs" c="dimmed">{data.from_date} – {data.to_date}</Text>}
             </Group>
           </div>
-          <ActionIcon aria-label="Refresh RingCentral call analytics" variant="subtle" onClick={() => void load()} loading={loading}>
+          <ActionIcon aria-label="Reload saved RingCentral call history" variant="subtle" onClick={() => void load()} loading={loading}>
             <IconRefresh size={16} />
           </ActionIcon>
         </Group>

@@ -28,6 +28,7 @@ import {
 import { WidgetFrame } from "../WidgetFrame";
 import {
   fetchRingCentralAnalytics,
+  syncRingCentralAnalytics,
   type RingCentralAnalyticsResponse,
 } from "../../lib/ringcentral-analytics";
 
@@ -136,6 +137,21 @@ export function ZoomCallMetricsWidget() {
     }
   }, []);
 
+  const syncLatest = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setErrorCode(null);
+    try {
+      const response = await syncRingCentralAnalytics();
+      setData(response);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setErrorCode(err instanceof Error ? (err as Error & { code?: string }).code ?? null : null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
@@ -175,7 +191,11 @@ export function ZoomCallMetricsWidget() {
       iconColor="green"
       loading={loading}
       onRefresh={refresh}
-      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing stored ${intervalLabel.toLowerCase()} history (${dateRange || "no saved periods yet"}) for ${activeQueues.length ? activeQueues.join(", ") : "no selected queues"}` } : undefined}
+      status={data ? {
+        label: data.source === "database" ? "SAVED" : "SYNCED",
+        color: data.source === "database" ? "blue" : "green",
+        tooltip: `Showing ${data.source === "database" ? "saved database" : "latest RingCentral sync"} ${intervalLabel.toLowerCase()} history (${dateRange || "no saved periods yet"}) for ${activeQueues.length ? activeQueues.join(", ") : "no selected queues"}`,
+      } : undefined}
     >
       <Stack gap="lg">
         <Group justify="space-between" align="center" wrap="wrap">
@@ -209,8 +229,8 @@ export function ZoomCallMetricsWidget() {
             />
             {dateRange && <Text size="sm" c="dimmed">{dateRange} · Pacific time</Text>}
           </Group>
-          <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => void refresh()} loading={loading}>
-            Refresh analytics
+          <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => void syncLatest()} loading={loading}>
+            Sync latest data
           </Button>
         </Group>
         {data?.warning && queueRows.length > 0 && (
@@ -246,7 +266,7 @@ export function ZoomCallMetricsWidget() {
               ? data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."
               : !activeQueues.length
                 ? "Choose one or more call queues from the selector to view their history."
-                : `No saved ${intervalLabel.toLowerCase()} call records are available for the selected queues in ${selectedMonthLabel}. Refresh analytics to sync available history from RingCentral.`}
+                : `No saved ${intervalLabel.toLowerCase()} call records are available for the selected queues in ${selectedMonthLabel}. Use Sync latest data to fetch and store available history from RingCentral.`}
           </Alert>
         )}
 

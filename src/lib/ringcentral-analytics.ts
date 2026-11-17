@@ -16,8 +16,8 @@ export interface RingCentralPeriodMetric extends RingCentralQueueMetric {
 }
 
 export interface RingCentralAnalyticsResponse {
-  source: "ringcentral";
-  period: "last_30_days";
+  source: "ringcentral" | "database";
+  period: "last_30_days" | "stored_history";
   from_date: string;
   to_date: string;
   records: RingCentralQueueMetric[];
@@ -34,8 +34,9 @@ export interface RingCentralAnalyticsError {
   error?: string;
 }
 
-export async function fetchRingCentralAnalytics(): Promise<RingCentralAnalyticsResponse> {
+async function requestRingCentralAnalytics(method: "GET" | "POST"): Promise<RingCentralAnalyticsResponse> {
   const response = await fetch("/api/ringcentral/call-analytics", {
+    method,
     cache: "no-store",
   });
   const raw = await response.text();
@@ -51,8 +52,18 @@ export async function fetchRingCentralAnalytics(): Promise<RingCentralAnalyticsR
     (error as Error & { code?: string }).code = body?.code;
     throw error;
   }
-  if (!body || !Array.isArray(body.records)) {
+  if (!body || !Array.isArray(body.records) || !body.history) {
     throw new Error("RingCentral returned an unexpected call-analytics response. Check the server endpoint and try refreshing.");
   }
   return body;
+}
+
+/** Load locally stored history without contacting RingCentral. */
+export function fetchRingCentralAnalytics() {
+  return requestRingCentralAnalytics("GET");
+}
+
+/** Fetch current RingCentral metrics and persist the updated history. */
+export function syncRingCentralAnalytics() {
+  return requestRingCentralAnalytics("POST");
 }

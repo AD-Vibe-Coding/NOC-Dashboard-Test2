@@ -295,11 +295,49 @@ function errorMessage(status: number, raw: string) {
   return `RingCentral call analytics failed (HTTP ${status}): ${detail}`;
 }
 
+async function getStoredAnalyticsResponse() {
+  const history = await loadStoredHistory();
+  const allRows = [...history.monthly, ...history.weekly];
+  const queues_found = [...new Set(allRows.map((row) => row.queue_name))].sort();
+  const latestMonth = [...history.monthly]
+    .map((row) => row.period_start.slice(0, 7))
+    .sort()
+    .at(-1);
+  const records = latestMonth
+    ? history.monthly.filter((row) => row.period_start.slice(0, 7) === latestMonth)
+    : [];
+  const from_date = latestMonth ? `${latestMonth}-01` : "";
+  const to_date = latestMonth
+    ? new Date(Date.UTC(Number(latestMonth.slice(0, 4)), Number(latestMonth.slice(5, 7)), 0)).toISOString().slice(0, 10)
+    : "";
+
+  return {
+    source: "database" as const,
+    period: "stored_history" as const,
+    from_date,
+    to_date,
+    records,
+    history,
+    queues_found,
+    warning: records.length ? null : "No saved monthly call history yet. Use Sync latest data to fetch and store RingCentral history.",
+  };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Cache-Control", "no-store");
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
+
+  if (req.method === "GET") {
+    try {
+      return res.status(200).json(await getStoredAnalyticsResponse());
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return res.status(500).json({ code: "RINGCENTRAL_HISTORY_READ_ERROR", error: message.slice(0, 400) });
+    }
+  }
+
+  if (req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
