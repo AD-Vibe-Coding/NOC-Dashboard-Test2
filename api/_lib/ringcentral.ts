@@ -134,6 +134,8 @@ let liveQueueDataInFlight: Promise<RingCentralQueueData> | null = null;
 let extensionsRateLimitedUntil = 0;
 let callQueuesRateLimitedUntil = 0;
 let liveQueueRateLimitedUntil = 0;
+let sharedTokenRefreshInFlight: Promise<RingCentralToken> | null = null;
+let sharedTokenRefreshRateLimitedUntil = 0;
 
 function nowIso() {
   return new Date().toISOString();
@@ -434,7 +436,15 @@ async function oauthToken(config: RingCentralConfig, body: URLSearchParams) {
     json = null;
   }
   if (!response.ok) {
-    throw new Error(`RingCentral OAuth (${response.status}): ${String(json?.error_description ?? json?.message ?? raw).slice(0, 240)}`);
+    const error = new Error(`RingCentral OAuth (${response.status}): ${String(json?.error_description ?? json?.message ?? raw).slice(0, 240)}`) as Error & {
+      statusCode?: number;
+      rateLimitedUntil?: number;
+    };
+    if (response.status === 429) {
+      error.statusCode = 429;
+      error.rateLimitedUntil = computeRateLimitUntil(response.headers);
+    }
+    throw error;
   }
   if (!json?.access_token) throw new Error("RingCentral OAuth response missing access_token.");
   return {
@@ -499,6 +509,29 @@ export async function refreshAccessToken(req: VercelRequest, res: VercelResponse
   return sharedToken;
 }
 
+async function refreshSharedTokenOnce(req: VercelRequest, res: VercelResponse, refreshToken: string) {
+  if (sharedTokenRefreshInFlight) return sharedTokenRefreshInFlight;
+  if (sharedTokenRefreshRateLimitedUntil > Date.now()) {
+    throw new Error(`RingCentral OAuth refresh is rate limited; retry after ${new Date(sharedTokenRefreshRateLimitedUntil).toISOString()}.`);
+  }
+
+  const pending = refreshAccessToken(req, res, refreshToken);
+  sharedTokenRefreshInFlight = pending;
+  try {
+    const token = await pending;
+    sharedTokenRefreshRateLimitedUntil = 0;
+    return token;
+  } catch (error) {
+    const rateLimitedUntil = (error as Error & { statusCode?: number; rateLimitedUntil?: number }).rateLimitedUntil;
+    if ((error as Error & { statusCode?: number }).statusCode === 429) {
+      sharedTokenRefreshRateLimitedUntil = rateLimitedUntil ?? (Date.now() + 60_000);
+    }
+    throw error;
+  } finally {
+    if (sharedTokenRefreshInFlight === pending) sharedTokenRefreshInFlight = null;
+  }
+}
+
 export async function clearSharedRingCentralSession(res: VercelResponse) {
   await deleteSharedRingCentralToken();
   clearRingCentralSession(res);
@@ -519,8 +552,18 @@ export async function getActiveToken(req: VercelRequest, res: VercelResponse) {
     await saveSharedRingCentralToken(token);
   }
 
-  if (token.accessToken && token.expiresAt > Date.now() + 60_000) return token;
-  if (token.refreshToken) return refreshAccessToken(req, res, token.refreshToken);
+  const now = Date.now();
+  if (token.accessToken && token.expiresAt > now + 60_000) return token;
+  if (token.refreshToken) {
+    // If the provider is rate limiting refreshes, keep using the current token until it actually expires.
+    if (sharedTokenRefreshRateLimitedUntil > now && token.accessToken && token.expiresAt > now) return token;
+    try {
+      return await refreshSharedTokenOnce(req, res, token.refreshToken);
+    } catch (error) {
+      if (token.accessToken && token.expiresAt > Date.now()) return token;
+      throw error;
+    }
+  }
   throw new Error("The shared RingCentral session expired. Reconnect Anirudh Kukudala's RingCentral account.");
 }
 
@@ -552,7 +595,7 @@ export async function ringCentralFetch(req: VercelRequest, res: VercelResponse, 
     },
   });
   if (response.status === 401 && allowRetry && token.refreshToken) {
-    const refreshed = await refreshAccessToken(req, res, token.refreshToken);
+    const refreshed = await refreshSharedTokenOnce(req, res, token.refreshToken);
     const retry = await fetch(`${config.serverUrl}${path}`, {
       ...init,
       headers: {
