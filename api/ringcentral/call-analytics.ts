@@ -256,7 +256,7 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
       timers: { callsSegmentsDuration: true },
     },
   };
-  const response = await ringCentralFetch(req, res, `/analytics/calls/v1/accounts/~/timeline/fetch?interval=${interval}&page=1&perPage=100`, {
+  const response = await ringCentralFetch(req, res, `/analytics/calls/v1/accounts/~/timeline/fetch?interval=${interval}&page=1&perPage=20`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody),
   });
   const raw = await response.text();
