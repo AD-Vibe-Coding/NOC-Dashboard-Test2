@@ -143,7 +143,6 @@ const NAV_SECTIONS: NavSection[] = [
     key: "my-work",
     title: "My Work", 
     items: [
-      { id: "my-day", label: "My Day", icon: IconActivity, color: "indigo", description: "Today's tickets & calls" },
       { id: "meeting-notes", label: "Notebook", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
       { id: "performance-tracker", label: "My Metrics", icon: IconChartBar, color: "green", description: "Performance & disputes" },
       { id: "noc-mttr-report", label: "NOC MTTR Report", icon: IconClock, color: "orange", description: "Upload MTTR Excel and trend by month" },
