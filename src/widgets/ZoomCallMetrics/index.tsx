@@ -6,6 +6,7 @@ import {
   Card,
   Group,
   Loader,
+  MultiSelect,
   ScrollArea,
   SegmentedControl,
   Select,
@@ -108,8 +109,17 @@ export function ZoomCallMetricsWidget() {
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [interval, setInterval] = useState<"month" | "week">("month");
   const [selectedMonth, setSelectedMonth] = useState(FIRST_AVAILABLE_MONTH);
+  const [selectedQueues, setSelectedQueues] = useState<string[] | null>(null);
   const monthOptions = useMemo(() => monthOptionsFromOctober(), []);
+  const availableQueues = data?.queues_found ?? [];
   const selectedMonthLabel = monthOptions.find((option) => option.value === selectedMonth)?.label ?? selectedMonth;
+  const queueOptions = useMemo(
+    () => availableQueues.map((queue) => ({ value: queue, label: queue })),
+    [availableQueues],
+  );
+  const activeQueues = selectedQueues === null
+    ? availableQueues
+    : selectedQueues.filter((queue) => availableQueues.includes(queue));
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -133,6 +143,7 @@ export function ZoomCallMetricsWidget() {
   const historyRows = data?.history?.[interval === "month" ? "monthly" : "weekly"] ?? [];
   const periodRows = historyRows
     .filter((row) => periodOverlapsMonth(row.period_start, interval, selectedMonth))
+    .filter((row) => activeQueues.includes(row.queue_name))
     .sort((a, b) => a.period_start.localeCompare(b.period_start));
   const queueRows = periodRows;
   const totals = useMemo(() => periodRows.reduce(
@@ -164,7 +175,7 @@ export function ZoomCallMetricsWidget() {
       iconColor="green"
       loading={loading}
       onRefresh={refresh}
-      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing stored ${intervalLabel.toLowerCase()} history (${dateRange || "no saved periods yet"}) for Mobility + Network queues` } : undefined}
+      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing stored ${intervalLabel.toLowerCase()} history (${dateRange || "no saved periods yet"}) for ${activeQueues.length ? activeQueues.join(", ") : "no selected queues"}` } : undefined}
     >
       <Stack gap="lg">
         <Group justify="space-between" align="center" wrap="wrap">
@@ -183,6 +194,18 @@ export function ZoomCallMetricsWidget() {
               onChange={(value) => value && setSelectedMonth(value)}
               data={monthOptions}
               aria-label="Select reporting month"
+            />
+            <MultiSelect
+              size="xs"
+              w={260}
+              value={activeQueues}
+              onChange={setSelectedQueues}
+              data={queueOptions}
+              searchable
+              clearable
+              disabled={!queueOptions.length}
+              placeholder="Choose call queues"
+              aria-label="Filter call queues"
             />
             {dateRange && <Text size="sm" c="dimmed">{dateRange} · Pacific time</Text>}
           </Group>
@@ -213,11 +236,17 @@ export function ZoomCallMetricsWidget() {
             color="gray"
             variant="light"
             radius="md"
-            title={data.queues_found.length ? `No ${intervalLabel.toLowerCase()} history yet` : "No support queues found"}
+            title={!availableQueues.length
+              ? "No support queues found"
+              : !activeQueues.length
+                ? "Select at least one call queue"
+                : `No ${intervalLabel.toLowerCase()} history for the selected queues`}
           >
-            {data.queues_found.length
-              ? `No saved ${intervalLabel.toLowerCase()} call records are available yet. Refresh analytics to sync the available history from RingCentral.`
-              : data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."}
+            {!availableQueues.length
+              ? data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."
+              : !activeQueues.length
+                ? "Choose one or more call queues from the selector to view their history."
+                : `No saved ${intervalLabel.toLowerCase()} call records are available for the selected queues in ${selectedMonthLabel}. Refresh analytics to sync available history from RingCentral.`}
           </Alert>
         )}
 
@@ -239,9 +268,9 @@ export function ZoomCallMetricsWidget() {
             <Text size="lg" fw={700} ff="monospace">{formatSeconds(avgWait)}</Text>
           </div>
           <div>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Queues Found</Text>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Selected Queues</Text>
             <Group gap="xs" mt={4}>
-              {(data?.queues_found ?? []).map((queue) => (
+              {activeQueues.map((queue) => (
                 <Badge key={queue} variant="light" color="green">{queueLabel(queue)}</Badge>
               ))}
             </Group>
