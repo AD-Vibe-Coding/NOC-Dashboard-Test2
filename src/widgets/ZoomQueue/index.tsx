@@ -1035,6 +1035,9 @@ export function ZoomQueueWidget() {
         });
 
         console.debug(`[ReminderTick] ${new Date().toLocaleTimeString()} — checking ${uniqueAgents.length} agents | nowMin=${nowMin} | today=${todayKey}`);
+        // Share one fresh RingCentral read across all queue sends in this tick.
+        // This avoids multiplying OAuth/queue-presence calls when several people are due together.
+        let queueRecheckPromise: Promise<ZoomQueueData | null> | null = null;
 
         for (const agent of uniqueAgents) {
           const name = agent.rosterName ?? agent.display_name;
@@ -1148,8 +1151,8 @@ export function ZoomQueueWidget() {
                 if (elapsedAfterBase < stageDelay) continue;
                 if (sentReminderKeys.has(stageKey)) continue;
 
-                // Re-read queue state immediately before any queue reminder/escalation.
-                const latestQueueData = await refreshQueueRef.current();
+                // Re-read queue state before sending, sharing one live response across this tick.
+                const latestQueueData = await (queueRecheckPromise ??= refreshQueueRef.current());
                 if (
                   !hasTrustedLiveQueueStatus(latestQueueData)
                   || confirmedQueueState(latestQueueData, normalized) !== "out_of_queue"
