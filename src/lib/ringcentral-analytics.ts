@@ -10,12 +10,21 @@ export interface RingCentralQueueMetric {
   avg_wait_seconds: number;
 }
 
+export interface RingCentralPeriodMetric extends RingCentralQueueMetric {
+  interval_type: "week" | "month";
+  period_start: string;
+}
+
 export interface RingCentralAnalyticsResponse {
   source: "ringcentral";
   period: "last_30_days";
   from_date: string;
   to_date: string;
   records: RingCentralQueueMetric[];
+  history?: {
+    weekly: RingCentralPeriodMetric[];
+    monthly: RingCentralPeriodMetric[];
+  };
   queues_found: string[];
   warning: string | null;
 }

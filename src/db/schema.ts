@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, real, serial, text, timestamp } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, real, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const breaks = pgTable("breaks", {
   id: serial("id").primaryKey(),
@@ -836,3 +836,25 @@ export const ringcentral_shared_sessions = pgTable("ringcentral_shared_sessions"
   token_ciphertext: text("token_ciphertext").notNull(),
   updated_at: timestamp("updated_at", { withTimezone: true }).notNull(),
 });
+
+// RingCentral analytics history is stored by queue and weekly/monthly bucket.
+// The unique key lets refreshes safely replace overlapping periods without
+// double-counting, while older buckets remain available for reporting.
+export const ringcentral_call_metrics = pgTable("ringcentral_call_metrics", {
+  id: serial("id").primaryKey(),
+  interval_type: text("interval_type").notNull(), // week | month
+  period_start: text("period_start").notNull(), // ISO date in Pacific time
+  queue_name: text("queue_name").notNull(),
+  total: integer("total").notNull().default(0),
+  answered: integer("answered").notNull().default(0),
+  abandoned: integer("abandoned").notNull().default(0),
+  missed: integer("missed").notNull().default(0),
+  system_handled: integer("system_handled").notNull().default(0),
+  ringing_calls: integer("ringing_calls").notNull().default(0),
+  avg_handle_seconds: real("avg_handle_seconds").notNull().default(0),
+  avg_wait_seconds: real("avg_wait_seconds").notNull().default(0),
+  synced_at: timestamp("synced_at", { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  periodQueueUnique: uniqueIndex("ringcentral_call_metrics_period_queue_unique")
+    .on(table.interval_type, table.period_start, table.queue_name),
+}));

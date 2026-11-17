@@ -7,6 +7,7 @@ import {
   Group,
   Loader,
   ScrollArea,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
@@ -45,6 +46,17 @@ function queueLabel(name: string) {
   return name;
 }
 
+function formatPeriod(value: string, interval: "month" | "week") {
+  const date = new Date(`${value}T12:00:00`);
+  const label = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    year: "numeric",
+    month: interval === "month" ? "long" : "short",
+    ...(interval === "week" ? { day: "numeric" as const } : {}),
+  }).format(date);
+  return interval === "week" ? `Week of ${label}` : label;
+}
+
 function MetricCard({ label, value, color, icon }: { label: string; value: string; color: string; icon: React.ReactNode }) {
   return (
     <Card withBorder radius="md" p="md" style={{ borderTop: `2px solid var(--mantine-color-${color}-6)` }}>
@@ -62,6 +74,7 @@ export function ZoomCallMetricsWidget() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [interval, setInterval] = useState<"month" | "week">("month");
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -82,8 +95,10 @@ export function ZoomCallMetricsWidget() {
     void refresh();
   }, [refresh]);
 
-  const queueRows = data?.records ?? [];
-  const totals = useMemo(() => queueRows.reduce(
+  const historyRows = data?.history?.[interval === "month" ? "monthly" : "weekly"] ?? [];
+  const periodRows = [...historyRows].sort((a, b) => a.period_start.localeCompare(b.period_start));
+  const queueRows = periodRows;
+  const totals = useMemo(() => periodRows.reduce(
     (acc, row) => ({
       total: acc.total + row.total,
       answered: acc.answered + row.answered,
@@ -95,26 +110,35 @@ export function ZoomCallMetricsWidget() {
       wait_seconds: acc.wait_seconds + row.avg_wait_seconds * row.ringing_calls,
     }),
     { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0, ringing_calls: 0, handle_seconds: 0, wait_seconds: 0 },
-  ), [queueRows]);
+  ), [periodRows]);
 
   const avgHandle = totals.answered > 0 ? totals.handle_seconds / totals.answered : 0;
   const avgWait = totals.ringing_calls > 0 ? totals.wait_seconds / totals.ringing_calls : 0;
-  const dateRange = data ? `${data.from_date} – ${data.to_date}` : "";
+  const dateRange = periodRows.length
+    ? `${formatPeriod(periodRows[0].period_start, interval)} – ${formatPeriod(periodRows[periodRows.length - 1].period_start, interval)}`
+    : "";
+  const intervalLabel = interval === "month" ? "Monthly" : "Weekly";
 
   return (
     <WidgetFrame
       title="RingCentral Call Metrics"
-      subtitle={dateRange ? `Last 30 days · ${dateRange} (Pacific time)` : "Rolling last 30 days of queue call analytics"}
+      subtitle={dateRange ? `${intervalLabel} history · ${dateRange} (Pacific time)` : `${intervalLabel} RingCentral queue call history`}
       icon={IconPhone}
       iconColor="green"
       loading={loading}
       onRefresh={refresh}
-      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing last 30 days (${dateRange}) for Mobility + Network queues` } : undefined}
+      status={data ? { label: "CONNECTED", color: "green", tooltip: `RingCentral analytics responded successfully. Showing stored ${intervalLabel.toLowerCase()} history (${dateRange || "no saved periods yet"}) for Mobility + Network queues` } : undefined}
     >
       <Stack gap="lg">
         <Group justify="space-between" align="center" wrap="wrap">
-          <Group gap="xs">
-            <Badge variant="light" color="green">Last 30 days</Badge>
+          <Group gap="sm">
+            <SegmentedControl
+              size="xs"
+              value={interval}
+              onChange={(value) => setInterval(value as "month" | "week")}
+              data={[{ label: "Monthly", value: "month" }, { label: "Weekly", value: "week" }]}
+              aria-label="Call history interval"
+            />
             {dateRange && <Text size="sm" c="dimmed">{dateRange} · Pacific time</Text>}
           </Group>
           <Button variant="light" leftSection={<IconRefresh size={16} />} onClick={() => void refresh()} loading={loading}>
@@ -144,10 +168,10 @@ export function ZoomCallMetricsWidget() {
             color="gray"
             variant="light"
             radius="md"
-            title={data.queues_found.length ? "No call records in this period" : "No support queues found"}
+            title={data.queues_found.length ? `No ${intervalLabel.toLowerCase()} history yet` : "No support queues found"}
           >
             {data.queues_found.length
-              ? `RingCentral is connected and returned no inbound call aggregates for ${dateRange}.`
+              ? `No saved ${intervalLabel.toLowerCase()} call records are available yet. Refresh analytics to sync the available history from RingCentral.`
               : data.warning ?? "RingCentral is connected, but no Mobility or Network support queues were found."}
           </Alert>
         )}
@@ -187,6 +211,7 @@ export function ZoomCallMetricsWidget() {
               <Table horizontalSpacing="md" verticalSpacing="sm" striped highlightOnHover>
                 <Table.Thead>
                   <Table.Tr>
+                    <Table.Th>{interval === "month" ? "Month" : "Week"}</Table.Th>
                     <Table.Th>Queue</Table.Th>
                     <Table.Th>Total</Table.Th>
                     <Table.Th>Answered</Table.Th>
@@ -199,7 +224,8 @@ export function ZoomCallMetricsWidget() {
                 </Table.Thead>
                 <Table.Tbody>
                   {queueRows.map((row) => (
-                    <Table.Tr key={row.queue_name}>
+                    <Table.Tr key={`${row.period_start}-${row.queue_name}`}>
+                      <Table.Td>{formatPeriod(row.period_start, interval)}</Table.Td>
                       <Table.Td fw={600}>{queueLabel(row.queue_name)}</Table.Td>
                       <Table.Td>{row.total.toLocaleString()}</Table.Td>
                       <Table.Td>{row.answered.toLocaleString()}</Table.Td>
@@ -212,9 +238,9 @@ export function ZoomCallMetricsWidget() {
                   ))}
                   {queueRows.length === 0 && (
                     <Table.Tr>
-                      <Table.Td colSpan={8}>
+                      <Table.Td colSpan={9}>
                         <Text size="sm" c="dimmed" ta="center" py="lg">
-                          No queue call analytics were returned for the last 30 days.
+                          No saved {intervalLabel.toLowerCase()} call history is available yet.
                         </Text>
                       </Table.Td>
                     </Table.Tr>

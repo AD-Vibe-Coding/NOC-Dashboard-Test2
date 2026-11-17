@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
+import { supabaseAdmin } from "../_lib/supabase-admin.js";
 import {
   getRingCentralConfig,
   hasRingCentralConfig,
@@ -168,6 +169,116 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   };
 }
 
+function periodDateFrom(value: any): string {
+  if (typeof value === "string" || typeof value === "number") {
+    const match = String(value).match(/\d{4}-\d{2}-\d{2}/);
+    return match?.[0] ?? "";
+  }
+  if (value && typeof value === "object") {
+    for (const key of ["timeFrom", "startTime", "start", "date", "timestamp", "time", "periodStart", "key"]) {
+      const result = periodDateFrom(value[key]);
+      if (result) return result;
+    }
+  }
+  return "";
+}
+
+function metricRow(value: any) {
+  return ["allCalls", "callsByResponse", "callsByResult", "callsSegments"].some((key) => metricByName(value, key) !== undefined);
+}
+
+function timelineMetrics(payload: any, interval: "week" | "month", queueById: Map<string, string>, requestedQueues: any[]) {
+  const output: Array<QueueMetrics & { interval_type: string; period_start: string }> = [];
+  const roots = [payload?.records, payload?.data?.records, payload?.data, payload?.results].filter(Boolean);
+  const visited = new Set<any>();
+
+  const visit = (value: any, inheritedQueue = "", inheritedPeriod = "") => {
+    if (!value || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, inheritedQueue, inheritedPeriod));
+      return;
+    }
+
+    const queueId = rowQueueId(value);
+    const queueName = rowQueueName(value) || inheritedQueue || queueById.get(queueId) || "";
+    const periodStart = periodDateFrom(value) || inheritedPeriod;
+    if (metricRow(value) && queueName && periodStart) {
+      output.push({ ...buildQueueMetrics(value, queueName), interval_type: interval, period_start: periodStart });
+    }
+
+    // Timeline responses nest period values beneath queue groups in several
+    // shapes; carry the queue and period dimensions down to each metric row.
+    for (const [key, child] of Object.entries(value)) {
+      if (["counters", "timers", "metrics", "callsByResponse", "callsByResult", "callsSegments"].includes(key)) continue;
+      const childPeriod = periodDateFrom(key) || periodStart;
+      visit(child, queueName, childPeriod);
+    }
+  };
+  roots.forEach((root) => visit(root));
+
+  // A single-queue response may omit the queue dimension entirely.
+  if (requestedQueues.length === 1) {
+    const unnamed: any[] = [];
+    const collect = (value: any, period = "") => {
+      if (!value || typeof value !== "object") return;
+      if (Array.isArray(value)) return value.forEach((item) => collect(item, period));
+      const ownPeriod = periodDateFrom(value) || period;
+      if (metricRow(value) && ownPeriod && !rowQueueName(value)) unnamed.push({ value, period: ownPeriod });
+      Object.entries(value).forEach(([key, child]) => {
+        if (!["counters", "timers", "metrics", "callsByResponse", "callsByResult", "callsSegments"].includes(key)) collect(child, periodDateFrom(key) || ownPeriod);
+      });
+    };
+    roots.forEach((root) => collect(root));
+    const known = new Set(output.map((row) => `${row.period_start}|${row.queue_name}`));
+    for (const item of unnamed) {
+      const name = getQueueName(requestedQueues[0]);
+      if (!known.has(`${item.period}|${name}`)) output.push({ ...buildQueueMetrics(item.value, name), interval_type: interval, period_start: item.period });
+    }
+  }
+  return [...new Map(output.map((row) => [`${row.period_start}|${row.queue_name}`, row])).values()];
+}
+
+async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: "Week" | "Month", targetQueues: any[]) {
+  const now = new Date();
+  const from = new Date(now.getTime() - 184 * 24 * 60 * 60 * 1000);
+  const requestBody = {
+    grouping: { groupBy: "Queues", keys: targetQueues.map(getQueueId) },
+    timeSettings: { timeZone: TIME_ZONE, timeRange: { timeFrom: from.toISOString(), timeTo: now.toISOString() } },
+    callFilters: { directions: ["Inbound"] },
+    responseOptions: {
+      counters: {
+        allCalls: { aggregationType: "Sum" }, callsByResponse: { aggregationType: "Sum" },
+        callsByResult: { aggregationType: "Sum" }, callsSegments: { aggregationType: "Sum" },
+      },
+      timers: { callsSegmentsDuration: { aggregationType: "Sum" } },
+    },
+  };
+  const response = await ringCentralFetch(req, res, `/analytics/calls/v1/accounts/~/timeline/fetch?interval=${interval}&page=1&perPage=100`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(errorMessage(response.status, raw));
+  try { return raw ? JSON.parse(raw) : {}; }
+  catch { throw new Error("RingCentral returned an unreadable analytics timeline response."); }
+}
+
+async function loadStoredHistory() {
+  const all: any[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const { data, error } = await supabaseAdmin.from("ringcentral_call_metrics")
+      .select("interval_type,period_start,queue_name,total,answered,abandoned,missed,system_handled,ringing_calls,avg_handle_seconds,avg_wait_seconds")
+      .order("period_start", { ascending: true }).range(offset, offset + 999);
+    if (error) throw error;
+    all.push(...(data ?? []));
+    if (!data || data.length < 1000) break;
+  }
+  return {
+    weekly: all.filter((row) => row.interval_type === "week"),
+    monthly: all.filter((row) => row.interval_type === "month"),
+  };
+}
+
 function errorMessage(status: number, raw: string) {
   let detail = raw.slice(0, 240);
   try {
@@ -223,12 +334,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const targetQueues = configuredMatches.length > 0 ? configuredMatches : matchingQueues;
 
     if (targetQueues.length === 0) {
+      const history = await loadStoredHistory();
       return res.status(200).json({
         source: "ringcentral",
         period: "last_30_days",
         from_date: range.fromDate,
         to_date: range.toDate,
         records: [],
+        history,
         queues_found: [],
         warning: "No configured Mobility or Network support call queues were found in RingCentral.",
       });
@@ -297,12 +410,31 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return name ? buildQueueMetrics(row, name) : null;
     }).filter((row: QueueMetrics | null): row is QueueMetrics => Boolean(row));
 
+    const [weeklyTimeline, monthlyTimeline] = await Promise.all([
+      fetchTimeline(req, res, "Week", targetQueues),
+      fetchTimeline(req, res, "Month", targetQueues),
+    ]);
+    const queueNamesById = new Map(targetQueues.map((queue) => [getQueueId(queue), getQueueName(queue)]));
+    const syncedAt = new Date().toISOString();
+    const newHistory = [
+      ...timelineMetrics(weeklyTimeline, "week", queueNamesById, targetQueues),
+      ...timelineMetrics(monthlyTimeline, "month", queueNamesById, targetQueues),
+    ].map((row) => ({ ...row, synced_at: syncedAt }));
+
+    if (newHistory.length) {
+      const { error: upsertError } = await supabaseAdmin.from("ringcentral_call_metrics")
+        .upsert(newHistory, { onConflict: "interval_type,period_start,queue_name" });
+      if (upsertError) throw upsertError;
+    }
+    const history = await loadStoredHistory();
+
     return res.status(200).json({
       source: "ringcentral",
       period: "last_30_days",
       from_date: range.fromDate,
       to_date: range.toDate,
       records,
+      history,
       queues_found: targetQueues.map(getQueueName),
       warning: null,
     });
