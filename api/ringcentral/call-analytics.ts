@@ -69,22 +69,59 @@ function metricContainer(row: any) {
 
 function metricValue(value: any): number {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    // Some analytics views serialize durations as H:MM:SS or M:SS instead of seconds.
+    if (/^\d+(?::\d{1,2}){1,2}(?:\.\d+)?$/.test(value.trim())) {
+      const parts = value.trim().split(":").map(Number);
+      return parts.length === 3
+        ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+        : parts[0] * 60 + parts[1];
+    }
+    return 0;
+  }
   if (Array.isArray(value)) return value.reduce((total, item) => total + metricValue(item), 0);
   const record = asRecord(value);
-  for (const key of ["value", "sum", "total", "count", "aggregationValue", "values"]) {
+  for (const key of ["value", "sum", "total", "count", "aggregationValue", "aggregateValue", "duration", "seconds", "values", "data", "results", "items"]) {
     if (record[key] !== undefined) return metricValue(record[key]);
   }
   return 0;
 }
 
+function findMetricByName(value: any, name: string, depth = 0): any {
+  if (!value || typeof value !== "object" || depth > 8) return undefined;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findMetricByName(item, name, depth + 1);
+      if (found !== undefined) return found;
+    }
+    return undefined;
+  }
+  const record = asRecord(value);
+  const key = Object.keys(record).find((entry) => entry.toLowerCase() === name.toLowerCase());
+  if (key) return record[key];
+  for (const child of Object.values(record)) {
+    const found = findMetricByName(child, name, depth + 1);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 function metricByName(row: any, name: string) {
-  const containers = [row?.counters, row?.data?.counters, row?.data, row?.metrics, row];
+  const containers = [
+    row?.counters,
+    row?.timers,
+    row?.data?.counters,
+    row?.data?.timers,
+    row?.data?.duration,
+    row?.data,
+    row?.metrics,
+    row,
+  ];
   for (const container of containers) {
-    const record = asRecord(container);
-    if (record[name] !== undefined) return record[name];
-    const key = Object.keys(record).find((entry) => entry.toLowerCase() === name.toLowerCase());
-    if (key) return record[key];
+    const found = findMetricByName(container, name);
+    if (found !== undefined) return found;
   }
   return undefined;
 }
@@ -92,22 +129,29 @@ function metricByName(row: any, name: string) {
 function categoryValue(metric: any, categoryNames: string[]) {
   if (metric == null) return 0;
   const normalized = new Set(categoryNames.map((name) => name.toLowerCase().replace(/[^a-z]/g, "")));
-  const root = asRecord(metric);
-  const values = asRecord(root.values ?? root.value ?? root.results ?? root);
-  for (const key of Object.keys(values)) {
-    if (normalized.has(key.toLowerCase().replace(/[^a-z]/g, ""))) {
-      return metricValue(values[key]);
+  const findCategory = (value: any, depth = 0): number | undefined => {
+    if (!value || typeof value !== "object" || depth > 8) return undefined;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const label = String(item?.name ?? item?.key ?? item?.type ?? item?.result ?? item?.segment ?? "")
+          .toLowerCase().replace(/[^a-z]/g, "");
+        if (normalized.has(label)) return metricValue(item);
+        const nested = findCategory(item, depth + 1);
+        if (nested !== undefined) return nested;
+      }
+      return undefined;
     }
-  }
-  if (Array.isArray(root.values ?? root.results)) {
-    const item = (root.values ?? root.results).find((entry: any) => {
-      const label = String(entry?.name ?? entry?.key ?? entry?.type ?? entry?.result ?? "")
-        .toLowerCase().replace(/[^a-z]/g, "");
-      return normalized.has(label);
-    });
-    return item ? metricValue(item) : 0;
-  }
-  return 0;
+    const record = asRecord(value);
+    for (const [key, child] of Object.entries(record)) {
+      if (normalized.has(key.toLowerCase().replace(/[^a-z]/g, ""))) return metricValue(child);
+    }
+    for (const child of Object.values(record)) {
+      const nested = findCategory(child, depth + 1);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  };
+  return findCategory(metric) ?? 0;
 }
 
 function getRows(payload: any): any[] {
