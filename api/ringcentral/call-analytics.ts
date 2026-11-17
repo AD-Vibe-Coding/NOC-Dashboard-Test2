@@ -198,6 +198,8 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   const ringingSeconds = categoryValue(callDuration, ["ringing"]);
   const talkSeconds = categoryValue(callDuration, ["liveTalk", "livetalk", "talk"]);
   const holdSeconds = categoryValue(callDuration, ["hold", "holds"]);
+  const answeredDurationSeconds = categoryValue(metricByName(row, "callsDurationByResponse"), ["answered"]);
+  const handleDurationSeconds = answeredDurationSeconds || talkSeconds + holdSeconds;
   const normalizedTotal = allCalls || resultTotal;
 
   return {
@@ -208,7 +210,7 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
     missed,
     system_handled: systemHandled,
     ringing_calls: ringingCalls,
-    avg_handle_seconds: answered > 0 ? (talkSeconds + holdSeconds) / answered : 0,
+    avg_handle_seconds: answered > 0 ? handleDurationSeconds / answered : 0,
     avg_wait_seconds: ringingCalls > 0 ? ringingSeconds / ringingCalls : 0,
   };
 }
@@ -298,7 +300,10 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
         callsByResult: true,
         callsSegments: true,
       },
-      timers: { callsSegmentsDuration: true },
+      timers: {
+        callsSegmentsDuration: true,
+        callsDurationByResponse: true,
+      },
     },
   };
   const response = await ringCentralFetch(req, res, `/analytics/calls/v1/accounts/~/timeline/fetch?interval=${interval}&page=1&perPage=20`, {
@@ -451,6 +456,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         },
         timers: {
           callsSegmentsDuration: { aggregationType: "Sum" },
+          callsDurationByResponse: { aggregationType: "Sum" },
         },
       },
     };
