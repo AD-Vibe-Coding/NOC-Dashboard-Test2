@@ -153,7 +153,7 @@ export function useTeamAvailability() {
     }
   }
 
-  async function refresh() {
+  async function refresh(): Promise<ZoomQueueData | null> {
     setLoading(true);
     setError(null);
     try {
@@ -161,8 +161,10 @@ export function useTeamAvailability() {
       setData(r);
       accumulateSession(r);
       saveSnapshot(r);
+      return r;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+      return null;
     } finally {
       setLoading(false);
     }

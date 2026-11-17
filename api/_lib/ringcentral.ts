@@ -9,7 +9,7 @@ export interface RingCentralQueueAgent {
   display_name: string;
   status: QueueStatus;
   queues: string[];
-  queue_opt_in: Record<string, boolean>;
+  queue_opt_in: Record<string, boolean | null>;
   global_queue_accept_calls?: boolean | null;
 }
 
@@ -832,10 +832,7 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
   }
 
   if (liveQueueDataCache && liveQueueDataCache.expiresAt > now) {
-    return {
-      ...liveQueueDataCache.value,
-      warning: liveQueueDataCache.value.warning ?? "Live RingCentral data served from short server cache to avoid rate limits.",
-    };
+    return liveQueueDataCache.value;
   }
   if (liveQueueRateLimitedUntil > now && liveQueueDataCache && liveQueueDataCache.staleUntil > now) {
     return {
@@ -901,8 +898,8 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
         }
 
         const queueOptIn = Object.fromEntries(
-          queueEntries.map((entry) => [entry.name, entry.optIn === true]),
-        ) as Record<string, boolean>;
+          queueEntries.map((entry) => [entry.name, entry.optIn]),
+        ) as Record<string, boolean | null>;
 
         return {
           agent_id: extensionId,
@@ -930,7 +927,7 @@ export async function fetchRingCentralQueueData(req: VercelRequest, res: VercelR
         },
         warning: queueWarnings.length
           ? `RingCentral queue membership could not be read directly (${queueWarnings.join("; ")}). Showing best-effort fallback for unmatched members.`
-          : "Live RingCentral queue membership is now based on queue presence and opt-in status across the configured VCom queues.",
+          : null,
       };
 
       liveQueueDataCache = {

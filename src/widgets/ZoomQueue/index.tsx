@@ -36,7 +36,7 @@ import {
   IconUserCheck,
   IconUserOff,
 } from "@tabler/icons-react";
-import { ZOOM_STATUS_COLORS, type ZoomAgent } from "../../lib/zoom";
+import { ZOOM_STATUS_COLORS, type ZoomAgent, type ZoomQueueData } from "../../lib/zoom";
 import { WidgetFrame } from "../WidgetFrame";
 import { useTeamAvailability } from "./data";
 import { useBreakData } from "../BreakTracker/data";
@@ -263,6 +263,29 @@ function samePerson(a: string, b: string) {
   return normName(a) === normName(b);
 }
 
+const MAX_QUEUE_STATUS_AGE_MS = 2 * 60_000;
+type ConfirmedQueueState = "in_queue" | "out_of_queue" | "unknown";
+
+function hasTrustedLiveQueueStatus(data: ZoomQueueData | null | undefined): data is ZoomQueueData {
+  if (!data || data.source !== "live" || data.warning) return false;
+  const fetchedAt = Date.parse(data.fetched_at);
+  const age = Date.now() - fetchedAt;
+  return Number.isFinite(fetchedAt) && age >= -15_000 && age <= MAX_QUEUE_STATUS_AGE_MS;
+}
+
+function confirmedQueueState(data: ZoomQueueData, normalizedName: string): ConfirmedQueueState {
+  const agent = data.agents.find((candidate) => {
+    const canonicalName = resolveTeamMember(candidate.display_name) ?? candidate.display_name;
+    return normName(canonicalName) === normalizedName;
+  });
+  if (!agent) return "unknown";
+
+  const memberships = Object.values(agent.queue_opt_in ?? {});
+  if (agent.status === "in_queue" || memberships.some((value) => value === true)) return "in_queue";
+  if (memberships.length > 0 && memberships.every((value) => value === false)) return "out_of_queue";
+  return "unknown";
+}
+
 function isSameLocalDay(iso: string, now = new Date()) {
   const d = new Date(iso);
   return (
@@ -283,6 +306,8 @@ function todayPacificIso() {
 
 export function ZoomQueueWidget() {
   const { data, loading, error, refresh } = useTeamAvailability();
+  const refreshQueueRef = useRef(refresh);
+  refreshQueueRef.current = refresh;
   const [activeProviderTab, setActiveProviderTab] = useState<"live" | "diagnostics">("live");
   const [viewMode, setViewMode] = useState<"fit" | "zoom">("zoom");
   const [zoomPercent, setZoomPercent] = useState<string>("110");
@@ -957,6 +982,10 @@ export function ZoomQueueWidget() {
 
       if (!data || !rosterData) return;
       if (remindersPaused) return;
+      const queueDataTrusted = hasTrustedLiveQueueStatus(data);
+      if (!queueDataTrusted) {
+        console.info("[ReminderTick] Queue reminders paused: RingCentral data is stale, degraded, or not live.");
+      }
 
       // If a previous tick is still running, skip this one entirely
       if (tickRunningRef.current) return;
@@ -1029,7 +1058,8 @@ export function ZoomQueueWidget() {
             ? `${todayKey}:${normalized}:${shiftWindow.start}:${shiftWindow.end}`
             : `${todayKey}:${normalized}:no-shift`;
           const queueReminderDedupeKey = `queue:${todayKey}:${normalized}:${shiftWindow?.start ?? "none"}:${shiftWindow?.end ?? "none"}`;
-          trackedQueueKeys.add(queueReminderKey);
+          const queueState = queueDataTrusted ? confirmedQueueState(data, normalized) : "unknown";
+          if (queueState !== "unknown") trackedQueueKeys.add(queueReminderKey);
 
           const activeBreakAgeMs    = activeStatus
             ? now - new Date(activeStatus.start_time).getTime()
@@ -1085,8 +1115,8 @@ export function ZoomQueueWidget() {
           // - no active break/meeting status
           // - not within 2-min cooldown after starting a break
           // - not within 5-min cooldown after a break just ended
-          const isQueueEligible = inShiftForReminder
-            && agent.status !== "in_queue"
+          const isQueueEligible = queueState === "out_of_queue"
+            && inShiftForReminder
             && !activeStatus
             && !inBreakStartCooldown;
 
@@ -1096,7 +1126,7 @@ export function ZoomQueueWidget() {
           );
 
           if (!isQueueEligible) {
-            const shouldResetTimer = !inShiftForReminder || agent.status === "in_queue";
+            const shouldResetTimer = !inShiftForReminder || queueState !== "out_of_queue";
             if (shouldResetTimer) {
               delete nextQueueState[queueReminderKey];
             }
@@ -1117,6 +1147,17 @@ export function ZoomQueueWidget() {
 
                 if (elapsedAfterBase < stageDelay) continue;
                 if (sentReminderKeys.has(stageKey)) continue;
+
+                // Re-read queue state immediately before any queue reminder/escalation.
+                const latestQueueData = await refreshQueueRef.current();
+                if (
+                  !hasTrustedLiveQueueStatus(latestQueueData)
+                  || confirmedQueueState(latestQueueData, normalized) !== "out_of_queue"
+                ) {
+                  console.info(`[ReminderTick] ${name} — suppressing stage ${stage}; current queue status is not confirmed out.`);
+                  delete nextQueueState[queueReminderKey];
+                  break;
+                }
 
                 const stillInShiftForSend = shiftWindow
                   ? isWithinReminderWindow(nowMin, shiftWindow)

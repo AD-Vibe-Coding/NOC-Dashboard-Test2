@@ -555,15 +555,19 @@ export function ZoomQueueTile({ onExpand }: Props) {
                     <Group key={queueName} justify="space-between" wrap="nowrap" gap="sm">
                       <Box style={{ minWidth: 0 }}>
                         <Text size="xs" fw={600}>{queueDisplayLabel(queueName)}</Text>
-                        <Text size="10px" c="dimmed">Accept incoming queue calls</Text>
+                        <Text size="10px" c="dimmed">{enabled === null ? "Queue status unavailable" : "Accept incoming queue calls"}</Text>
                       </Box>
                       <Switch
-                        checked={enabled}
-                        disabled={pendingQueue !== null}
+                        checked={enabled === true}
+                        disabled={pendingQueue !== null || enabled === null}
                         color="green"
                         size="sm"
-                        aria-label={`${enabled ? "Turn off" : "Turn on"} ${queueDisplayLabel(queueName)}`}
-                        onChange={() => setQueueConfirmation({ queueName, enabled: !enabled })}
+                        aria-label={enabled === null
+                          ? `${queueDisplayLabel(queueName)} status unavailable`
+                          : `${enabled ? "Turn off" : "Turn on"} ${queueDisplayLabel(queueName)}`}
+                        onChange={() => {
+                          if (enabled !== null) setQueueConfirmation({ queueName, enabled: !enabled });
+                        }}
                       />
                       {pendingQueue === queueName && <Loader size="xs" aria-label="Updating queue" />}
                     </Group>
