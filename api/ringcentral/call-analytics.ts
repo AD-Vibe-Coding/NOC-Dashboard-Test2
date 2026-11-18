@@ -133,8 +133,11 @@ function categoryValue(metric: any, categoryNames: string[]) {
     if (!value || typeof value !== "object" || depth > 8) return undefined;
     if (Array.isArray(value)) {
       for (const item of value) {
-        const label = String(item?.name ?? item?.key ?? item?.type ?? item?.result ?? item?.segment ?? "")
-          .toLowerCase().replace(/[^a-z]/g, "");
+        const label = String(
+          item?.name ?? item?.key ?? item?.type ?? item?.result ?? item?.segment
+          ?? item?.response ?? item?.callResponse ?? item?.responseType
+          ?? item?.segmentName ?? item?.segmentType ?? item?.callSegment ?? item?.category ?? item?.label ?? "",
+        ).toLowerCase().replace(/[^a-z]/g, "");
         if (normalized.has(label)) return metricValue(item);
         const nested = findCategory(item, depth + 1);
         if (nested !== undefined) return nested;
@@ -196,9 +199,12 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   const timers = asRecord(row?.timers ?? row?.data?.timers ?? row?.data?.duration ?? {});
   const callDuration = metricByName({ ...row, data: { ...asRecord(row?.data), ...timers } }, "callsSegmentsDuration");
   const ringingSeconds = categoryValue(callDuration, ["ringing"]);
-  const talkSeconds = categoryValue(callDuration, ["liveTalk", "livetalk", "talk"]);
-  const holdSeconds = categoryValue(callDuration, ["hold", "holds"]);
-  const answeredDurationSeconds = categoryValue(metricByName(row, "callsDurationByResponse"), ["answered"]);
+  const talkSeconds = categoryValue(callDuration, ["liveTalk", "livetalk", "talk", "talkTime"]);
+  const holdSeconds = categoryValue(callDuration, ["hold", "holds", "holdTime", "onHold"]);
+  const answeredDurationSeconds = categoryValue(
+    metricByName(row, "callsDurationByResponse"),
+    ["answered", "answer", "connected"],
+  );
   const handleDurationSeconds = answeredDurationSeconds || talkSeconds + holdSeconds;
   const normalizedTotal = allCalls || resultTotal;
 
