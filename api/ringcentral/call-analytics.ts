@@ -295,14 +295,17 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
     callFilters: { directions: ["Inbound"] },
     responseOptions: {
       counters: {
-        allCalls: true,
-        callsByResponse: true,
-        callsByResult: true,
-        callsSegments: true,
+        allCalls: { aggregationType: "Sum" },
+        callsByResponse: { aggregationType: "Sum" },
+        callsByResult: { aggregationType: "Sum" },
+        callsSegments: { aggregationType: "Sum" },
       },
+      // Timeline rows feed the saved weekly/monthly dashboard. Request timer
+      // aggregations explicitly; boolean flags can return counters without
+      // duration values, which previously made average handle time appear as 0.
       timers: {
-        callsSegmentsDuration: true,
-        callsDurationByResponse: true,
+        callsSegmentsDuration: { aggregationType: "Sum" },
+        callsDurationByResponse: { aggregationType: "Sum" },
       },
     },
   };
