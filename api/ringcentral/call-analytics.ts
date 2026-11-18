@@ -133,11 +133,13 @@ function categoryValue(metric: any, categoryNames: string[]) {
     if (!value || typeof value !== "object" || depth > 8) return undefined;
     if (Array.isArray(value)) {
       for (const item of value) {
-        const label = String(
-          item?.name ?? item?.key ?? item?.type ?? item?.result ?? item?.segment
+        const rawLabel = item?.name ?? item?.key ?? item?.type ?? item?.result ?? item?.segment
           ?? item?.response ?? item?.callResponse ?? item?.responseType
-          ?? item?.segmentName ?? item?.segmentType ?? item?.callSegment ?? item?.category ?? item?.label ?? "",
-        ).toLowerCase().replace(/[^a-z]/g, "");
+          ?? item?.segmentName ?? item?.segmentType ?? item?.callSegment ?? item?.category ?? item?.label ?? "";
+        const labelValue = rawLabel && typeof rawLabel === "object"
+          ? rawLabel.name ?? rawLabel.value ?? rawLabel.key ?? rawLabel.label ?? ""
+          : rawLabel;
+        const label = String(labelValue).toLowerCase().replace(/[^a-z]/g, "");
         if (normalized.has(label)) return metricValue(item);
         const nested = findCategory(item, depth + 1);
         if (nested !== undefined) return nested;
@@ -188,7 +190,7 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   const callsByResult = metricByName(row, "callsByResult");
   const allCalls = metricValue(metricByName(row, "allCalls"));
   const answered = categoryValue(callsByResponse, ["answered"]);
-  const abandoned = categoryValue(callsByResult, ["abandoned", "abandonedbycaller"]);
+  const rawAbandoned = categoryValue(callsByResult, ["abandoned", "abandonedbycaller"]);
   const missed = categoryValue(callsByResult, ["missed", "noanswer"]);
   const systemHandled = categoryValue(callsByResult, ["voicemail"])
     + categoryValue(callsByResult, ["accepted"]);
@@ -205,8 +207,16 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
     metricByName(row, "callsDurationByResponse"),
     ["answered", "answer", "connected"],
   );
-  const handleDurationSeconds = answeredDurationSeconds || talkSeconds + holdSeconds;
+  // The RingCentral Queue Report defines handle time as talk + hold.
+  // Prefer those segments and use the answered-call timer only as a fallback.
+  const handleDurationSeconds = talkSeconds + holdSeconds || answeredDurationSeconds;
   const normalizedTotal = allCalls || resultTotal;
+  // Queue Report "Abandoned" includes every inbound call not answered by a user,
+  // including voicemail/auto outcomes. Keep the narrower API result only as a
+  // fallback when the response does not provide usable total/answered counts.
+  const abandoned = normalizedTotal > 0
+    ? Math.max(0, normalizedTotal - answered)
+    : rawAbandoned;
 
   return {
     queue_name: queueName,

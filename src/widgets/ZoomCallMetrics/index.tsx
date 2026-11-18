@@ -270,13 +270,18 @@ export function ZoomCallMetricsWidget() {
           </Alert>
         )}
 
-        {queueRows.length > 0 && <SimpleGrid cols={{ base: 2, sm: 5 }} spacing="sm">
-          <MetricCard label="Total Calls" value={totals.total.toLocaleString()} color="blue" icon={<IconPhoneCall size={14} />} />
-          <MetricCard label="Answered" value={totals.answered.toLocaleString()} color="green" icon={<IconPhoneIncoming size={14} />} />
-          <MetricCard label="Abandoned" value={totals.abandoned.toLocaleString()} color="red" icon={<IconPhoneX size={14} />} />
-          <MetricCard label="Missed" value={totals.missed.toLocaleString()} color="orange" icon={<IconPhoneOff size={14} />} />
-          <MetricCard label="Voicemail / Auto" value={totals.system_handled.toLocaleString()} color="gray" icon={<IconPhone size={14} />} />
-        </SimpleGrid>}
+        {queueRows.length > 0 && <>
+          <SimpleGrid cols={{ base: 2, sm: 5 }} spacing="sm">
+            <MetricCard label="Total Calls" value={totals.total.toLocaleString()} color="blue" icon={<IconPhoneCall size={14} />} />
+            <MetricCard label="Answered" value={totals.answered.toLocaleString()} color="green" icon={<IconPhoneIncoming size={14} />} />
+            <MetricCard label="Abandoned" value={totals.abandoned.toLocaleString()} color="red" icon={<IconPhoneX size={14} />} />
+            <MetricCard label="Missed" value={totals.missed.toLocaleString()} color="orange" icon={<IconPhoneOff size={14} />} />
+            <MetricCard label="Voicemail / Auto" value={totals.system_handled.toLocaleString()} color="gray" icon={<IconPhone size={14} />} />
+          </SimpleGrid>
+          <Text size="xs" c="dimmed">
+            Abandoned follows the RingCentral Queue Report definition (inbound calls not answered by a user, including voicemail/auto); Missed and Voicemail / Auto are detail categories, not extra calls to add to Abandoned.
+          </Text>
+        </>}
 
         {queueRows.length > 0 && <Group gap="xl" wrap="wrap">
           <div>
