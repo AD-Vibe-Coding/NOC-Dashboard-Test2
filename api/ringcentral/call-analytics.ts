@@ -180,7 +180,7 @@ function rowQueueName(row: any) {
   return String(record.name ?? record.queueName ?? record.label ?? row?.queueName ?? row?.groupName ?? row?.name ?? "").trim();
 }
 
-function buildQueueMetrics(row: any, queueName: string, durationIsAverage = false): QueueMetrics {
+function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   const callsByResponse = metricByName(row, "callsByResponse");
   const callsByResult = metricByName(row, "callsByResult");
   const allCalls = metricValue(metricByName(row, "allCalls"));
@@ -200,9 +200,6 @@ function buildQueueMetrics(row: any, queueName: string, durationIsAverage = fals
   const holdSeconds = categoryValue(callDuration, ["hold", "holds"]);
   const answeredDurationSeconds = categoryValue(metricByName(row, "callsDurationByResponse"), ["answered"]);
   const handleDurationSeconds = answeredDurationSeconds || talkSeconds + holdSeconds;
-  const avgHandleSeconds = answeredDurationSeconds > 0 && durationIsAverage
-    ? answeredDurationSeconds
-    : answered > 0 ? handleDurationSeconds / answered : 0;
   const normalizedTotal = allCalls || resultTotal;
 
   return {
@@ -213,7 +210,7 @@ function buildQueueMetrics(row: any, queueName: string, durationIsAverage = fals
     missed,
     system_handled: systemHandled,
     ringing_calls: ringingCalls,
-    avg_handle_seconds: avgHandleSeconds,
+    avg_handle_seconds: answered > 0 ? handleDurationSeconds / answered : 0,
     avg_wait_seconds: ringingCalls > 0 ? ringingSeconds / ringingCalls : 0,
   };
 }
@@ -253,7 +250,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
     const queueName = rowQueueName(value) || inheritedQueue || queueById.get(queueId) || "";
     const periodStart = periodDateFrom(value) || inheritedPeriod;
     if (metricRow(value) && queueName && periodStart) {
-      output.push({ ...buildQueueMetrics(value, queueName, true), interval_type: interval, period_start: periodStart });
+      output.push({ ...buildQueueMetrics(value, queueName), interval_type: interval, period_start: periodStart });
     }
 
     // Timeline responses nest period values beneath queue groups in several
@@ -282,7 +279,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
     const known = new Set(output.map((row) => `${row.period_start}|${row.queue_name}`));
     for (const item of unnamed) {
       const name = getQueueName(requestedQueues[0]);
-      if (!known.has(`${item.period}|${name}`)) output.push({ ...buildQueueMetrics(item.value, name, true), interval_type: interval, period_start: item.period });
+      if (!known.has(`${item.period}|${name}`)) output.push({ ...buildQueueMetrics(item.value, name), interval_type: interval, period_start: item.period });
     }
   }
   return [...new Map(output.map((row) => [`${row.period_start}|${row.queue_name}`, row])).values()];
@@ -298,17 +295,14 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
     callFilters: { directions: ["Inbound"] },
     responseOptions: {
       counters: {
-        allCalls: { aggregationType: "Sum" },
-        callsByResponse: { aggregationType: "Sum" },
-        callsByResult: { aggregationType: "Sum" },
-        callsSegments: { aggregationType: "Sum" },
+        allCalls: true,
+        callsByResponse: true,
+        callsByResult: true,
+        callsSegments: true,
       },
-      // RingCentral labels this KPI "Avg. Handle Time". Request the answered
-      // call duration with Average aggregation so the saved timeline value
-      // matches the UI metric instead of summing and dividing locally.
       timers: {
-        callsSegmentsDuration: { aggregationType: "Sum" },
-        callsDurationByResponse: { aggregationType: "Average" },
+        callsSegmentsDuration: true,
+        callsDurationByResponse: true,
       },
     },
   };
