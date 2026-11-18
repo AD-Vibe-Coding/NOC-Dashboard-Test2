@@ -35,11 +35,10 @@ import {
 type AnalyticsResponse = RingCentralAnalyticsResponse;
 
 function formatSeconds(seconds: number) {
-  if (seconds <= 0) return "0s";
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.round(seconds % 60);
-  return secs ? `${mins}m ${secs}s` : `${mins}m`;
+  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, Math.round(seconds)) : 0;
+  const mins = Math.floor(safeSeconds / 60);
+  const secs = safeSeconds % 60;
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
 function queueLabel(name: string) {
@@ -171,13 +170,13 @@ export function ZoomCallMetricsWidget() {
       system_handled: acc.system_handled + row.system_handled,
       ringing_calls: acc.ringing_calls + row.ringing_calls,
       handle_seconds: acc.handle_seconds + row.avg_handle_seconds * row.answered,
-      wait_seconds: acc.wait_seconds + row.avg_wait_seconds * row.ringing_calls,
+      speed_answer_seconds: acc.speed_answer_seconds + row.avg_wait_seconds * row.answered,
     }),
-    { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0, ringing_calls: 0, handle_seconds: 0, wait_seconds: 0 },
+    { total: 0, answered: 0, abandoned: 0, missed: 0, system_handled: 0, ringing_calls: 0, handle_seconds: 0, speed_answer_seconds: 0 },
   ), [periodRows]);
 
   const avgHandle = totals.answered > 0 ? totals.handle_seconds / totals.answered : 0;
-  const avgWait = totals.ringing_calls > 0 ? totals.wait_seconds / totals.ringing_calls : 0;
+  const avgSpeedAnswer = totals.answered > 0 ? totals.speed_answer_seconds / totals.answered : 0;
   const dateRange = periodRows.length
     ? `${formatPeriod(periodRows[0].period_start, interval)} – ${formatPeriod(periodRows[periodRows.length - 1].period_start, interval)}`
     : "";
@@ -285,12 +284,12 @@ export function ZoomCallMetricsWidget() {
 
         {queueRows.length > 0 && <Group gap="xl" wrap="wrap">
           <div>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Average Handle</Text>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Average Handle Time</Text>
             <Text size="lg" fw={700} ff="monospace">{formatSeconds(avgHandle)}</Text>
           </div>
           <div>
-            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Average Wait</Text>
-            <Text size="lg" fw={700} ff="monospace">{formatSeconds(avgWait)}</Text>
+            <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Average Speed of Answer</Text>
+            <Text size="lg" fw={700} ff="monospace">{formatSeconds(avgSpeedAnswer)}</Text>
           </div>
           <div>
             <Text size="xs" c="dimmed" tt="uppercase" fw={700}>Selected Queues</Text>
@@ -318,7 +317,7 @@ export function ZoomCallMetricsWidget() {
                     <Table.Th>Missed</Table.Th>
                     <Table.Th>Voicemail / Auto</Table.Th>
                     <Table.Th>Avg Handle</Table.Th>
-                    <Table.Th>Avg Wait</Table.Th>
+                    <Table.Th>Avg Speed of Answer</Table.Th>
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
