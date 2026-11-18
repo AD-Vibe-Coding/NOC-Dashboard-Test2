@@ -83,7 +83,7 @@ function metricValue(value: any): number {
   }
   if (Array.isArray(value)) return value.reduce((total, item) => total + metricValue(item), 0);
   const record = asRecord(value);
-  for (const key of ["value", "sum", "total", "count", "aggregationValue", "aggregateValue", "duration", "seconds", "values", "data", "results", "items"]) {
+  for (const key of ["value", "sum", "total", "count", "aggregationValue", "aggregateValue", "average", "avg", "mean", "averageValue", "avgValue", "duration", "seconds", "values", "data", "results", "items"]) {
     if (record[key] !== undefined) return metricValue(record[key]);
   }
   return 0;
