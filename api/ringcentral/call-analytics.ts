@@ -195,11 +195,14 @@ function rowQueueName(row: any) {
   return String(record.name ?? record.queueName ?? record.label ?? row?.queueName ?? row?.groupName ?? row?.name ?? "").trim();
 }
 
-function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
+function buildQueueMetrics(row: any, queueName: string, answeredOnly = false): QueueMetrics {
   const callsByResponse = metricByName(row, "callsByResponse");
   const callsByResult = metricByName(row, "callsByResult");
   const allCalls = metricValue(metricByName(row, "allCalls"));
-  const answered = categoryValue(callsByResponse, ["answered"]);
+  const answeredBreakdown = categoryValue(callsByResponse, ["answered"]);
+  // With callResponses=[Answered], some timeline responses omit the category breakdown;
+  // allCalls is then the count of answered calls in that filtered timeline.
+  const answered = answeredBreakdown || (answeredOnly ? allCalls : 0);
   const rawAbandoned = categoryValue(callsByResult, ["abandoned", "abandonedbycaller"]);
   const missed = categoryValue(callsByResult, ["missed", "noanswer"]);
   const systemHandled = categoryValue(callsByResult, ["voicemail"])
@@ -260,7 +263,7 @@ function metricRow(value: any) {
   return ["allCalls", "callsByResponse", "callsByResult", "callsSegments"].some((key) => metricByName(value, key) !== undefined);
 }
 
-function timelineMetrics(payload: any, interval: "week" | "month", queueById: Map<string, string>, requestedQueues: any[]) {
+function timelineMetrics(payload: any, interval: "week" | "month", queueById: Map<string, string>, requestedQueues: any[], answeredOnly = false) {
   const output: Array<QueueMetrics & { interval_type: string; period_start: string }> = [];
   const roots = [payload?.records, payload?.data?.records, payload?.data, payload?.results].filter(Boolean);
   const visited = new Set<any>();
@@ -277,7 +280,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
     const queueName = rowQueueName(value) || inheritedQueue || queueById.get(queueId) || "";
     const periodStart = periodDateFrom(value) || inheritedPeriod;
     if (metricRow(value) && queueName && periodStart) {
-      output.push({ ...buildQueueMetrics(value, queueName), interval_type: interval, period_start: periodStart });
+      output.push({ ...buildQueueMetrics(value, queueName, answeredOnly), interval_type: interval, period_start: periodStart });
     }
 
     // Timeline responses nest period values beneath queue groups in several
@@ -306,7 +309,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
     const known = new Set(output.map((row) => `${row.period_start}|${row.queue_name}`));
     for (const item of unnamed) {
       const name = getQueueName(requestedQueues[0]);
-      if (!known.has(`${item.period}|${name}`)) output.push({ ...buildQueueMetrics(item.value, name), interval_type: interval, period_start: item.period });
+      if (!known.has(`${item.period}|${name}`)) output.push({ ...buildQueueMetrics(item.value, name, answeredOnly), interval_type: interval, period_start: item.period });
     }
   }
   return [...new Map(output.map((row) => [`${row.period_start}|${row.queue_name}`, row])).values()];
@@ -543,8 +546,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ...timelineMetrics(monthlyTimeline, "month", queueNamesById, targetQueues),
     ];
     const answeredDurationRows = [
-      ...timelineMetrics(weeklyAnsweredTimeline, "week", queueNamesById, targetQueues),
-      ...timelineMetrics(monthlyAnsweredTimeline, "month", queueNamesById, targetQueues),
+      ...timelineMetrics(weeklyAnsweredTimeline, "week", queueNamesById, targetQueues, true),
+      ...timelineMetrics(monthlyAnsweredTimeline, "month", queueNamesById, targetQueues, true),
     ];
     const answeredDurationsByKey = new Map(
       answeredDurationRows.map((row) => [`${row.interval_type}|${row.period_start}|${row.queue_name}`, row]),
@@ -552,10 +555,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const syncedAt = new Date().toISOString();
     const newHistory = baseHistory.map((row) => {
       const durationRow = answeredDurationsByKey.get(`${row.interval_type}|${row.period_start}|${row.queue_name}`);
+      const hasAnsweredDuration = Boolean(durationRow && durationRow.answered > 0);
       return {
         ...row,
-        avg_handle_seconds: durationRow?.avg_handle_seconds ?? row.avg_handle_seconds,
-        avg_wait_seconds: durationRow?.avg_wait_seconds ?? row.avg_wait_seconds,
+        avg_handle_seconds: hasAnsweredDuration ? durationRow!.avg_handle_seconds : row.avg_handle_seconds,
+        avg_wait_seconds: hasAnsweredDuration ? durationRow!.avg_wait_seconds : row.avg_wait_seconds,
         synced_at: syncedAt,
       };
     });
