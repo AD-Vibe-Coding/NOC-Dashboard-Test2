@@ -187,9 +187,13 @@ function rowQueueName(row: any) {
 
 function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
   const callsByResponse = metricByName(row, "callsByResponse");
+  const callsByType = metricByName(row, "callsByType");
   const callsByResult = metricByName(row, "callsByResult");
   const allCalls = metricValue(metricByName(row, "allCalls"));
-  const answered = categoryValue(callsByResponse, ["answered"]);
+  const responseAnswered = categoryValue(callsByResponse, ["answered"]);
+  const queueAnswered = categoryValue(callsByType, ["fromQueue", "from queue"]);
+  const answered = queueAnswered || responseAnswered;
+  const notAnswered = categoryValue(callsByResponse, ["notanswered", "not answered"]);
   const rawAbandoned = categoryValue(callsByResult, ["abandoned", "abandonedbycaller"]);
   const missed = categoryValue(callsByResult, ["missed", "noanswer"]);
   const systemHandled = categoryValue(callsByResult, ["voicemail"])
@@ -207,10 +211,13 @@ function buildQueueMetrics(row: any, queueName: string): QueueMetrics {
     metricByName(row, "callsDurationByResponse"),
     ["answered", "answer", "connected"],
   );
+  const queueDurationSeconds = categoryValue(metricByName(row, "callsDurationByType"), ["fromQueue", "from queue"]);
   // The RingCentral Queue Report defines handle time as talk + hold.
-  // Prefer those segments and use the answered-call timer only as a fallback.
-  const handleDurationSeconds = talkSeconds + holdSeconds || answeredDurationSeconds;
-  const normalizedTotal = allCalls || resultTotal;
+  // Use queue-call duration before the broader answered-call timer when segment data is absent.
+  const handleDurationSeconds = talkSeconds + holdSeconds || queueDurationSeconds || answeredDurationSeconds;
+  // Queue grouping can omit calls from allCalls that are represented by queue-specific response metrics.
+  const queueTotal = queueAnswered > 0 && notAnswered > 0 ? queueAnswered + notAnswered : 0;
+  const normalizedTotal = queueTotal || allCalls || resultTotal;
   // Queue Report "Abandoned" includes every inbound call not answered by a user,
   // including voicemail/auto outcomes. Keep the narrower API result only as a
   // fallback when the response does not provide usable total/answered counts.
@@ -246,7 +253,7 @@ function periodDateFrom(value: any): string {
 }
 
 function metricRow(value: any) {
-  return ["allCalls", "callsByResponse", "callsByResult", "callsSegments"].some((key) => metricByName(value, key) !== undefined);
+  return ["allCalls", "callsByResponse", "callsByType", "callsByResult", "callsSegments"].some((key) => metricByName(value, key) !== undefined);
 }
 
 function timelineMetrics(payload: any, interval: "week" | "month", queueById: Map<string, string>, requestedQueues: any[]) {
@@ -272,7 +279,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
     // Timeline responses nest period values beneath queue groups in several
     // shapes; carry the queue and period dimensions down to each metric row.
     for (const [key, child] of Object.entries(value)) {
-      if (["counters", "timers", "metrics", "callsByResponse", "callsByResult", "callsSegments"].includes(key)) continue;
+      if (["counters", "timers", "metrics", "callsByResponse", "callsByType", "callsByResult", "callsSegments"].includes(key)) continue;
       const childPeriod = periodDateFrom(key) || periodStart;
       visit(child, queueName, childPeriod);
     }
@@ -288,7 +295,7 @@ function timelineMetrics(payload: any, interval: "week" | "month", queueById: Ma
       const ownPeriod = periodDateFrom(value) || period;
       if (metricRow(value) && ownPeriod && !rowQueueName(value)) unnamed.push({ value, period: ownPeriod });
       Object.entries(value).forEach(([key, child]) => {
-        if (!["counters", "timers", "metrics", "callsByResponse", "callsByResult", "callsSegments"].includes(key)) collect(child, periodDateFrom(key) || ownPeriod);
+        if (!["counters", "timers", "metrics", "callsByResponse", "callsByType", "callsByResult", "callsSegments"].includes(key)) collect(child, periodDateFrom(key) || ownPeriod);
       });
     };
     roots.forEach((root) => collect(root));
@@ -313,12 +320,14 @@ async function fetchTimeline(req: VercelRequest, res: VercelResponse, interval: 
       counters: {
         allCalls: true,
         callsByResponse: true,
+        callsByType: true,
         callsByResult: true,
         callsSegments: true,
       },
       timers: {
         callsSegmentsDuration: true,
         callsDurationByResponse: true,
+        callsDurationByType: true,
       },
     },
   };
@@ -467,12 +476,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         counters: {
           allCalls: { aggregationType: "Sum" },
           callsByResponse: { aggregationType: "Sum" },
+          callsByType: { aggregationType: "Sum" },
           callsByResult: { aggregationType: "Sum" },
           callsSegments: { aggregationType: "Sum" },
         },
         timers: {
           callsSegmentsDuration: { aggregationType: "Sum" },
           callsDurationByResponse: { aggregationType: "Sum" },
+          callsDurationByType: { aggregationType: "Sum" },
         },
       },
     };
