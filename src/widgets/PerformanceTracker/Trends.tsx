@@ -4,7 +4,9 @@ import {
   Box,
   Button,
   Card,
+  Checkbox,
   Group,
+  Popover,
   ScrollArea,
   SegmentedControl,
   Select,
@@ -42,7 +44,7 @@ import {
   SHIFT_LABELS,
 } from "./data";
 import { KPI_BY_KEY, KPI_DEFS, getKpiAnomaly, getKpiRanking, meetsTarget, type KpiDefinition, type KpiGroup, type KpiKey } from "./kpiConfig";
-import { LOCKED_TEAM_NAMES } from "./team";
+import { LOCKED_TEAM_NAMES, NON_PERSON_NAMES } from "./team";
 import { ActiveFilterChips } from "./FilterChips";
 import { RawDataModal } from "./RawDataModal";
 
@@ -54,7 +56,70 @@ interface Props {
   isManager?: boolean;
 }
 
+const PERFORMANCE_MEMBER_NAMES = LOCKED_TEAM_NAMES.filter((name) => !NON_PERSON_NAMES.has(name));
+
+function MemberSelectionControl({
+  selectedMembers,
+  onChange,
+}: {
+  selectedMembers: string[];
+  onChange: (members: string[]) => void;
+}) {
+  const allSelected = selectedMembers.length === PERFORMANCE_MEMBER_NAMES.length;
+  const buttonLabel = allSelected
+    ? `Whole team · ${PERFORMANCE_MEMBER_NAMES.length}`
+    : `${selectedMembers.length} of ${PERFORMANCE_MEMBER_NAMES.length} members`;
+
+  return (
+    <Popover position="bottom-end" shadow="md" width={290} withinPortal>
+      <Popover.Target>
+        <Button size="xs" variant="light" leftSection={<IconFilter size={13} />}>
+          {buttonLabel}
+        </Button>
+      </Popover.Target>
+      <Popover.Dropdown>
+        <Stack gap="xs">
+          <Group justify="space-between" align="center">
+            <Text size="sm" fw={600}>Included members</Text>
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              onClick={() => onChange([...PERFORMANCE_MEMBER_NAMES])}
+            >
+              Whole team
+            </Button>
+          </Group>
+          <Text size="xs" c="dimmed">Checked people contribute to each monthly trend.</Text>
+          <ScrollArea h={240} type="auto">
+            <Stack gap={6} py={4}>
+              {PERFORMANCE_MEMBER_NAMES.map((name) => {
+                const checked = selectedMembers.includes(name);
+                return (
+                  <Checkbox
+                    key={name}
+                    size="xs"
+                    label={name}
+                    checked={checked}
+                    disabled={checked && selectedMembers.length === 1}
+                    onChange={(event) => {
+                      const next = event.currentTarget.checked
+                        ? [...selectedMembers, name]
+                        : selectedMembers.filter((member) => member !== name);
+                      onChange(next);
+                    }}
+                  />
+                );
+              })}
+            </Stack>
+          </ScrollArea>
+        </Stack>
+      </Popover.Dropdown>
+    </Popover>
+  );
+}
+
 export function PerformanceTrends({ metrics, scopedMember, isManager = false }: Props) {
+  const [selectedTrendMembers, setSelectedTrendMembers] = useState<string[]>(PERFORMANCE_MEMBER_NAMES);
   const [queueFilter, setQueueFilter] = useState<Queue | "all">("all");
   const [excludeMaintenance, setExcludeMaintenance] = useState(true);
   const [dayFilter, setDayFilter] = useState<DayFilter>("all");
@@ -63,15 +128,25 @@ export function PerformanceTrends({ metrics, scopedMember, isManager = false }: 
   const [rawMetricKey, setRawMetricKey] = useState<KpiKey | null>(null);
   const [rawMonth, setRawMonth] = useState<string | null>(null);
 
-  const scopedMetrics = useMemo(() => {
-    if (!scopedMember) return metrics;
-    return metrics.filter((m) => m.member_name === scopedMember);
-  }, [metrics, scopedMember]);
+  const isWholeTeamSelection = !scopedMember && selectedTrendMembers.length === PERFORMANCE_MEMBER_NAMES.length;
+  const trendMemberNames = useMemo(() => {
+    if (scopedMember) return [scopedMember];
+    // Preserve existing team totals (including group/automation records) when
+    // every person is selected; subsets intentionally contain people only.
+    return isWholeTeamSelection ? LOCKED_TEAM_NAMES : selectedTrendMembers;
+  }, [scopedMember, isWholeTeamSelection, selectedTrendMembers]);
 
-  const aggregateNames = useMemo(
-    () => (scopedMember ? [scopedMember] : LOCKED_TEAM_NAMES),
-    [scopedMember],
+  const scopedMetrics = useMemo(
+    () => metrics.filter((metric) => trendMemberNames.includes(metric.member_name)),
+    [metrics, trendMemberNames],
   );
+
+  const aggregateNames = trendMemberNames;
+  const scopeLabel = scopedMember
+    ?? (isWholeTeamSelection ? "Whole team" : `${selectedTrendMembers.length} selected members`);
+  const memberSelection = isManager && !scopedMember ? (
+    <MemberSelectionControl selectedMembers={selectedTrendMembers} onChange={setSelectedTrendMembers} />
+  ) : null;
 
   const months = useMemo(() => {
     const periods = listAvailablePeriods(scopedMetrics);
@@ -139,13 +214,28 @@ export function PerformanceTrends({ metrics, scopedMember, isManager = false }: 
   }, [isManager, scopedMember, metrics, baseOptions]);
 
   if (metrics.length === 0) {
-    return <EmptyState text="No data yet — import a workbook on the Import tab to see trends." />;
+    return (
+      <Stack gap="md">
+        {memberSelection}
+        <EmptyState text="No data yet — import a workbook on the Import tab to see trends." />
+      </Stack>
+    );
   }
   if (scopedMetrics.length === 0) {
-    return <EmptyState text={scopedMember ? `No imported rows are attributed to ${scopedMember} yet.` : "No data yet."} />;
+    return (
+      <Stack gap="md">
+        {memberSelection}
+        <EmptyState text={scopedMember ? `No imported rows are attributed to ${scopedMember} yet.` : `No imported rows are attributed to the selected members yet.`} />
+      </Stack>
+    );
   }
   if (months.length === 0) {
-    return <EmptyState text={scopedMember ? `${scopedMember}'s rows have no extractable month yet.` : "No month data extracted from the imported rows yet."} />;
+    return (
+      <Stack gap="md">
+        {memberSelection}
+        <EmptyState text={scopedMember ? `${scopedMember}'s rows have no extractable month yet.` : "No month data extracted from the selected members' rows yet."} />
+      </Stack>
+    );
   }
 
   const showGroup = (group: KpiGroup) => KPI_DEFS.some((def) => def.group === group && months.some((month) => cells[def.key][month]?.numeric != null));
@@ -162,14 +252,14 @@ export function PerformanceTrends({ metrics, scopedMember, isManager = false }: 
               <Box>
                 <Title order={5} style={{ lineHeight: 1.2 }}>
                   Month-over-Month Trends
-                  {scopedMember && (
+                  {(scopedMember || !isWholeTeamSelection) && (
                     <Text component="span" size="sm" c="blue.4" fw={500} ml={6}>
-                      · {scopedMember}
+                      · {scopeLabel}
                     </Text>
                   )}
                 </Title>
                 <Text size="xs" c="dimmed">
-                  {months.length} month{months.length === 1 ? "" : "s"} of data · {scopedMember ? "individual metrics" : "team-wide aggregates"}
+                  {months.length} month{months.length === 1 ? "" : "s"} of data · {scopedMember ? "individual metrics" : isWholeTeamSelection ? "team-wide aggregates" : "selected-member aggregate"}
                 </Text>
               </Box>
             </Group>
@@ -196,11 +286,12 @@ export function PerformanceTrends({ metrics, scopedMember, isManager = false }: 
                 <ThemeIcon variant="light" color="gray" radius="md" size="sm"><IconClock size={12} /></ThemeIcon>
                 <Select size="xs" w={190} value={shiftFilter} onChange={(v) => setShiftFilter((v ?? "all") as ShiftFilter)} data={[{ value: "all", label: SHIFT_LABELS.all }, { value: "early", label: SHIFT_LABELS.early }, { value: "mid", label: SHIFT_LABELS.mid }, { value: "late", label: SHIFT_LABELS.late }]} allowDeselect={false} comboboxProps={{ withinPortal: true }} styles={{ input: { fontSize: 11, fontWeight: 600 } }} />
               </Group>
+              {memberSelection}
             </Group>
           </Group>
-          <ActiveFilterChips options={baseOptions} rowCount={scopedMetrics.length} scopeLabel={scopedMember ?? "Whole team"} />
+          <ActiveFilterChips options={baseOptions} rowCount={scopedMetrics.length} scopeLabel={scopeLabel} />
           <Group gap="xs" wrap="wrap">
-            <Badge variant="outline" color="grape">Scope source: {scopedMember ? (isManager ? "Manager drill-down" : "Self view") : "Team aggregate"}</Badge>
+            <Badge variant="outline" color="grape">Scope source: {scopedMember ? (isManager ? "Manager drill-down" : "Self view") : isWholeTeamSelection ? "Team aggregate" : "Selected-member aggregate"}</Badge>
             <Badge variant="light" color="gray">Active days: {workload.activeDays}</Badge>
             <Badge variant="light" color="gray">Weekend load: {workload.weekendDays}</Badge>
             <Badge variant="light" color="gray">Shifts covered: {workload.shiftsCovered.length || 0}</Badge>
