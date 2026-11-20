@@ -1,0 +1,57 @@
+import { integer, pgTable, real, serial, text, timestamp } from "drizzle-orm/pg-core";
+
+export const performance_imports = pgTable("performance_imports", {
+  id: serial("id").primaryKey(),
+  file_name: text("file_name").notNull(),
+  imported_by: text("imported_by"),
+  source_type: text("source_type"),
+  sheet_name: text("sheet_name"),
+  row_count: integer("row_count").notNull(),
+  matched_count: integer("matched_count").notNull(),
+  skipped_count: integer("skipped_count").notNull(),
+  period_label: text("period_label"),
+  period_start: text("period_start"),
+  period_end: text("period_end"),
+  notes: text("notes"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const performance_metrics = pgTable("performance_metrics", {
+  id: serial("id").primaryKey(),
+  import_id: integer("import_id").notNull(),
+  member_name: text("member_name").notNull(),
+  source_type: text("source_type"),
+  total_count: integer("total_count"),
+  success_count: integer("success_count"),
+  duration_minutes: real("duration_minutes"),
+  score: text("score"),
+  period_start: text("period_start"),
+  period_end: text("period_end"),
+  queue: text("queue"),
+  period_month: text("period_month"),
+  period_quarter: text("period_quarter"),
+  ack_minutes: real("ack_minutes"),
+  carrier_ticket_minutes: real("carrier_ticket_minutes"),
+  handle_seconds: real("handle_seconds"),
+  wait_seconds: real("wait_seconds"),
+  raw_json: text("raw_json").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const metric_disputes = pgTable("metric_disputes", {
+  id: serial("id").primaryKey(),
+  metric_id: integer("metric_id").notNull(),
+  ticket_ref: text("ticket_ref"),
+  submitted_by: text("submitted_by").notNull(),
+  field_name: text("field_name").notNull(),
+  original_value: real("original_value"),
+  proposed_value: real("proposed_value"),
+  reason: text("reason").notNull(),
+  evidence_note: text("evidence_note"),
+  attachments_json: text("attachments_json"),
+  status: text("status").notNull(),
+  reviewed_by: text("reviewed_by"),
+  review_note: text("review_note"),
+  reviewed_at: text("reviewed_at"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
