@@ -44,6 +44,16 @@ const QUICK_STATUS_TYPES = [
   { value: "Meeting - External", label: "Meeting - External" },
 ];
 
+function uniqueTeamNames(names: string[]) {
+  const unique = new Map<string, string>();
+  for (const name of names) {
+    const canonical = resolveTeamMember(name) ?? name;
+    const key = canonical.trim().toLowerCase();
+    if (key && !unique.has(key)) unique.set(key, canonical);
+  }
+  return [...unique.values()];
+}
+
 export function ZoomQueueTile({ onExpand }: Props) {
   const { data, refresh: refreshQueueData } = useTeamAvailability();
   const { active, history, refresh } = useBreakData();
@@ -62,10 +72,20 @@ export function ZoomQueueTile({ onExpand }: Props) {
   const [queueNotice, setQueueNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
   const [automationNotice, setAutomationNotice] = useState<{ kind: "success" | "error"; message: string } | null>(null);
 
-  const inQueue = data?.totals.in_queue ?? 0;
-  const notInQueue = data?.totals.not_in_queue ?? 0;
-  const total = inQueue + notInQueue;
-  const inShift = rosterData?.inShiftNow?.length ?? total;
+  const inShiftNames = uniqueTeamNames(rosterData?.inShiftNow ?? []);
+  const queueMemberNames = uniqueTeamNames((data?.agents ?? []).map((agent) => agent.display_name));
+  const inQueueMemberNames = uniqueTeamNames(
+    (data?.agents ?? []).filter((agent) => agent.status === "in_queue").map((agent) => agent.display_name),
+  );
+  const inShiftKeys = new Set(inShiftNames.map((name) => name.trim().toLowerCase()));
+  const fallbackTotal = (data?.totals.in_queue ?? 0) + (data?.totals.not_in_queue ?? 0);
+  const total = queueMemberNames.length || fallbackTotal;
+  const inQueue = data?.agents?.length
+    ? rosterData
+      ? inQueueMemberNames.filter((name) => inShiftKeys.has(name.trim().toLowerCase())).length
+      : inQueueMemberNames.length
+    : data?.totals.in_queue ?? 0;
+  const inShift = rosterData ? inShiftNames.length : total;
   const outOfQueueInShift = Math.max(inShift - inQueue, 0);
 
   const normalizedEmail = identity?.email?.toLowerCase().trim() ?? "";
@@ -125,20 +145,19 @@ export function ZoomQueueTile({ onExpand }: Props) {
   }, [active]);
   const shiftMembers = rosterData?.inShiftNow ?? [];
   const queueAgents = data?.agents ?? [];
-  const inQueueNames = queueAgents
+  const inQueueNames = uniqueTeamNames(queueAgents
     .filter((agent) => agent.status === "in_queue")
     .filter((agent) => !rosterData || shiftMembers.some((name) => samePerson(name, agent.display_name)))
     .filter((agent) => !onBreakMembers.some((member) => samePerson(member.name, agent.display_name)))
-    .map((agent) => resolveTeamMember(agent.display_name) ?? agent.display_name);
-  const notInQueueNames = rosterData
+    .map((agent) => agent.display_name));
+  const notInQueueNames = uniqueTeamNames(rosterData
     ? shiftMembers
         .filter((name) => !queueAgents.some((agent) => agent.status === "in_queue" && samePerson(name, agent.display_name)))
         .filter((name) => !onBreakMembers.some((member) => samePerson(member.name, name)))
-        .map((name) => resolveTeamMember(name) ?? name)
     : queueAgents
         .filter((agent) => agent.status === "not_in_queue")
         .filter((agent) => !onBreakMembers.some((member) => samePerson(member.name, agent.display_name)))
-        .map((agent) => resolveTeamMember(agent.display_name) ?? agent.display_name);
+        .map((agent) => agent.display_name));
   const rosterGroups = [
     { title: "In shift + in queue", color: "green", names: inQueueNames },
     { title: "In shift + not in queue", color: "gray", names: notInQueueNames },
