@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
+import { getSession } from "../_lib/auth-middleware.js";
 import { loadSession } from "../auth/_lib/session.js";
 import { lookupByEmail } from "../_lib/roles.js";
 
@@ -14,12 +15,14 @@ function bodyOf(req: VercelRequest): Record<string, unknown> {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    // Use the same encrypted, iframe-partitioned session as /api/auth/me.
-    // The legacy auth-middleware only reads `noc_session`, so it rejects
-    // valid Google SSO sessions (`SESSION_COOKIE`) in the current app.
+    // Google SSO uses the encrypted iframe-partitioned cookie; dev sign-in
+    // still uses the signed legacy noc_session cookie. Accept either verified
+    // session, but always derive authorization from the server-side roster.
     const session = await loadSession(req);
-    const member = session?.email ? lookupByEmail(String(session.email).toLowerCase()) : null;
-    if (!session || member?.role !== "manager") {
+    const legacySession = session ? null : getSession(req);
+    const sessionEmail = session?.email ?? legacySession?.email;
+    const member = sessionEmail ? lookupByEmail(String(sessionEmail).toLowerCase()) : null;
+    if ((!session && !legacySession) || member?.role !== "manager") {
       return res.status(403).json({
         error: "Manager access required.",
         hint: "Sign in with a manager account to use this feature.",
