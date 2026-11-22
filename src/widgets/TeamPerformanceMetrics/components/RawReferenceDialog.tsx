@@ -292,7 +292,11 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </>
             ) : selectedMonths.length > 0 ? (
               <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-                No rows for the selected month or months.
+                {!Array.isArray(upload?.rawRows)
+                  ? "This saved workbook predates raw-row capture. The original workbook is not retained, so re-upload it to view source rows."
+                  : upload.rawRows.length === 0
+                    ? "No individual source rows were captured in this snapshot. Re-upload the workbook to rebuild the raw-row reference."
+                    : "No rows for this individual in the selected month or months."}
               </p>
             ) : null}
           </div>
