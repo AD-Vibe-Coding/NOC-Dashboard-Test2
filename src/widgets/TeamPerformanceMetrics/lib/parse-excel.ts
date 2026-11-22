@@ -64,6 +64,8 @@ export type MonthPatterns = {
 };
 
 export type UploadResult = {
+  /** Database id used to fetch separately persisted source rows. */
+  uploadId?: number;
   kind: UploadKind;
   filename: string;
   rows: number;

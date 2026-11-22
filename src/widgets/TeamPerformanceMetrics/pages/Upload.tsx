@@ -7,6 +7,27 @@ import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
 import { Badge } from "@/widgets/TeamPerformanceMetrics/components/ui/badge";
 import { BlurFade } from "@/widgets/TeamPerformanceMetrics/components/ui/blur-fade";
 
+type RawRow = NonNullable<UploadResult["rawRows"]>[number];
+
+function batchRawRows(rows: RawRow[]) {
+  const batches: RawRow[][] = [];
+  let current: RawRow[] = [];
+  let currentBytes = 2;
+  const encoder = new TextEncoder();
+  for (const row of rows) {
+    const rowBytes = encoder.encode(JSON.stringify(row)).byteLength + 1;
+    if (current.length && (current.length >= 250 || currentBytes + rowBytes > 1_200_000)) {
+      batches.push(current);
+      current = [];
+      currentBytes = 2;
+    }
+    current.push(row);
+    currentBytes += rowBytes;
+  }
+  if (current.length) batches.push(current);
+  return batches;
+}
+
 const ZONES: {
   kind: UploadKind;
   title: string;
@@ -98,6 +119,8 @@ export default function Upload() {
         return;
       }
 
+      const rawRows = result.rawRows ?? [];
+      const { rawRows: _rawRows, ...compactResult } = result;
       const response = await fetch("/api/team-performance/uploads", {
         method: "POST",
         credentials: "include",
@@ -106,14 +129,40 @@ export default function Upload() {
           kind,
           filename: file.name,
           file_size_bytes: file.size,
-          parsed_data: result,
+          parsed_data: compactResult,
         }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(String(payload?.error ?? `Could not save dashboard data (${response.status}).`));
+      const uploadId = Number(payload?.upload?.id);
+      if (!Number.isSafeInteger(uploadId) || uploadId <= 0) {
+        throw new Error("The upload was saved but did not return an upload id for raw-row storage.");
+      }
 
-      applyUpload(result);
-      setLast(result);
+      const rawRowsEndpoint = `/api/team-performance/uploads/${uploadId}/raw-rows`;
+      try {
+        for (const batch of batchRawRows(rawRows)) {
+          const rawResponse = await fetch(rawRowsEndpoint, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rows: batch }),
+          });
+          const rawPayload = await rawResponse.json().catch(() => null);
+          if (!rawResponse.ok) {
+            throw new Error(String(rawPayload?.error ?? `Could not save raw-row batch (${rawResponse.status}).`));
+          }
+        }
+      } catch (rawError) {
+        const cleanup = await fetch(rawRowsEndpoint, { method: "DELETE", credentials: "include" }).catch(() => null);
+        const detail = rawError instanceof Error ? rawError.message : "Could not save raw-row references.";
+        if (!cleanup?.ok) throw new Error(`${detail} The dashboard snapshot may remain incomplete; re-upload after resolving the storage issue.`);
+        throw new Error(detail);
+      }
+
+      const savedResult = { ...compactResult, uploadId };
+      applyUpload(savedResult);
+      setLast(compactResult);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not read or save that workbook");
     } finally {
@@ -128,7 +177,7 @@ export default function Upload() {
           <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Ingest</p>
           <h1 className="font-display mt-1 text-3xl md:text-4xl">Upload Excel</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Workbooks are parsed in your browser; only the compact dashboard data is saved in Supabase. The latest snapshot in each category restores automatically for managers. The original workbook is not retained.
+            Workbooks are parsed in your browser; compact dashboard summaries and selected-column raw-row references are saved separately in Supabase. The latest snapshot in each category restores automatically for managers. The original workbook is not retained.
           </p>
         </div>
       </BlurFade>

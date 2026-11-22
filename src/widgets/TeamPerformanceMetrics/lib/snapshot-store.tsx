@@ -23,6 +23,7 @@ async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
 
   const payload = await response.json();
   const saved = payload?.upload as {
+    id?: number | string;
     filename?: string;
     parsed_data?: string | UploadResult | null;
     data_url?: string | null;
@@ -36,7 +37,8 @@ async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
     if (result.kind !== kind || result.filename !== saved.filename || !Array.isArray(result.months)) {
       throw new Error(`Saved ${kind} dashboard data is invalid.`);
     }
-    return result;
+    const uploadId = Number(saved.id);
+    return Number.isSafeInteger(uploadId) && uploadId > 0 ? { ...result, uploadId } : result;
   }
 
   // Compatibility for rows uploaded before persistence switched to parsed data.
@@ -45,7 +47,8 @@ async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
   if (!fileResponse.ok) throw new Error(`Could not read saved ${kind} workbook.`);
   const result = parseWorkbook(kind, saved.filename, await fileResponse.arrayBuffer());
   if (!result.used) throw new Error(`Saved ${kind} workbook has no usable rows.`);
-  return result;
+  const uploadId = Number(saved.id);
+  return Number.isSafeInteger(uploadId) && uploadId > 0 ? { ...result, uploadId } : result;
 }
 
 export function SnapshotProvider({ children }: { children: ReactNode }) {

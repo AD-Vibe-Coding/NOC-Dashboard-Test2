@@ -67,10 +67,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: "Parsed data does not match the selected workbook." });
       }
 
-      const parsedData = JSON.stringify(snapshot);
+      // Defensive strip: raw source rows are stored in the dedicated table, never
+      // in parsed_data (which remains capped at 4 MiB for dashboard summaries).
+      const { rawRows: _rawRows, ...compactSnapshot } = snapshot;
+      const parsedData = JSON.stringify(compactSnapshot);
       const parsedBytes = Buffer.byteLength(parsedData, "utf8");
       if (parsedBytes > MAX_PARSED_BYTES) {
-        return res.status(413).json({ error: "The parsed dashboard data is too large to save (maximum 4 MiB)." });
+        return res.status(413).json({ error: "The compact dashboard summary is too large to save (maximum 4 MiB)." });
+      }
+
+      // Fail before creating a visible snapshot if the separate raw-row table
+      // has not yet been installed through the Supabase schema push flow.
+      const { error: rawTableError } = await supabaseAdmin
+        .from("team_performance_raw_rows")
+        .select("id")
+        .limit(0);
+      if (rawTableError) {
+        return res.status(503).json({ error: "Raw-row storage is not ready. Push the Supabase schema, then retry the upload." });
       }
 
       const { data, error } = await supabaseAdmin
@@ -79,7 +92,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           kind,
           filename,
           file_size_bytes: sourceFileBytes,
-          parsed_data: snapshot,
+          parsed_data: compactSnapshot,
           uploaded_by: member.name,
         })
         .select("id,kind,filename,file_size_bytes,uploaded_by,created_at")

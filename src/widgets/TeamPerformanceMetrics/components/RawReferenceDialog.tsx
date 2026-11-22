@@ -39,7 +39,10 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [memberRows, setMemberRows] = useState<RawReferenceRow[]>([]);
+  const [totalRows, setTotalRows] = useState(0);
   const [loadingRows, setLoadingRows] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [serverPaged, setServerPaged] = useState(false);
   const [page, setPage] = useState(0);
   const pageSize = 100;
   const dialogRef = useRef<HTMLDialogElement>(null);
@@ -62,50 +65,101 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   useEffect(() => {
     if (!open || selectedSet.size === 0) {
       setMemberRows([]);
+      setTotalRows(0);
       setLoadingRows(false);
+      setLoadError(null);
+      setServerPaged(false);
       return;
     }
 
-    setLoadingRows(true);
-    const sourceRows = upload?.rawRows ?? [];
-    const matchingRows: RawReferenceRow[] = [];
-    let cursor = 0;
-    let timer = 0;
     let cancelled = false;
+    let timer = 0;
+    const sourceRows = upload?.rawRows ?? [];
+    setLoadingRows(true);
+    setLoadError(null);
+    setMemberRows([]);
 
-    const processChunk = () => {
-      const end = Math.min(cursor + 1000, sourceRows.length);
-      for (; cursor < end; cursor += 1) {
-        const row = sourceRows[cursor];
-        if (row.memberName === member && selectedSet.has(row.monthKey)) matchingRows.push(row);
+    const loadLocally = () => {
+      const matchingRows: RawReferenceRow[] = [];
+      let cursor = 0;
+      const processChunk = () => {
+        const end = Math.min(cursor + 1000, sourceRows.length);
+        for (; cursor < end; cursor += 1) {
+          const row = sourceRows[cursor];
+          if (row.memberName === member && selectedSet.has(row.monthKey)) matchingRows.push(row);
+        }
+        if (cursor < sourceRows.length) {
+          timer = window.setTimeout(processChunk, 0);
+        } else if (!cancelled) {
+          const direction = sortDirection === "asc" ? 1 : -1;
+          matchingRows.sort((a, b) => (a.monthKey.localeCompare(b.monthKey) || a.sourceRow - b.sourceRow) * direction);
+          setMemberRows(matchingRows);
+          setTotalRows(matchingRows.length);
+          setServerPaged(false);
+          setLoadingRows(false);
+        }
+      };
+      timer = window.setTimeout(processChunk, 0);
+    };
+
+    const load = async () => {
+      if (!upload?.uploadId) {
+        loadLocally();
+        return;
       }
-      if (cursor < sourceRows.length) {
-        timer = window.setTimeout(processChunk, 0);
-      } else if (!cancelled) {
-        setMemberRows(matchingRows);
-        setLoadingRows(false);
+      try {
+        const params = new URLSearchParams({
+          member,
+          months: selectedMonths.join(","),
+          page: String(page),
+          limit: String(pageSize),
+          direction: sortDirection,
+        });
+        const response = await fetch(`/api/team-performance/uploads/${upload.uploadId}/raw-rows?${params}`, { credentials: "include" });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) throw new Error(String(payload?.error ?? `Could not load raw rows (${response.status}).`));
+        const rows = Array.isArray(payload?.rows) ? payload.rows as RawReferenceRow[] : [];
+        const total = Number(payload?.total) || 0;
+        if (total === 0 && sourceRows.length > 0) {
+          loadLocally();
+          return;
+        }
+        if (!cancelled) {
+          setMemberRows(rows);
+          setTotalRows(total);
+          setServerPaged(true);
+          setLoadingRows(false);
+        }
+      } catch (error) {
+        if (sourceRows.length > 0) {
+          loadLocally();
+        } else if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : "Could not load raw rows.");
+          setLoadingRows(false);
+        }
       }
     };
 
-    timer = window.setTimeout(processChunk, 20);
+    void load();
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [member, open, selectedSet, upload]);
+  }, [member, open, page, selectedMonths, selectedSet, sortDirection, upload?.rawRows, upload?.uploadId]);
 
   const visibleRows = useMemo(() => {
     if (loadingRows || selectedSet.size === 0) return [];
+    if (serverPaged) return memberRows;
     return [...memberRows].sort((a, b) => {
       const monthOrder = a.monthKey.localeCompare(b.monthKey);
       const rowOrder = a.sourceRow - b.sourceRow;
       return (monthOrder || rowOrder) * (sortDirection === "asc" ? 1 : -1);
     });
-  }, [loadingRows, memberRows, selectedSet, sortDirection]);
-  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  }, [loadingRows, memberRows, selectedSet, serverPaged, sortDirection]);
+  const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
   const pageRows = useMemo(
-    () => visibleRows.slice(page * pageSize, (page + 1) * pageSize),
-    [page, pageSize, visibleRows],
+    () => serverPaged ? visibleRows : visibleRows.slice(page * pageSize, (page + 1) * pageSize),
+    [page, pageSize, serverPaged, visibleRows],
   );
   const visibleColumns = useMemo(() => {
     const headers = upload?.rawHeaders ?? [];
@@ -116,22 +170,24 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
         index,
       }));
     }
-    return headers
-      .map((header, index) => ({ header, index }))
-      .filter(({ index }) => visibleRows.some((row) => row.cells[String(index)] !== undefined));
-  }, [upload?.kind, upload?.rawHeaders, visibleRows]);
+    return headers.map((header, index) => ({ header, index }));
+  }, [upload?.kind, upload?.rawHeaders]);
 
   function handleOpenChange(nextOpen: boolean) {
     setOpen(nextOpen);
     setMemberRows([]);
+    setTotalRows(0);
     setSelectedMonths([]);
     setLoadingRows(false);
+    setLoadError(null);
     setPage(0);
   }
 
   function selectMonths(months: string[]) {
     setSelectedMonths(months);
     setMemberRows([]);
+    setTotalRows(0);
+    setLoadError(null);
     setLoadingRows(months.length > 0);
     setPage(0);
   }
@@ -229,7 +285,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
           <div className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t pt-3">
               <p className="text-sm text-muted-foreground" aria-live="polite">
-                {selectedMonths.length ? `${visibleRows.length} source row${visibleRows.length === 1 ? "" : "s"}` : "Select one or more months to show source rows."}
+                {selectedMonths.length ? `${totalRows} source row${totalRows === 1 ? "" : "s"}` : "Select one or more months to show source rows."}
               </p>
               <Button
                 type="button"
@@ -247,6 +303,10 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
             {loadingRows ? (
               <p role="status" className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
                 Preparing the selected individual’s source rows…
+              </p>
+            ) : loadError ? (
+              <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 p-8 text-center text-sm text-destructive">
+                {loadError}. If the raw-row table was just added, push the Supabase schema first.
               </p>
             ) : selectedMonths.length > 0 && visibleRows.length > 0 ? (
               <>
@@ -292,11 +352,13 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </>
             ) : selectedMonths.length > 0 ? (
               <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-                {!Array.isArray(upload?.rawRows)
-                  ? "This saved workbook predates raw-row capture. The original workbook is not retained, so re-upload it to view source rows."
-                  : upload.rawRows.length === 0
-                    ? "No individual source rows were captured in this snapshot. Re-upload the workbook to rebuild the raw-row reference."
-                    : "No rows for this individual in the selected month or months."}
+                {upload?.uploadId
+                  ? "No saved raw rows match this individual and the selected month or months. If this snapshot predates raw-row storage, re-upload the workbook to rebuild the reference."
+                  : !Array.isArray(upload?.rawRows)
+                    ? "This saved workbook has no raw-row reference. Re-upload it after raw-row storage is enabled."
+                    : upload.rawRows.length === 0
+                      ? "No individual source rows were captured in this snapshot. Re-upload the workbook to rebuild the raw-row reference."
+                      : "No rows for this individual in the selected month or months."}
               </p>
             ) : null}
           </div>
