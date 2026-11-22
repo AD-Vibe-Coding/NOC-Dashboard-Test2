@@ -572,7 +572,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
   })();
 
   const dataRows = matrix.slice(1);
-  // Inbound call exports use T for month, H for agent, P for call outcome, and V for ASA.
+  // Inbound call exports use T for month, H for agent, P for call outcome, and R for ASA.
   // Keep support for the older direction/ASA/refused layout when these markers are absent.
   const inboundCallLayout =
     kind === "calls" &&
@@ -805,7 +805,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       if (!isAnswered && status !== "refused") return;
 
       const owner = String(grid[7] ?? "").trim() || cell(row, "individual name", "agent name", "agent", "owner", "name");
-      const asaSec = isAnswered ? asaMmSsToSeconds(grid[21]) : null;
+      const asaSec = isAnswered ? asaMmSsToSeconds(grid[17]) : null;
       used += 1;
       acc.used += 1;
       total.used += 1;
