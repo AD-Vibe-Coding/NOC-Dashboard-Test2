@@ -39,7 +39,9 @@ import { type Attachment } from "./DisputeForm";
 
 interface Dispute {
   id: number;
-  metric_id: number;
+  metric_id: number | null;
+  raw_row_id?: number | null;
+  source_context?: string | null;
   ticket_ref: string | null;
   submitted_by: string;
   field_name: string;
@@ -92,6 +94,20 @@ function relativeTime(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   return `${days}d ago`;
+}
+
+function rawSourceSummary(sourceContext: string | null | undefined): string | null {
+  if (!sourceContext) return null;
+  try {
+    const context = JSON.parse(sourceContext) as Record<string, unknown>;
+    if (context.source !== "team_performance_raw_rows") return null;
+    const parts = [context.memberName, context.monthLabel, context.filename]
+      .filter((part): part is string => typeof part === "string" && part.length > 0);
+    if (typeof context.sourceRow === "number") parts.push(`Excel row ${context.sourceRow}`);
+    return parts.join(" · ") || "Team Performance raw row";
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +310,11 @@ function DisputeCard({
             {relativeTime(dispute.created_at)}
           </Text>
         </Group>
+        {rawSourceSummary(dispute.source_context) && (
+          <Text size="xs" c="dimmed">
+            {rawSourceSummary(dispute.source_context)}
+          </Text>
+        )}
 
         {/* Value change */}
         <Group gap="sm" wrap="nowrap">

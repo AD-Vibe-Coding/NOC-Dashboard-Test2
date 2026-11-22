@@ -84,7 +84,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const from = page * limit;
       const { data, count, error } = await supabaseAdmin
         .from("team_performance_raw_rows")
-        .select("member_name,month_key,month_label,source_row,cells", { count: "exact" })
+        .select("id,member_name,month_key,month_label,source_row,cells", { count: "exact" })
         .eq("upload_id", uploadId)
         .eq("member_name", member)
         .in("month_key", months)
@@ -94,8 +94,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .range(from, from + limit - 1);
       if (error) return res.status(500).json({ error: error.message });
 
+      const rawRowIds = (data ?? []).map((row) => row.id);
+      const disputesByRawRow = new Map<number, { id: number; field_name: string; status: string; review_note: string | null }[]>();
+      if (rawRowIds.length) {
+        const { data: disputes, error: disputesError } = await supabaseAdmin
+          .from("metric_disputes")
+          .select("id,raw_row_id,field_name,status,review_note,created_at")
+          .in("raw_row_id", rawRowIds)
+          .order("created_at", { ascending: false });
+        if (!disputesError) {
+          for (const dispute of disputes ?? []) {
+            if (dispute.raw_row_id == null) continue;
+            const forRow = disputesByRawRow.get(dispute.raw_row_id) ?? [];
+            if (forRow.some((existing) => existing.field_name === dispute.field_name)) continue;
+            forRow.push({
+              id: dispute.id,
+              field_name: dispute.field_name,
+              status: dispute.status,
+              review_note: dispute.review_note,
+            });
+            disputesByRawRow.set(dispute.raw_row_id, forRow);
+          }
+        }
+      }
+
       return res.status(200).json({
         rows: (data ?? []).map((row) => ({
+          id: row.id,
+          disputes: disputesByRawRow.get(row.id) ?? [],
           memberName: row.member_name,
           monthKey: row.month_key,
           monthLabel: row.month_label,

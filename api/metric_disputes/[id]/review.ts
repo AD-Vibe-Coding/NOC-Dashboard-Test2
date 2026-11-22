@@ -69,27 +69,66 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(500).json({ error: updateErr.message });
     }
 
-    // 3. If approved, overwrite the performance_metrics field
+    // 3. If approved, overwrite the legacy metric or the source workbook cell.
     if (action === "approve") {
-      const field = dispute.field_name; // "ack_minutes" | "carrier_ticket_minutes"
-      const { error: metricErr } = await supabaseAdmin
-        .from("performance_metrics")
-        .update({ [field]: dispute.proposed_value })
-        .eq("id", dispute.metric_id);
+      let overwriteError: string | null = null;
+      if (dispute.raw_row_id != null) {
+        const columnIndex = dispute.field_name === "carrier_ticket_minutes"
+          ? 32
+          : dispute.field_name === "ack_minutes"
+            ? 39
+            : null;
+        const proposed = Number(dispute.proposed_value);
+        if (columnIndex == null || !Number.isFinite(proposed) || proposed < 0) {
+          overwriteError = "Raw-row disputes require a valid ticket-time field and proposed value.";
+        } else {
+          const { data: rawRow, error: rawRowError } = await supabaseAdmin
+            .from("team_performance_raw_rows")
+            .select("cells")
+            .eq("id", dispute.raw_row_id)
+            .maybeSingle();
+          if (rawRowError || !rawRow) {
+            overwriteError = rawRowError?.message ?? "The source workbook row no longer exists.";
+          } else {
+            // The source parser treats numeric values below one as Excel day fractions.
+            // Store sub-minute corrections as mm:ss strings to preserve their meaning.
+            const totalSeconds = Math.round(proposed * 60);
+            const valueToStore = proposed > 0 && proposed < 1
+              ? `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`
+              : proposed;
+            const cells = rawRow.cells && typeof rawRow.cells === "object" && !Array.isArray(rawRow.cells)
+              ? rawRow.cells as Record<string, unknown>
+              : {};
+            const { error: rawUpdateError } = await supabaseAdmin
+              .from("team_performance_raw_rows")
+              .update({ cells: { ...cells, [String(columnIndex)]: valueToStore } })
+              .eq("id", dispute.raw_row_id);
+            if (rawUpdateError) overwriteError = rawUpdateError.message;
+          }
+        }
+      } else if (dispute.metric_id != null) {
+        const field = dispute.field_name;
+        if (field !== "ack_minutes" && field !== "carrier_ticket_minutes") {
+          overwriteError = "Unsupported metric dispute field.";
+        } else {
+          const { error: metricErr } = await supabaseAdmin
+            .from("performance_metrics")
+            .update({ [field]: dispute.proposed_value })
+            .eq("id", dispute.metric_id);
+          if (metricErr) overwriteError = metricErr.message;
+          else invalidateMetricsCache();
+        }
+      } else {
+        overwriteError = "This dispute has no linked metric or raw source row.";
+      }
 
-      if (metricErr) {
-        // Roll back the dispute status if the metric update fails
+      if (overwriteError) {
         await supabaseAdmin
           .from("metric_disputes")
           .update({ status: "pending", reviewed_by: null, review_note: null, reviewed_at: null })
           .eq("id", id);
-        return res.status(500).json({
-          error: `Dispute approved but metric update failed: ${metricErr.message}`,
-        });
+        return res.status(500).json({ error: `Dispute approved but source update failed: ${overwriteError}` });
       }
-
-      // Invalidate the hydrated metrics cache so dashboards reflect the correction
-      invalidateMetricsCache();
     }
 
     return res.status(200).json({

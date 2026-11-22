@@ -717,7 +717,9 @@ export const training_comments = pgTable("training_comments", {
 
 export const metric_disputes = pgTable("metric_disputes", {
   id: serial("id").primaryKey(),
-  metric_id: integer("metric_id").notNull(),           // FK → performance_metrics.id
+  metric_id: integer("metric_id"),                     // legacy performance_metrics.id; null for Team Performance raw rows
+  raw_row_id: integer("raw_row_id"),                   // team_performance_raw_rows.id for current upload disputes
+  source_context: text("source_context"),               // JSON context for raw-row dispute review
   ticket_ref: text("ticket_ref"),                      // trouble_id for quick reference
   submitted_by: text("submitted_by").notNull(),        // tech's canonical name
   field_name: text("field_name").notNull(),            // "ack_minutes" | "carrier_ticket_minutes"

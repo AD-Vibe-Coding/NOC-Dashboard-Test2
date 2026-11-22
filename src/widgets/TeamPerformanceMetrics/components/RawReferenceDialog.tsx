@@ -1,5 +1,11 @@
 import { useEffect, useId, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { ActionIcon, Badge, Tooltip } from "@mantine/core";
+import { IconBolt } from "@tabler/icons-react";
+import { useIdentity } from "../../../lib/identity";
+import { DisputeForm, type DisputeField } from "@/widgets/PerformanceTracker/DisputeForm";
+import type { PerformanceMetric } from "@/widgets/PerformanceTracker/data";
+import { resolveTeamMember } from "@/widgets/PerformanceTracker/team";
 import { RAW_REFERENCE_COLUMNS, type RawReferenceRow, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
 import type { VolumeKey } from "@/widgets/TeamPerformanceMetrics/lib/volumes";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
@@ -18,6 +24,53 @@ type Props = {
   upload?: UploadResult;
   active: boolean;
 };
+
+type DisputeTarget = {
+  row: RawReferenceRow;
+  field: DisputeField;
+  columnIndex: number;
+  header: string;
+};
+
+function disputeFieldForColumn(kind: UploadKind | undefined, index: number, header: string): DisputeField | null {
+  if (kind !== "tickets") return null;
+  const normalized = header.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (normalized.includes("openticketwiththecarrier") || normalized.includes("openticketwithcarrier") || normalized.includes("carrierticketminutes")) {
+    return "carrier_ticket_minutes";
+  }
+  if (normalized.includes("acknowledgementtime") || normalized.includes("acknowledgetime") || normalized.includes("ackminutes")) {
+    return "ack_minutes";
+  }
+  if (index === 32) return "carrier_ticket_minutes";
+  if (index === 39) return "ack_minutes";
+  return null;
+}
+
+function rawMinutes(value: RawReferenceRow["cells"][string]): number | null {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value < 0) return null;
+    return value > 0 && value < 1 ? value * 1440 : value;
+  }
+  if (typeof value !== "string") return null;
+  const text = value.trim();
+  if (!text) return null;
+  const hms = text.match(/^(\d{1,2}):(\d{2}):(\d{2})$/);
+  if (hms) return Number(hms[1]) * 60 + Number(hms[2]) + Number(hms[3]) / 60;
+  const ms = text.match(/^(\d{1,3}):(\d{2})$/);
+  if (ms) return Number(ms[1]) + Number(ms[2]) / 60;
+  const numeric = Number(text.replace(/,/g, ""));
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return numeric > 0 && numeric < 1 ? numeric * 1440 : numeric;
+}
+
+function rawTicketReference(row: RawReferenceRow, headers: string[] | undefined): string | null {
+  const idColumn = (headers ?? []).findIndex((header) => {
+    const name = header.toLowerCase().replace(/[^a-z0-9]/g, "");
+    return ["troubleid", "ticketid", "ticketnumber", "referencenumber", "refnumber"].includes(name);
+  });
+  const value = row.cells[String(idColumn >= 0 ? idColumn : 0)];
+  return value == null || String(value).trim() === "" ? null : String(value).trim();
+}
 
 export function uploadKindForMetric(metricKey: string): UploadKind {
   if (metricKey === "asa_seconds" || metricKey === "refused_calls") return "calls";
@@ -67,6 +120,10 @@ function compareRows(a: RawReferenceRow, b: RawReferenceRow, column: string, dir
 }
 
 export function RawReferenceTable({ member, metric, upload, active }: Props) {
+  const { identity } = useIdentity();
+  const submitterName = identity ? resolveTeamMember(identity.name) ?? identity.name : "";
+  const [disputeTarget, setDisputeTarget] = useState<DisputeTarget | null>(null);
+  const [refreshRawRows, setRefreshRawRows] = useState(0);
   const [selectedMonths, setSelectedMonths] = useState<string[]>(() => {
     const months = [...(upload?.months ?? [])].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
     const latest = months[months.length - 1];
@@ -89,6 +146,17 @@ export function RawReferenceTable({ member, metric, upload, active }: Props) {
       .sort(([a], [b]) => a.localeCompare(b)),
   [upload?.months]);
   const selectedSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
+  const disputeMetric = useMemo(() => {
+    if (!disputeTarget) return null;
+    const original = rawMinutes(disputeTarget.row.cells[String(disputeTarget.columnIndex)]);
+    return {
+      id: 0,
+      ref_number: rawTicketReference(disputeTarget.row, upload?.rawHeaders),
+      ack_minutes: disputeTarget.field === "ack_minutes" ? original : null,
+      carrier_ticket_minutes: disputeTarget.field === "carrier_ticket_minutes" ? original : null,
+      raw_json: "{}",
+    } as unknown as PerformanceMetric;
+  }, [disputeTarget, upload?.rawHeaders]);
 
   useEffect(() => {
     if (!active || selectedSet.size === 0) {
@@ -173,7 +241,7 @@ export function RawReferenceTable({ member, metric, upload, active }: Props) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active, member, page, selectedMonths, selectedSet, sortBy, sortDirection, upload?.rawRows, upload?.uploadId]);
+  }, [active, member, page, refreshRawRows, selectedMonths, selectedSet, sortBy, sortDirection, upload?.rawRows, upload?.uploadId]);
 
   const visibleRows = useMemo(() => {
     if (loadingRows || selectedSet.size === 0) return [];
@@ -344,11 +412,48 @@ export function RawReferenceTable({ member, metric, upload, active }: Props) {
                         <TableRow key={`${row.monthKey}-${row.sourceRow}`}>
                           <TableCell className="sticky left-0 z-[1] bg-background font-mono text-xs">{row.sourceRow}</TableCell>
                           <TableCell>{row.monthLabel}</TableCell>
-                          {visibleColumns.map(({ index }) => (
-                            <TableCell key={index} className="max-w-64 truncate" title={String(row.cells[String(index)] ?? "")}>
-                              {row.cells[String(index)] == null ? "" : String(row.cells[String(index)])}
-                            </TableCell>
-                          ))}
+                          {visibleColumns.map(({ header, index }) => {
+                            const field = disputeFieldForColumn(upload?.kind, index, header);
+                            const latestDispute = field
+                              ? row.disputes?.find((dispute) => dispute.field_name === field)
+                              : undefined;
+                            const canSubmit = Boolean(upload?.uploadId && row.id != null && submitterName);
+                            const value = row.cells[String(index)];
+                            return (
+                              <TableCell key={index} className="max-w-64" title={value == null ? "" : String(value)}>
+                                <div className="flex min-w-max items-center gap-1.5">
+                                  <span className="max-w-64 truncate">{value == null ? "" : String(value)}</span>
+                                  {latestDispute ? (
+                                    <Tooltip label={`Dispute ${latestDispute.status}${latestDispute.review_note ? `: ${latestDispute.review_note}` : ""}`} withinPortal>
+                                      <Badge
+                                        size="xs"
+                                        variant="dot"
+                                        color={latestDispute.status === "pending" ? "yellow" : latestDispute.status === "approved" ? "green" : "red"}
+                                      >
+                                        {latestDispute.status}
+                                      </Badge>
+                                    </Tooltip>
+                                  ) : field ? (
+                                    <Tooltip label={canSubmit ? "Dispute this value" : "Upload and save this workbook before submitting a dispute"} withinPortal>
+                                      <span>
+                                        <ActionIcon
+                                          type="button"
+                                          size="xs"
+                                          variant="subtle"
+                                          color="yellow"
+                                          aria-label={`Dispute ${header} for row ${row.sourceRow}`}
+                                          disabled={!canSubmit}
+                                          onClick={() => setDisputeTarget({ row, field, columnIndex: index, header })}
+                                        >
+                                          <IconBolt size={13} aria-hidden="true" />
+                                        </ActionIcon>
+                                      </span>
+                                    </Tooltip>
+                                  ) : null}
+                                </div>
+                              </TableCell>
+                            );
+                          })}
                         </TableRow>
                       ))}
                     </TableBody>
@@ -380,6 +485,29 @@ export function RawReferenceTable({ member, metric, upload, active }: Props) {
               </p>
             ) : null}
           </div>
+          {disputeTarget && disputeTarget.row.id != null && disputeMetric ? (
+            <DisputeForm
+              key={`${disputeTarget.row.id}-${disputeTarget.field}`}
+              metric={disputeMetric}
+              field={disputeTarget.field}
+              fixedField={disputeTarget.field}
+              submitterName={submitterName}
+              rawRowId={disputeTarget.row.id}
+              sourceContext={JSON.stringify({
+                source: "team_performance_raw_rows",
+                memberName: member,
+                monthKey: disputeTarget.row.monthKey,
+                monthLabel: disputeTarget.row.monthLabel,
+                sourceRow: disputeTarget.row.sourceRow,
+                uploadId: upload?.uploadId,
+                filename: upload?.filename,
+                columnIndex: disputeTarget.columnIndex,
+                columnHeader: disputeTarget.header,
+              })}
+              onClose={() => setDisputeTarget(null)}
+              onSubmitted={() => setRefreshRawRows((current) => current + 1)}
+            />
+          ) : null}
       </section>
   );
 }

@@ -11,6 +11,9 @@ export const RAW_REFERENCE_COLUMNS: Partial<Record<UploadKind, readonly number[]
 };
 export type RawCellValue = string | number | boolean;
 export type RawReferenceRow = {
+  /** Present for rows fetched from the persisted raw-row table. */
+  id?: number;
+  disputes?: { id: number; field_name: string; status: string; review_note?: string | null }[];
   memberName: string;
   monthKey: string;
   monthLabel: string;

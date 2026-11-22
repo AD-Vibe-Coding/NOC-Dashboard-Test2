@@ -43,6 +43,9 @@ interface Props {
   metric: PerformanceMetric | null;
   field: DisputeField | null;
   submitterName: string;
+  rawRowId?: number | null;
+  sourceContext?: string | null;
+  fixedField?: DisputeField | null;
   onClose: () => void;
   onSubmitted: () => void;
 }
@@ -115,10 +118,13 @@ export function DisputeForm({
   metric,
   field: initialField,
   submitterName,
+  rawRowId,
+  sourceContext,
+  fixedField,
   onClose,
   onSubmitted,
 }: Props) {
-  const [field, setField] = useState<DisputeField | null>(initialField);
+  const [field, setField] = useState<DisputeField | null>(fixedField ?? initialField);
   const [proposedValue, setProposedValue] = useState<number | string>("");
   const [reason, setReason] = useState("");
   const [evidence, setEvidence] = useState("");
@@ -196,7 +202,9 @@ export function DisputeForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           values: {
-            metric_id: metric.id,
+            metric_id: rawRowId != null ? null : metric.id,
+            raw_row_id: rawRowId ?? null,
+            source_context: sourceContext ?? null,
             ticket_ref: ticketRef ?? null,
             submitted_by: submitterName,
             field_name: field,
@@ -257,19 +265,26 @@ export function DisputeForm({
           If a tool outage, audit issue, or AI-generated feedback mistake affected your evaluation, submit a dispute with context and supporting evidence. Your manager will review and approve or reject it.
         </Text>
 
-        <Select
-          label="Field to dispute"
-          data={[
-            { value: "ack_minutes", label: FIELD_LABELS.ack_minutes },
-            { value: "carrier_ticket_minutes", label: FIELD_LABELS.carrier_ticket_minutes },
-            { value: "success_count", label: FIELD_LABELS.success_count },
-            { value: "ai_feedback", label: FIELD_LABELS.ai_feedback },
-          ]}
-          value={field}
-          onChange={(v) => setField(v as DisputeField)}
-          allowDeselect={false}
-          size="sm"
-        />
+        {fixedField ? (
+          <Box>
+            <Text size="xs" c="dimmed">Field to dispute</Text>
+            <Text size="sm" fw={600}>{FIELD_LABELS[fixedField]}</Text>
+          </Box>
+        ) : (
+          <Select
+            label="Field to dispute"
+            data={[
+              { value: "ack_minutes", label: FIELD_LABELS.ack_minutes },
+              { value: "carrier_ticket_minutes", label: FIELD_LABELS.carrier_ticket_minutes },
+              { value: "success_count", label: FIELD_LABELS.success_count },
+              { value: "ai_feedback", label: FIELD_LABELS.ai_feedback },
+            ]}
+            value={field}
+            onChange={(v) => setField(v as DisputeField)}
+            allowDeselect={false}
+            size="sm"
+          />
+        )}
 
         {field && (
           isTaskSlaDispute ? (
