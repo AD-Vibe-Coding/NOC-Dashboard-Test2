@@ -71,89 +71,174 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const now = new Date().toISOString();
 
-    // 2. Update the dispute record
-    const { error: updateErr } = await supabaseAdmin
-      .from("metric_disputes")
-      .update({
-        status: action === "approve" ? "approved" : "rejected",
-        reviewed_by,
-        review_note: review_note ?? null,
-        reviewed_at: now,
-      })
-      .eq("id", id);
-
-    if (updateErr) {
-      return res.status(500).json({ error: updateErr.message });
+    // Rejection does not mutate a source row, so it can be recorded directly.
+    if (action === "reject") {
+      const { data: rejected, error: rejectErr } = await supabaseAdmin
+        .from("metric_disputes")
+        .update({ status: "rejected", reviewed_by, review_note: review_note ?? null, reviewed_at: now })
+        .eq("id", id)
+        .eq("status", "pending")
+        .select("id")
+        .maybeSingle();
+      if (rejectErr) return res.status(500).json({ error: rejectErr.message });
+      if (!rejected) return res.status(409).json({ error: "This dispute was reviewed by someone else." });
+      return res.status(200).json({ ok: true, status: "rejected", dispute_id: id, metric_id: dispute.metric_id });
     }
 
-    // 3. If approved, overwrite the legacy metric or the source workbook cell.
-    if (action === "approve") {
-      let overwriteError: string | null = null;
-      if (dispute.raw_row_id != null) {
-        const columnIndex = dispute.field_name === "carrier_ticket_minutes"
-          ? 32
-          : dispute.field_name === "ack_minutes"
-            ? 39
-            : null;
-        const proposed = Number(dispute.proposed_value);
-        if (columnIndex == null || !Number.isFinite(proposed) || proposed < 0) {
-          overwriteError = "Raw-row disputes require a valid ticket-time field and proposed value.";
-        } else {
-          const { data: rawRow, error: rawRowError } = await supabaseAdmin
+    // Approvals require an unambiguous source. Older raw-row disputes may
+    // lack raw_row_id but still have the exact upload/member/month/Excel-row
+    // tuple saved in source_context; only accept a single exact match.
+    let rawRowId: number | null = dispute.raw_row_id == null ? null : Number(dispute.raw_row_id);
+    if (rawRowId == null && dispute.metric_id == null && dispute.source_context) {
+      try {
+        const context = JSON.parse(dispute.source_context) as Record<string, unknown>;
+        const uploadId = Number(context.uploadId);
+        const sourceRow = Number(context.sourceRow);
+        const memberName = typeof context.memberName === "string" ? context.memberName.trim() : "";
+        const monthKey = typeof context.monthKey === "string" ? context.monthKey : "";
+        if (
+          context.source === "team_performance_raw_rows" &&
+          Number.isSafeInteger(uploadId) && uploadId > 0 &&
+          Number.isSafeInteger(sourceRow) && sourceRow > 0 &&
+          memberName && /^\d{4}-\d{2}$/.test(monthKey)
+        ) {
+          const { data: matches, error: matchErr } = await supabaseAdmin
             .from("team_performance_raw_rows")
-            .select("cells")
-            .eq("id", dispute.raw_row_id)
-            .maybeSingle();
-          if (rawRowError || !rawRow) {
-            overwriteError = rawRowError?.message ?? "The source workbook row no longer exists.";
-          } else {
-            // The source parser treats numeric values below one as Excel day fractions.
-            // Store sub-minute corrections as mm:ss strings to preserve their meaning.
-            const totalSeconds = Math.round(proposed * 60);
-            const valueToStore = proposed > 0 && proposed < 1
-              ? `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`
-              : proposed;
-            const cells = rawRow.cells && typeof rawRow.cells === "object" && !Array.isArray(rawRow.cells)
-              ? rawRow.cells as Record<string, unknown>
-              : {};
-            const { error: rawUpdateError } = await supabaseAdmin
-              .from("team_performance_raw_rows")
-              .update({ cells: { ...cells, [String(columnIndex)]: valueToStore } })
-              .eq("id", dispute.raw_row_id);
-            if (rawUpdateError) overwriteError = rawUpdateError.message;
+            .select("id")
+            .eq("upload_id", uploadId)
+            .eq("member_name", memberName)
+            .eq("month_key", monthKey)
+            .eq("source_row", sourceRow)
+            .limit(2);
+          if (matchErr) return res.status(500).json({ error: `Could not resolve dispute source: ${matchErr.message}` });
+          if ((matches ?? []).length > 1) {
+            return res.status(409).json({ error: "More than one source row matches this dispute. It remains pending for manual review." });
           }
+          if (matches?.length === 1) rawRowId = Number(matches[0].id);
         }
-      } else if (dispute.metric_id != null) {
-        const field = dispute.field_name;
-        if (field !== "ack_minutes" && field !== "carrier_ticket_minutes") {
-          overwriteError = "Unsupported metric dispute field.";
-        } else {
-          const { error: metricErr } = await supabaseAdmin
-            .from("performance_metrics")
-            .update({ [field]: dispute.proposed_value })
-            .eq("id", dispute.metric_id);
-          if (metricErr) overwriteError = metricErr.message;
-          else invalidateMetricsCache();
-        }
-      } else {
-        overwriteError = "This dispute has no linked metric or raw source row.";
-      }
-
-      if (overwriteError) {
-        await supabaseAdmin
-          .from("metric_disputes")
-          .update({ status: "pending", reviewed_by: null, review_note: null, reviewed_at: null })
-          .eq("id", id);
-        return res.status(500).json({ error: `Dispute approved but source update failed: ${overwriteError}` });
+      } catch {
+        // Invalid or legacy context is not sufficient to identify a source.
       }
     }
 
-    return res.status(200).json({
-      ok: true,
-      status: action === "approve" ? "approved" : "rejected",
-      dispute_id: id,
-      metric_id: dispute.metric_id,
-    });
+    let rollbackSource: (() => Promise<string | null>) | null = null;
+    let sourceKind: "raw" | "metric" | null = null;
+    if (rawRowId != null) {
+      const columnIndex = dispute.field_name === "carrier_ticket_minutes"
+        ? 32
+        : dispute.field_name === "ack_minutes"
+          ? 39
+          : null;
+      const proposed = Number(dispute.proposed_value);
+      if (columnIndex == null || !Number.isFinite(proposed) || proposed < 0) {
+        return res.status(400).json({ error: "Raw-row disputes require a valid ticket-time field and proposed value. The dispute remains pending." });
+      }
+      const { data: rawRow, error: rawRowError } = await supabaseAdmin
+        .from("team_performance_raw_rows")
+        .select("id,cells")
+        .eq("id", rawRowId)
+        .maybeSingle();
+      if (rawRowError || !rawRow) {
+        return res.status(409).json({ error: rawRowError?.message ?? "The linked source workbook row no longer exists. The dispute remains pending." });
+      }
+
+      // Store sub-minute corrections as mm:ss to avoid Excel day-fraction parsing.
+      const totalSeconds = Math.round(proposed * 60);
+      const valueToStore: string | number = proposed > 0 && proposed < 1
+        ? `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, "0")}`
+        : proposed;
+      const key = String(columnIndex);
+      const priorCells = rawRow.cells && typeof rawRow.cells === "object" && !Array.isArray(rawRow.cells)
+        ? rawRow.cells as Record<string, unknown>
+        : {};
+      const hadPriorValue = Object.prototype.hasOwnProperty.call(priorCells, key);
+      const priorValue = priorCells[key];
+      const { data: sourceUpdated, error: rawUpdateError } = await supabaseAdmin
+        .from("team_performance_raw_rows")
+        .update({ cells: { ...priorCells, [key]: valueToStore } })
+        .eq("id", rawRowId)
+        .select("id")
+        .maybeSingle();
+      if (rawUpdateError || !sourceUpdated) {
+        return res.status(500).json({ error: `Source row was not updated; the dispute remains pending. ${rawUpdateError?.message ?? "Source row not found."}` });
+      }
+      sourceKind = "raw";
+      rollbackSource = async () => {
+        const { data: current, error: readErr } = await supabaseAdmin
+          .from("team_performance_raw_rows").select("cells").eq("id", rawRowId).maybeSingle();
+        if (readErr || !current) return readErr?.message ?? "Source row disappeared during rollback.";
+        const currentCells = current.cells && typeof current.cells === "object" && !Array.isArray(current.cells)
+          ? current.cells as Record<string, unknown>
+          : {};
+        if (JSON.stringify(currentCells[key]) !== JSON.stringify(valueToStore)) return "Source cell changed again; automatic rollback was skipped.";
+        const restoredCells = { ...currentCells };
+        if (hadPriorValue) restoredCells[key] = priorValue;
+        else delete restoredCells[key];
+        const { error } = await supabaseAdmin.from("team_performance_raw_rows").update({ cells: restoredCells }).eq("id", rawRowId);
+        return error?.message ?? null;
+      };
+    } else if (dispute.metric_id != null) {
+      const field = dispute.field_name;
+      if (field !== "ack_minutes" && field !== "carrier_ticket_minutes") {
+        return res.status(400).json({ error: "Unsupported metric dispute field. The dispute remains pending." });
+      }
+      const { data: metric, error: metricReadError } = await supabaseAdmin
+        .from("performance_metrics")
+        .select(`id,${field}`)
+        .eq("id", dispute.metric_id)
+        .maybeSingle();
+      if (metricReadError || !metric) {
+        return res.status(409).json({ error: metricReadError?.message ?? "The linked metric no longer exists. The dispute remains pending." });
+      }
+      const priorValue = metric[field];
+      const { data: sourceUpdated, error: metricErr } = await supabaseAdmin
+        .from("performance_metrics")
+        .update({ [field]: dispute.proposed_value })
+        .eq("id", dispute.metric_id)
+        .select("id")
+        .maybeSingle();
+      if (metricErr || !sourceUpdated) {
+        return res.status(500).json({ error: `Source metric was not updated; the dispute remains pending. ${metricErr?.message ?? "Metric not found."}` });
+      }
+      sourceKind = "metric";
+      rollbackSource = async () => {
+        const { data: current, error: readErr } = await supabaseAdmin
+          .from("performance_metrics").select(`id,${field}`).eq("id", dispute.metric_id).maybeSingle();
+        if (readErr || !current) return readErr?.message ?? "Source metric disappeared during rollback.";
+        if (Number(current[field]) !== Number(dispute.proposed_value)) return "Source metric changed again; automatic rollback was skipped.";
+        const { error } = await supabaseAdmin.from("performance_metrics").update({ [field]: priorValue }).eq("id", dispute.metric_id);
+        return error?.message ?? null;
+      };
+    } else {
+      return res.status(409).json({
+        error: "This legacy dispute has no linked source row and no unique source context. It remains pending; submit a new dispute from the source row to link it safely.",
+      });
+    }
+
+    // Mark approved only after the source write succeeds. If finalizing the
+    // dispute fails, compensate by restoring the source value where safe.
+    const { data: approved, error: approveErr } = await supabaseAdmin
+      .from("metric_disputes")
+      .update({ status: "approved", reviewed_by, review_note: review_note ?? null, reviewed_at: now })
+      .eq("id", id)
+      .eq("status", "pending")
+      .select("id")
+      .maybeSingle();
+    if (approveErr || !approved) {
+      const { data: latest } = await supabaseAdmin.from("metric_disputes").select("status").eq("id", id).maybeSingle();
+      const alreadyApproved = latest?.status === "approved";
+      const rollbackError = !alreadyApproved && rollbackSource ? await rollbackSource() : null;
+      if (sourceKind === "metric" && !rollbackError) invalidateMetricsCache();
+      const detail = approveErr?.message ?? (alreadyApproved ? "Another manager already approved this dispute." : "The dispute was reviewed by someone else.");
+      return res.status(409).json({
+        error: rollbackError
+          ? `Could not finalize the dispute (${detail}); source rollback also failed: ${rollbackError}`
+          : `${detail} Source update was rolled back where safe.`,
+      });
+    }
+
+    if (sourceKind === "metric") invalidateMetricsCache();
+    return res.status(200).json({ ok: true, status: "approved", dispute_id: id, metric_id: dispute.metric_id });
   } catch (err) {
     return res.status(500).json({
       error: err instanceof Error ? err.message : "Server error",
