@@ -193,16 +193,33 @@ function toSeconds(raw: unknown): number | null {
   return n * 60;
 }
 
-/** Inbound ASA is mm:ss; Excel may surface a formatted cell as a Date. */
+/** Inbound ASA is seconds or mm:ss; Excel may surface a formatted cell as a Date. */
 function asaMmSsToSeconds(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
   if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
     const hours = raw.getUTCHours();
     const minutes = raw.getUTCMinutes();
     const seconds = raw.getUTCSeconds();
-    // Some mm:ss-formatted cells are surfaced as HH:mm Date components.
+    // Excel's mm:ss display may be surfaced as HH:mm, where the hour
+    // component represents minutes. For ordinary 00:mm:ss cells, preserve seconds.
     return hours > 0 ? hours * 60 + minutes : minutes * 60 + seconds;
   }
-  return toSeconds(raw);
+
+  const text = String(raw).trim();
+  if (!text) return null;
+  if (/^\d{1,2}:\d{2}:\d{2}$/.test(text)) {
+    const [hours, minutes, seconds] = text.split(":").map(Number);
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  if (/^\d{1,3}:\d{2}$/.test(text)) {
+    const [minutes, seconds] = text.split(":").map(Number);
+    return minutes * 60 + seconds;
+  }
+
+  const numeric = typeof raw === "number" ? raw : Number(text.replace(/,/g, ""));
+  if (!Number.isFinite(numeric)) return null;
+  // Excel time serials are fractions of a day; plain numeric ASA values are seconds.
+  return numeric > 0 && numeric < 1 ? numeric * 86400 : numeric;
 }
 
 /** Column AN "Ticket Acknowledge Time" is minutes (1, 8, 13…) or Excel time. */
