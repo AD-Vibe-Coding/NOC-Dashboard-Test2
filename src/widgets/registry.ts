@@ -131,7 +131,7 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "performance-tracker",
-    title: "Team Performance",
+    title: "Team Performance Metrics",
     description: "Excel-imported team metrics + per-member drill-down",
     icon: IconChartBar,
     iconColor: "green",

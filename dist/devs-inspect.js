@@ -58,6 +58,14 @@
         var closedByCaller = false;
         var backoff = 500;
         var inner = null;
+        var pendingReload = null;
+        function resumeReload() {
+          if (window.__devsDeckBusy || !pendingReload) return;
+          window.removeEventListener('devs:deck-idle', resumeReload);
+          var event = pendingReload;
+          pendingReload = null;
+          emit('message', event);
+        }
 
         self.url = String(url);
         self.binaryType = 'blob';
@@ -106,7 +114,18 @@
             postHmrState('open');
             emit('open', ev);
           });
-          inner.addEventListener('message', function(ev) { emit('message', ev); });
+          inner.addEventListener('message', function(ev) {
+            var data;
+            try { data = JSON.parse(ev.data); } catch (_) {}
+            // A full reload cannot preserve a draft or its selection.
+            if (data && data.type === 'full-reload' && window.__devsDeckBusy) {
+              if (!pendingReload) window.addEventListener('devs:deck-idle', resumeReload);
+              pendingReload = ev;
+              if (window.parent !== window) window.parent.postMessage({ type: 'devs:deck-refresh-deferred' }, '*');
+              return;
+            }
+            emit('message', ev);
+          });
           inner.addEventListener('error', function() { /* swallow: handled on close */ });
           inner.addEventListener('close', function(ev) {
             if (closedByCaller) {
@@ -145,7 +164,7 @@
     }
   })();
 
-  var INSPECT_SCRIPT_VERSION = '2026-08-14.preview-location-v5';
+  var INSPECT_SCRIPT_VERSION = '2026-11-01.deck-bindings-v2';
   var inspectEnabled = false;
   var deckEditEnabled = false;
   var deckEditingEl = null;
@@ -666,14 +685,56 @@
   function currentLocationPath() {
     return window.location.pathname + window.location.search + window.location.hash;
   }
-  function reportLocation() {
+  var deckDocumentId = Math.random().toString(36).slice(2);
+  var deckRestorePending = false;
+  function currentDeckPosition() {
+    var root = document.querySelector('.reveal.ready');
+    if (!root) return null;
+    var section = root.querySelector('.slides > section.present > section.present') || root.querySelector('.slides > section.present');
+    if (!section) return null;
+    var indices = getRevealSlideIndices(section);
+    var fragments = section.querySelectorAll('.fragment.visible');
+    var f = -1;
+    for (var i = 0; i < fragments.length; i++) {
+      var index = Number(fragments[i].getAttribute('data-fragment-index'));
+      if (Number.isInteger(index)) f = Math.max(f, index);
+    }
+    return { h: indices.h, v: indices.v, f: f };
+  }
+  function restoreDeckPosition(position) {
+    if (!position || !Number.isInteger(position.h) || !Number.isInteger(position.v) || !Number.isInteger(position.f)) return;
+    if (deckRestorePending) return;
+    deckRestorePending = true;
+    var deadline = Date.now() + 5000;
+    function restore() {
+      var slides = document.querySelector('.reveal.ready .slides');
+      if (!slides && Date.now() < deadline) { setTimeout(restore, 50); return; }
+      if (!slides) { deckRestorePending = false; reportLocation(); return; }
+      var horizontal = Array.prototype.filter.call(slides.children, function(el) { return el.tagName === 'SECTION'; });
+      var h = Math.min(Math.max(0, position.h), Math.max(0, horizontal.length - 1));
+      var vertical = horizontal[h] ? Array.prototype.filter.call(horizontal[h].children, function(el) { return el.tagName === 'SECTION'; }) : [];
+      var v = Math.min(Math.max(0, position.v), Math.max(0, vertical.length - 1));
+      // Reveal's message API also reaches module-local instances.
+      window.postMessage(JSON.stringify({ method: 'slide', args: [h, v, position.f] }), '*');
+      setTimeout(function() {
+        deckRestorePending = false;
+        reportLocation();
+      }, 50);
+    }
+    restore();
+  }
+  function reportLocation(boot) {
     try {
       if (window.parent === window) return;
       var path = currentLocationPath();
       lastReportedPath = path;
       window.parent.postMessage({
         type: 'devs:location',
-        path: path
+        path: path,
+        deck: currentDeckPosition(),
+        deckDocumentId: deckDocumentId,
+        deckBoot: boot === true,
+        deckRestoring: deckRestorePending
       }, '*');
     } catch (_) { /* ignore */ }
   }
@@ -883,10 +944,11 @@
 
   function svgFallback(el, selectionToken) {
     var rect = el.getBoundingClientRect();
-    var w = Math.ceil(rect.width);
-    var h = Math.ceil(rect.height);
+    // The clone has computed styles in layout pixels, before ancestor scaling.
+    var w = Math.ceil(el.offsetWidth || rect.width);
+    var h = Math.ceil(el.offsetHeight || rect.height);
     if (w === 0 || h === 0) return;
-    var maxDim = 300;
+    var maxDim = 1280;
     var scale = Math.min(1, maxDim / Math.max(w, h));
     var backgroundColor = ensureReadableBackgroundColor(el, getCaptureBackgroundColor(el));
 
@@ -900,6 +962,17 @@
         inlineStyles(src.children[j], dst.children[j]);
       }
     })(el, clone);
+    // Outer margins and offsets belong to the original parent, not this image.
+    clone.style.margin = '0';
+    clone.style.position = 'relative';
+    clone.style.left = '0';
+    clone.style.top = '0';
+    clone.style.right = 'auto';
+    clone.style.bottom = 'auto';
+    clone.style.transform = 'none';
+    clone.style.translate = 'none';
+    clone.style.rotate = 'none';
+    clone.style.scale = 'none';
     clone.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
 
     var html = new XMLSerializer().serializeToString(clone);
@@ -935,8 +1008,10 @@
       var captureHeight = Math.ceil(rect.height + padding * 2);
       var captureX = Math.max(0, Math.floor(rect.left + window.scrollX - padding));
       var captureY = Math.max(0, Math.floor(rect.top + window.scrollY - padding));
-      var maxDim = 300;
-      var scale = Math.min(1, maxDim / Math.max(captureWidth || 1, captureHeight || 1));
+      // Restore layout resolution when Reveal scales a slide into a small preview.
+      var maxDim = 1280;
+      var layoutScale = Math.max(1, (el.offsetWidth || rect.width) / rect.width);
+      var scale = Math.min(layoutScale, maxDim / Math.max(captureWidth || 1, captureHeight || 1));
       var backgroundColor = ensureReadableBackgroundColor(el, getCaptureBackgroundColor(el));
       h2c(document.body, {
         scale: scale,
@@ -995,7 +1070,8 @@
         textContent: textContent.length > 100 ? textContent.slice(0, 100) + '...' : textContent,
         htmlSnippet: getSnippet(el),
         rect: getRect(el),
-        ancestorPath: getAncestorPath(el, 3)
+        ancestorPath: getAncestorPath(el, 3),
+        deck: deckSelectionContext(el)
       }
     }, '*');
     captureElement(el, selectionToken);
@@ -1086,6 +1162,162 @@
   var deckEditingOriginalHtml = '';
   var deckEditingOriginalHtmlBackup = '';
 
+  // Drafts live outside the React root. React keeps ownership of every source
+  // node, including its text nodes, while HMR updates the saved deck.
+  var deckDrafts = [];
+  var deckDraftTimer = null;
+  var deckRequestSequence = 0;
+  var deckDraftSequence = 0;
+  function reportDeckBusy() {
+    var busy = !!deckEditingEl || deckDrafts.some(function(d) { return d.pending > 0 || d.failed; });
+    window.__devsDeckBusy = busy;
+    window.parent.postMessage({ type: 'devs:deck-busy', busy: busy }, '*');
+    if (!busy) window.dispatchEvent(new Event('devs:deck-idle'));
+  }
+  function removeDeckDraft(draft) {
+    draft.source.style.visibility = draft.visibility;
+    draft.container.remove();
+    draft.styles.remove();
+    deckDrafts = deckDrafts.filter(function(d) { return d !== draft; });
+    if (deckDrafts.length === 0) { clearInterval(deckDraftTimer); deckDraftTimer = null; }
+  }
+  function placeDeckDraft(draft) {
+    var source = draft.source;
+    if (!source.isConnected) {
+      var nodes = document.querySelectorAll('.reveal [data-devs-edit]');
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].getAttribute('data-devs-edit') === draft.locator.editId) {
+          source = nodes[i];
+          draft.source = source;
+          draft.visibility = source.style.visibility;
+          break;
+        }
+      }
+    }
+    var r = source.getBoundingClientRect();
+    var section = source.closest('section');
+    var visible = source.isConnected && section && section.classList.contains('present');
+    // Keep a removed block's draft available for copy or cancellation.
+    if (!source.isConnected) { draft.editor.style.display = 'block'; return; }
+    draft.editor.style.display = visible ? draft.display : 'none';
+    source.style.visibility = visible ? 'hidden' : draft.visibility;
+    if (!visible) return;
+    var scale = source.offsetWidth ? r.width / source.offsetWidth : 1;
+    Object.assign(draft.editor.style, {
+      left: r.left + 'px', top: r.top + 'px', width: (source.offsetWidth || r.width) + 'px',
+      transform: 'scale(' + scale + ')', transformOrigin: 'top left'
+    });
+  }
+  function reconcileDeckDrafts() {
+    deckDrafts.slice().forEach(function(draft) {
+      if (draft.editor !== deckEditingEl && draft.pending === 0 && draft.saved &&
+          draft.source.isConnected && normalizeDeckHtml(draft.source.textContent) === normalizeDeckHtml(draft.editor.textContent) &&
+          (normalizeDeckHtml(draft.source.innerHTML) === normalizeDeckHtml(deckDraftHtml(draft.editor)) || draft.source.innerHTML !== draft.initialHtml)) {
+        removeDeckDraft(draft);
+      } else {
+        placeDeckDraft(draft);
+      }
+    });
+  }
+  function deckDraftHtml(editor) {
+    var copy = editor.cloneNode(true);
+    copy.querySelectorAll('[data-devs-draft-style]').forEach(function(node) { node.removeAttribute('data-devs-draft-style'); });
+    return copy.innerHTML;
+  }
+  function deckDraftStyleRule(selector, style) {
+    var declarations = [];
+    for (var i = 0; i < style.length; i++) {
+      if (style[i] !== '-webkit-user-modify') declarations.push(style[i] + ':' + style.getPropertyValue(style[i]) + ';');
+    }
+    return selector + '{' + declarations.join('') + '}';
+  }
+  function createDeckDraft(source) {
+    var existing = deckDrafts.find(function(d) { return d.source === source || d.editor === source; });
+    if (existing) return existing;
+    var locator = ensureDeckEditId(source);
+    var editor = source.cloneNode(true);
+    var computed = getComputedStyle(source);
+    for (var i = 0; i < computed.length; i++) {
+      if (computed[i] !== '-webkit-user-modify') editor.style.setProperty(computed[i], computed.getPropertyValue(computed[i]));
+    }
+    var draftId = deckDocumentId + '-draft-' + String(++deckDraftSequence);
+    editor.removeAttribute('id');
+    editor.setAttribute('data-devs-draft', draftId);
+    // Keep ancestor-dependent child styles outside the markup sent to the save API.
+    var styles = document.createElement('style');
+    var rules = [];
+    var sourceChildren = source.querySelectorAll('*');
+    editor.querySelectorAll('*').forEach(function(child, index) {
+      var styleId = draftId + '-' + String(index);
+      child.setAttribute('data-devs-draft-style', styleId);
+      rules.push(deckDraftStyleRule('[data-devs-draft-style="' + styleId + '"]', getComputedStyle(sourceChildren[index])));
+    });
+    if (computed.display.indexOf('list-item') !== -1) rules.push(deckDraftStyleRule('[data-devs-draft="' + draftId + '"]::marker', getComputedStyle(source, '::marker')));
+    styles.textContent = rules.join('');
+    document.head.appendChild(styles);
+    Object.assign(editor.style, { position: 'fixed', margin: '0', zIndex: '2147483000', height: 'auto', minHeight: '1em', visibility: 'visible', pointerEvents: 'auto' });
+    var container = editor;
+    if (computed.display.indexOf('list-item') !== -1 && source.parentElement && /^(OL|UL)$/.test(source.parentElement.tagName)) {
+      // Empty sibling boxes keep the browser's list counter, including start,
+      // reversed and value attributes. Only the draft paints in this list.
+      container = document.createElement(source.parentElement.tagName);
+      ['start', 'reversed'].forEach(function(name) {
+        if (source.parentElement.hasAttribute(name)) container.setAttribute(name, source.parentElement.getAttribute(name));
+      });
+      // The container is its own stacking context: without the z-index the
+      // slide paints over the draft and clicks never reach a pending or
+      // failed list-item draft.
+      Object.assign(container.style, { position: 'fixed', margin: '0', padding: '0', width: '0', height: '0', pointerEvents: 'none', zIndex: '2147483000' });
+      Array.prototype.forEach.call(source.parentElement.children, function(sibling) {
+        if (sibling === source) { container.appendChild(editor); return; }
+        var item = document.createElement(sibling.tagName);
+        if (sibling.hasAttribute('value')) item.setAttribute('value', sibling.getAttribute('value'));
+        item.style.display = getComputedStyle(sibling).display;
+        item.style.visibility = 'hidden';
+        container.appendChild(item);
+      });
+    }
+    document.body.appendChild(container);
+    // baseText/baseHtml: the last value known to be in the source (the
+    // original, then each acknowledged save). A commit reports it as the
+    // value the edit started from, so the server can detect a conflict and a
+    // retry after a failed save still names the real source value.
+    var draft = { source: source, editor: editor, container: container, styles: styles, display: computed.display, locator: locator, visibility: source.style.visibility,
+      initialHtml: source.innerHTML, pending: 0, latest: null, saved: false, failed: false,
+      baseText: normalizeDeckHtml(source.textContent), baseHtml: deckDraftHtml(editor) };
+    deckDrafts.push(draft);
+    if (!deckDraftTimer) deckDraftTimer = setInterval(reconcileDeckDrafts, 100);
+    placeDeckDraft(draft);
+    return draft;
+  }
+  function acknowledgeDeckSave(data) {
+    var draft = deckDrafts.find(function(d) { return d.requests && d.requests.indexOf(data.requestId) !== -1; });
+    if (!draft) return;
+    draft.requests = draft.requests.filter(function(id) { return id !== data.requestId; });
+    draft.pending = draft.requests.length;
+    if (draft.latest === data.requestId) {
+      draft.saved = data.ok === true;
+      draft.failed = data.ok === false;
+      if (data.ok === true) {
+        draft.baseText = draft.submittedText;
+        draft.baseHtml = draft.submittedHtml;
+      }
+      draft.editor.style.outline = draft.failed ? '2px solid #ef4444' : '';
+      draft.editor.setAttribute('aria-invalid', draft.failed ? 'true' : 'false');
+      if (typeof data.status === 'string') draft.editor.setAttribute('data-devs-save-status', data.status);
+      else draft.editor.removeAttribute('data-devs-save-status');
+    }
+    reconcileDeckDrafts();
+    reportDeckBusy();
+    if (data.ok === true) setTimeout(function() {
+      if (deckDrafts.indexOf(draft) !== -1 && draft.latest === data.requestId && draft.saved && draft.pending === 0 &&
+          (!draft.source.isConnected || normalizeDeckHtml(draft.source.textContent) !== draft.submittedText ||
+            (normalizeDeckHtml(draft.source.innerHTML) !== normalizeDeckHtml(draft.submittedHtml) && draft.source.innerHTML === draft.initialHtml))) {
+        window.parent.postMessage({ type: 'devs:deck-recovery', requestId: data.requestId }, '*');
+      }
+    }, 3000);
+  }
+
   function isDeckLeafEditable(el) {
     if (!el || el.nodeType !== 1) return false;
     if (el.getAttribute && el.getAttribute('data-devs-edit')) return true;
@@ -1103,7 +1335,8 @@
   function findDeckEditableTarget(el) {
     var cur = el;
     while (cur && cur !== document.body && cur !== document.documentElement) {
-      if (isDeckLeafEditable(cur)) return cur;
+      if (cur.hasAttribute && cur.hasAttribute('data-devs-draft')) return cur;
+      if (isDeckLeafEditable(cur) && cur.closest('.reveal .slides')) return cur;
       cur = cur.parentElement;
     }
     return null;
@@ -1147,39 +1380,98 @@
     return { h: Math.max(0, tops.indexOf(top)), v: 0 };
   }
 
+  // Rendered slide counts let the server prove that the literal source
+  // structure matches the DOM before it maps a legacy block by position.
+  function deckSlideCounts(el) {
+    var counts = { slideCount: 0, verticalCount: 0 };
+    var slidesRoot = document.querySelector('.reveal .slides') || document.querySelector('.slides');
+    var section = el.closest ? el.closest('section') : null;
+    if (!slidesRoot || !section) return counts;
+    for (var i = 0; i < slidesRoot.children.length; i += 1) {
+      if (slidesRoot.children[i].tagName === 'SECTION') counts.slideCount += 1;
+    }
+    var top = section;
+    while (top.parentElement && top.parentElement !== slidesRoot && top.parentElement.tagName === 'SECTION') {
+      top = top.parentElement;
+    }
+    for (var j = 0; j < top.children.length; j += 1) {
+      if (top.children[j].tagName === 'SECTION') counts.verticalCount += 1;
+    }
+    return counts;
+  }
+
+  function deckBindingToEditId(binding) {
+    return String(binding).replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'bound';
+  }
+
+  // A block's identity for saves. "binding" names the source value
+  // (data-devs-bind, or #id from data-devs-edit). "legacy" is set only when
+  // this script generated the id from the rendered position.
   function ensureDeckEditId(el) {
     var indices = getRevealSlideIndices(el);
     var tagName = el.tagName.toLowerCase();
     var section = el.closest ? el.closest('section') : null;
     var tagIndex = 0;
+    var tagCount = 1;
     if (section) {
       var nodes = section.querySelectorAll(tagName);
       tagIndex = Math.max(0, Array.prototype.indexOf.call(nodes, el));
+      tagCount = Math.max(1, nodes.length);
     }
-    var existing = el.getAttribute('data-devs-edit');
-    if (existing) {
-      return {
-        editId: existing,
-        stamped: false,
-        slideH: indices.h,
-        slideV: indices.v,
-        tagName: tagName,
-        tagIndex: tagIndex
-      };
+    var bound = el.getAttribute('data-devs-bind') || '';
+    var editId = el.getAttribute('data-devs-edit');
+    // The id this script stamped earlier (edit mode stamps the visible slide
+    // up front); the source does not carry it until a save stamps it there.
+    var legacy = el.__devsDeckLegacy || null;
+    if (!editId) {
+      editId = bound ? deckBindingToEditId(bound) : 's' + indices.h + '-' + indices.v + '-' + tagName + '-' + tagIndex;
+      if (document.querySelector('[data-devs-edit="' + editId + '"]')) {
+        editId = editId + '-' + Date.now().toString(36);
+      }
+      try { el.setAttribute('data-devs-edit', editId); } catch (_) {}
+      if (!bound) {
+        var counts = deckSlideCounts(el);
+        legacy = el.__devsDeckLegacy = {
+          slideH: indices.h,
+          slideV: indices.v,
+          slideCount: counts.slideCount,
+          verticalCount: counts.verticalCount,
+          tagName: tagName,
+          tagIndex: tagIndex,
+          tagCount: tagCount
+        };
+      }
     }
-    var editId = 's' + indices.h + '-' + indices.v + '-' + tagName + '-' + tagIndex;
-    if (document.querySelector('[data-devs-edit="' + editId + '"]')) {
-      editId = editId + '-' + Date.now().toString(36);
-    }
-    try { el.setAttribute('data-devs-edit', editId); } catch (_) {}
     return {
       editId: editId,
-      stamped: true,
+      binding: bound || ('#' + editId),
+      legacy: legacy,
       slideH: indices.h,
       slideV: indices.v,
       tagName: tagName,
       tagIndex: tagIndex
     };
+  }
+
+  // Source context for AI element edits: the nearest bound block and its slide.
+  function deckSelectionContext(el) {
+    if (!el || !el.closest || !el.closest('.reveal .slides')) return null;
+    var indices = getRevealSlideIndices(el);
+    var cur = el;
+    var context = { slideH: indices.h, slideV: indices.v, binding: '', editId: '', boundTag: '', boundIsAncestor: false };
+    while (cur && cur !== document.body && cur.getAttribute) {
+      var bound = cur.getAttribute('data-devs-bind') || '';
+      var editId = cur.getAttribute('data-devs-edit') || '';
+      if (bound || editId) {
+        context.binding = bound || ('#' + editId);
+        context.editId = editId;
+        context.boundTag = cur.tagName.toLowerCase();
+        context.boundIsAncestor = cur !== el;
+        break;
+      }
+      cur = cur.parentElement;
+    }
+    return context;
   }
 
   function siblingElementIndex(el) {
@@ -1191,7 +1483,7 @@
   }
 
   function normalizeDeckHtml(html) {
-    return String(html || '').replace(/s+/g, ' ').trim();
+    return String(html || '').replace(/\s+/g, ' ').trim();
   }
 
   function ensureDeckEditorChrome() {
@@ -1652,7 +1944,7 @@
   }
 
   function beginDeckDrag(el, startEv) {
-    if (!deckEditEnabled || !el || !el.parentElement) return;
+    if (!deckEditEnabled || !el || !el.parentElement || deckDrafts.length > 0) return;
     // Drag handle mousedown blurs the active block — cancel any pending blur
     // commit so we don't double-save (blur commit + reorder commit).
     deckSuppressBlur = true;
@@ -1819,7 +2111,7 @@
       if (from >= 0 && to >= 0 && to !== from) {
         // Reuse the pre-move locator — do not recompute tagIndex after live moves.
         var locator = dragLocator || ensureDeckEditId(deckDragEl);
-        var txt = (deckDragEl.textContent || '').replace(/s+/g, ' ').trim();
+        var txt = normalizeDeckHtml(deckDragEl.textContent);
         var reorderHtml = deckDragEl.innerHTML;
         // Snap siblings back to the pre-drag order before the parent remounts
         // from saved Deck.tsx. Leaving the live flip DOM up lets HMR reconcile
@@ -1835,9 +2127,12 @@
           type: 'devs:deck-edit-commit',
           payload: {
             oldText: txt,
+            oldHtml: reorderHtml,
             newText: txt,
             newHtml: reorderHtml,
             editId: locator.editId,
+            binding: locator.binding || '',
+            legacy: locator.legacy || null,
             slideH: locator.slideH,
             slideV: locator.slideV,
             tagName: locator.tagName,
@@ -2239,6 +2534,7 @@
 
   function commitDeckEdit(el, cancelled) {
     if (!el) return;
+    var draft = deckDrafts.find(function(d) { return d.editor === el; });
     if (deckBlurTimer) {
       clearTimeout(deckBlurTimer);
       deckBlurTimer = null;
@@ -2246,8 +2542,8 @@
     deckCommitGeneration += 1;
     var oldText = deckEditingOriginal;
     var oldHtml = deckEditingOriginalHtml;
-    var newText = (el.textContent || '').replace(/s+/g, ' ').trim();
-    var newHtml = el.innerHTML || '';
+    var newText = normalizeDeckHtml(el.textContent);
+    var newHtml = deckDraftHtml(el);
     var locator = deckEditingLocator || ensureDeckEditId(el);
     var htmlBackup = deckEditingOriginalHtmlBackup;
     try {
@@ -2261,32 +2557,52 @@
     deckEditingOriginalHtmlBackup = '';
     deckEditingLocator = null;
     if (cancelled) {
+      if (draft && draft.pending === 0) {
+        removeDeckDraft(draft);
+        reportDeckBusy();
+        return;
+      }
       try {
         if (typeof htmlBackup === 'string') el.innerHTML = htmlBackup;
         else el.textContent = oldText;
       } catch (_) {}
       window.parent.postMessage({ type: 'devs:deck-edit-cancel' }, '*');
       placeAllDeckHandles();
+      reportDeckBusy();
       return;
     }
     var textSame = newText === oldText;
     var htmlSame = normalizeDeckHtml(newHtml) === normalizeDeckHtml(oldHtml);
-    if (textSame && htmlSame) {
+    if (textSame && htmlSame && !(draft && draft.failed)) {
       window.parent.postMessage({ type: 'devs:deck-edit-cancel' }, '*');
       placeAllDeckHandles();
+      if (draft && draft.pending === 0 && !draft.saved) removeDeckDraft(draft);
+      reconcileDeckDrafts();
+      reportDeckBusy();
       return;
     }
-    // Keep the edited markup visible until the parent remounts from the saved
-    // Deck.tsx. Reverting here showed stale text during the async save and let
-    // a follow-up edit commit against the pre-edit baseline. Remount (not HMR)
-    // is what prevents contenteditable/React duplication.
+    var requestId = deckDocumentId + ':' + String(++deckRequestSequence);
+    if (draft) {
+      draft.latest = requestId;
+      draft.submittedText = newText;
+      draft.submittedHtml = newHtml;
+      draft.requests = (draft.requests || []).concat(requestId);
+      draft.pending = draft.requests.length;
+      draft.saved = false;
+      draft.failed = false;
+    }
+    reportDeckBusy();
     window.parent.postMessage({
       type: 'devs:deck-edit-commit',
+      requestId: requestId,
       payload: {
         oldText: oldText,
+        oldHtml: oldHtml,
         newText: newText,
         newHtml: newHtml,
         editId: locator.editId || el.getAttribute('data-devs-edit') || '',
+        binding: locator.binding || '',
+        legacy: locator.legacy || null,
         slideH: locator.slideH,
         slideV: locator.slideV,
         tagName: locator.tagName || el.tagName.toLowerCase(),
@@ -2297,18 +2613,42 @@
     placeAllDeckHandles();
   }
 
-  function beginDeckEdit(el) {
+  function beginDeckEdit(el, click) {
     if (!el || deckEditingEl === el) return;
     if (deckEditingEl) commitDeckEdit(deckEditingEl, false);
+    var draft = createDeckDraft(el);
+    el = draft.editor;
     deckEditingEl = el;
-    deckEditingOriginal = (el.textContent || '').replace(/s+/g, ' ').trim();
-    deckEditingOriginalHtml = el.innerHTML || '';
+    // Build on the pending submission when a save is in flight or done; fall
+    // back to the last known source value after a failed save.
+    var optimistic = !draft.failed && typeof draft.submittedText === 'string';
+    deckEditingOriginal = optimistic ? draft.submittedText : draft.baseText;
+    deckEditingOriginalHtml = optimistic ? draft.submittedHtml : draft.baseHtml;
     deckEditingOriginalHtmlBackup = el.innerHTML || '';
-    deckEditingLocator = ensureDeckEditId(el);
+    deckEditingLocator = draft.locator;
+    reportDeckBusy();
     try {
       el.setAttribute('contenteditable', 'true');
       el.classList.add('__devs-deck-active');
       el.focus();
+      if (click && click.detail > 0) {
+        var range = null;
+        if (document.caretPositionFromPoint) {
+          var position = document.caretPositionFromPoint(click.clientX, click.clientY);
+          if (position && el.contains(position.offsetNode)) {
+            range = document.createRange();
+            range.setStart(position.offsetNode, position.offset);
+            range.collapse(true);
+          }
+        } else if (document.caretRangeFromPoint) {
+          range = document.caretRangeFromPoint(click.clientX, click.clientY);
+        }
+        var selection = window.getSelection();
+        if (range && el.contains(range.startContainer) && selection) {
+          selection.removeAllRanges();
+          selection.addRange(range);
+        }
+      }
     } catch (_) {}
     showDeckToolbar(el);
     window.parent.postMessage({
@@ -2334,10 +2674,10 @@
       if (deckEditingEl) commitDeckEdit(deckEditingEl, false);
       return;
     }
-    if (isInsideInlineMarker(el)) return;
+    if (isInsideInlineMarker(el) || el === deckEditingEl) return;
     e.preventDefault();
     e.stopPropagation();
-    beginDeckEdit(el);
+    beginDeckEdit(el, e);
   }
 
   function onDeckDblClick(e) {
@@ -2853,6 +3193,10 @@
       document.body.style.cursor = '';
       setDeckEditModeUi(true);
       window.parent.postMessage({ type: 'devs:deck-edit-ready', version: INSPECT_SCRIPT_VERSION }, '*');
+    } else if (e.data.type === 'devs:restore-deck-position' && e.source === window.parent && !devsIsForeignOrigin(e)) {
+      restoreDeckPosition(e.data.position);
+    } else if (e.data.type === 'devs:deck-save-result' && e.source === window.parent && !devsIsForeignOrigin(e)) {
+      acknowledgeDeckSave(e.data);
     } else if (e.data.type === 'devs:disable-deck-edit') {
       deckEditEnabled = false;
       setDeckEditModeUi(false);
@@ -2876,7 +3220,7 @@
         te.preventDefault();
         var tc = (el.textContent || '').trim();
         var selectionToken = nextSelectionToken();
-        window.parent.postMessage({ type: 'devs:select', payload: { selectionToken: selectionToken, selector: getSelector(el), tagName: el.tagName.toLowerCase(), className: getElementClassName(el), id: el.id || '', textContent: tc.length > 100 ? tc.slice(0, 100) + '...' : tc, htmlSnippet: getSnippet(el), rect: getRect(el), ancestorPath: getAncestorPath(el, 3) } }, '*');
+        window.parent.postMessage({ type: 'devs:select', payload: { selectionToken: selectionToken, selector: getSelector(el), tagName: el.tagName.toLowerCase(), className: getElementClassName(el), id: el.id || '', textContent: tc.length > 100 ? tc.slice(0, 100) + '...' : tc, htmlSnippet: getSnippet(el), rect: getRect(el), ancestorPath: getAncestorPath(el, 3), deck: deckSelectionContext(el) } }, '*');
         captureElement(el, selectionToken);
       }, { capture: true, passive: false });
     } else if (e.data.type === 'devs:ping') {
@@ -3178,6 +3522,13 @@
     }
   } catch (_) {}
 
+  document.addEventListener('ready', function(e) {
+    if (e.target && e.target.matches('.reveal')) reportLocation(true);
+  }, true);
+  ['slidechanged', 'fragmentshown', 'fragmenthidden'].forEach(function(type) {
+    document.addEventListener(type, function() { reportLocation(); reconcileDeckDrafts(); }, true);
+  });
+
   // Touch support for mobile inspect
   window.__devsTouchSetup = true;
   document.addEventListener('touchstart', function(e) {
@@ -3225,76 +3576,217 @@
     captureElement(el, selectionToken);
   }, { capture: true, passive: false });
 
-  // Forward console output to parent for the Logs panel
-  var _origLog = console.log;
-  var _origWarn = console.warn;
-  var _origError = console.error;
-  var _origInfo = console.info;
-
-  function forwardConsole(level, args) {
+  // Forward console output, runtime errors, rejections and failed fetches to
+  // the parent through the single rate-limited gate. See CONSOLE_GATE_SNIPPET.
+  (function() {
     try {
-      var parts = [];
-      for (var i = 0; i < args.length; i++) {
-        var a = args[i];
-        parts.push(typeof a === 'string' ? a : JSON.stringify(a));
+      // --- Limits (one block; see the coupling note above) ---
+      var RAW_CEILING_PER_SECOND = 200;
+      var MIN_INTERVAL_MS = 10000;
+      var BUCKET_CAPACITY = 30;
+      var BUCKET_REFILL_PER_SECOND = 30;
+      var SESSION_BUDGET_LOG_INFO = 1000;
+      var SESSION_BUDGET_WARN_ERROR = 2000;
+      var TEXT_MAX_LENGTH = 2000;
+      var MAX_TRACKED_LINES = 20;
+
+      var rawWindowStart = 0;
+      var rawCount = 0;
+      var droppedRaw = 0;
+      var droppedRate = 0;
+      var tokens = BUCKET_CAPACITY;
+      var tokensAt = Date.now();
+      var budgets = { logInfo: SESSION_BUDGET_LOG_INFO, warnError: SESSION_BUDGET_WARN_ERROR };
+      var noticeSent = { logInfo: false, warnError: false };
+      var lines = {};
+      var lineKeys = [];
+      var flushTimer = null;
+      var flushAt = 0;
+
+      function send(message) {
+        try { window.parent.postMessage(message, '*'); } catch (e) { /* parent gone */ }
       }
-      window.parent.postMessage({
-        type: 'devs:console',
-        level: level,
-        text: parts.join(' ')
-      }, '*');
-    } catch (e) { /* ignore serialization errors */ }
-  }
 
-  console.log = function() { forwardConsole('log', arguments); return _origLog.apply(console, arguments); };
-  console.warn = function() { forwardConsole('warn', arguments); return _origWarn.apply(console, arguments); };
-  console.error = function() { forwardConsole('error', arguments); return _origError.apply(console, arguments); };
-  console.info = function() { forwardConsole('info', arguments); return _origInfo.apply(console, arguments); };
+      function budgetClass(level) {
+        return level === 'warn' || level === 'error' ? 'warnError' : 'logInfo';
+      }
 
-  // Forward unhandled errors
-  window.addEventListener('error', function(e) {
-    window.parent.postMessage({
-      type: 'devs:console',
-      level: 'error',
-      text: '[Runtime Error] ' + (e.message || String(e.error))
-    }, '*');
-  });
-
-  window.addEventListener('unhandledrejection', function(e) {
-    window.parent.postMessage({
-      type: 'devs:console',
-      level: 'error',
-      text: '[Unhandled Promise] ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason))
-    }, '*');
-  });
-
-  // Intercept fetch to detect failed HTTP responses (4xx/5xx)
-  var _origFetch = window.fetch;
-  window.fetch = function() {
-    var url = arguments[0];
-    var urlStr = typeof url === 'string' ? url : (url && url.url ? url.url : String(url));
-    return _origFetch.apply(this, arguments).then(function(response) {
-      if (!response.ok && response.status >= 400) {
-        var level = response.status >= 500 ? 'error' : 'warn';
-        var label = response.status >= 500 ? 'Server error' : 'Request failed';
-        try {
-          var path = new URL(urlStr, location.origin).pathname;
-          window.parent.postMessage({
-            type: 'devs:console',
-            level: level,
-            text: '[HTTP ' + response.status + '] ' + label + ': ' + path
-          }, '*');
-        } catch(e) {
-          window.parent.postMessage({
-            type: 'devs:console',
-            level: level,
-            text: '[HTTP ' + response.status + '] ' + label + ': (unparseable URL)'
-          }, '*');
+      function takeToken(now) {
+        var elapsed = now - tokensAt;
+        if (elapsed > 0) {
+          tokens = Math.min(BUCKET_CAPACITY, tokens + (elapsed * BUCKET_REFILL_PER_SECOND) / 1000);
         }
+        tokensAt = now;
+        if (tokens < 1) return false;
+        tokens -= 1;
+        return true;
       }
-      return response;
-    });
-  };
+
+      // Sends one message if the session budget and the rate limit allow it.
+      function emit(level, text, count, now) {
+        var cls = budgetClass(level);
+        if (budgets[cls] <= 0) {
+          if (!noticeSent[cls]) {
+            noticeSent[cls] = true;
+            send({
+              type: 'devs:console',
+              level: 'info',
+              text: '[devs-inspect] Console output suppressed: the ' +
+                (cls === 'warnError' ? 'warn/error' : 'log/info') +
+                ' session budget is exhausted. Further output of this kind is not forwarded until the preview reloads.',
+              suppressed: true
+            });
+          }
+          return false;
+        }
+        if (!takeToken(now)) {
+          droppedRate += count;
+          return false;
+        }
+        budgets[cls] -= 1;
+        var message = { type: 'devs:console', level: level, text: text };
+        if (count > 1) message.count = count;
+        send(message);
+        return true;
+      }
+
+      function flushEntry(entry, now) {
+        var count = entry.pending;
+        entry.pending = 0;
+        if (count > 0 && emit(entry.level, entry.text, count, now)) entry.lastSent = now;
+      }
+
+      function schedule(delay) {
+        var now = Date.now();
+        if (flushTimer !== null) {
+          if (flushAt <= now + delay) return;
+          window.clearTimeout(flushTimer);
+        }
+        flushAt = now + delay;
+        flushTimer = window.setTimeout(flushDue, delay);
+      }
+
+      function flushDue() {
+        flushTimer = null;
+        try {
+          var now = Date.now();
+          var nextDue = 0;
+          for (var i = 0; i < lineKeys.length; i++) {
+            var entry = lines[lineKeys[i]];
+            if (!entry || entry.pending <= 0) continue;
+            var due = entry.lastSent + MIN_INTERVAL_MS;
+            if (now >= due) flushEntry(entry, now);
+            else if (!nextDue || due < nextDue) nextDue = due;
+          }
+          if (nextDue) schedule(Math.max(nextDue - now, 1));
+        } catch (e) { /* never throw from a timer */ }
+      }
+
+      function track(level, text, now) {
+        var key = level + '|' + text;
+        var entry = lines[key];
+        if (!entry) {
+          if (lineKeys.length >= MAX_TRACKED_LINES) {
+            var evictedKey = lineKeys.shift();
+            var evicted = lines[evictedKey];
+            delete lines[evictedKey];
+            if (evicted && evicted.pending > 0) flushEntry(evicted, now);
+          }
+          entry = lines[key] = { level: level, text: text, pending: 0, lastSent: 0 };
+          lineKeys.push(key);
+        }
+        entry.pending += 1;
+        if (now - entry.lastSent >= MIN_INTERVAL_MS) flushEntry(entry, now);
+        else schedule(entry.lastSent + MIN_INTERVAL_MS - now);
+      }
+
+      // `text` is a string, or a function returning one so the caller's
+      // serialization only runs once the raw ceiling has let the call through.
+      function postConsole(level, text) {
+        try {
+          var now = Date.now();
+          if (now - rawWindowStart >= 1000 || now < rawWindowStart) {
+            rawWindowStart = now;
+            rawCount = 0;
+          }
+          rawCount += 1;
+          if (rawCount > RAW_CEILING_PER_SECOND) {
+            droppedRaw += 1;
+            return;
+          }
+          var resolved = typeof text === 'function' ? text() : text;
+          if (typeof resolved !== 'string') resolved = String(resolved);
+          if (resolved.length > TEXT_MAX_LENGTH) resolved = resolved.slice(0, TEXT_MAX_LENGTH);
+          track(level, resolved, now);
+        } catch (e) { /* ignore serialization errors */ }
+      }
+
+      function serializeArgs(args) {
+        var parts = [];
+        var total = 0;
+        for (var i = 0; i < args.length; i++) {
+          var a = args[i];
+          var part = typeof a === 'string' ? a : JSON.stringify(a);
+          parts.push(part);
+          total += part ? part.length : 0;
+          if (total >= TEXT_MAX_LENGTH) break;
+        }
+        return parts.join(' ');
+      }
+
+      // 1. console.* (the original console behavior is kept intact)
+      function wrapConsole(level) {
+        var target = window.console;
+        var original = target && target[level];
+        if (typeof original !== 'function') return;
+        target[level] = function() {
+          var args = arguments;
+          postConsole(level, function() { return serializeArgs(args); });
+          return original.apply(target, arguments);
+        };
+      }
+      wrapConsole('log');
+      wrapConsole('warn');
+      wrapConsole('error');
+      wrapConsole('info');
+
+      // 2. Unhandled errors
+      window.addEventListener('error', function(e) {
+        postConsole('error', function() { return '[Runtime Error] ' + (e.message || String(e.error)); });
+      });
+
+      // 3. Unhandled promise rejections
+      window.addEventListener('unhandledrejection', function(e) {
+        postConsole('error', function() {
+          return '[Unhandled Promise] ' + (e.reason && e.reason.message ? e.reason.message : String(e.reason));
+        });
+      });
+
+      // 4. Failed HTTP responses (4xx/5xx), with two post sites (try and fallback)
+      var _origFetch = window.fetch;
+      if (typeof _origFetch === 'function') {
+        window.fetch = function() {
+          var url = arguments[0];
+          var urlStr = typeof url === 'string' ? url : (url && url.url ? url.url : String(url));
+          return _origFetch.apply(this, arguments).then(function(response) {
+            if (!response.ok && response.status >= 400) {
+              var level = response.status >= 500 ? 'error' : 'warn';
+              var label = response.status >= 500 ? 'Server error' : 'Request failed';
+              try {
+                var path = new URL(urlStr, window.location.origin).pathname;
+                postConsole(level, '[HTTP ' + response.status + '] ' + label + ': ' + path);
+              } catch(e) {
+                postConsole(level, '[HTTP ' + response.status + '] ' + label + ': (unparseable URL)');
+              }
+            }
+            return response;
+          });
+        };
+      }
+    } catch (e) {
+      // Never let the console gate break the previewed app.
+    }
+  })();
 
   // Keep the parent's address bar current across SPA navigations.
   // Only wrap instance methods bound to history. Assigning onto
