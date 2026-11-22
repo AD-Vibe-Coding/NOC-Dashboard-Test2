@@ -1,14 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, FileSpreadsheet } from "lucide-react";
 import { RAW_REFERENCE_COLUMNS, type RawReferenceRow, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/widgets/TeamPerformanceMetrics/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -49,6 +42,15 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [loadingRows, setLoadingRows] = useState(false);
   const [page, setPage] = useState(0);
   const pageSize = 100;
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    else if (!open && dialog.open) dialog.close();
+  }, [open]);
 
   const monthOptions = useMemo(() =>
     (upload?.months ?? [])
@@ -142,7 +144,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <>
       <Button
         type="button"
         variant="ghost"
@@ -153,13 +155,23 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
       >
         <FileSpreadsheet aria-hidden="true" />
       </Button>
-      <DialogContent className="flex max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl flex-col gap-4 overflow-hidden p-5 sm:p-6">
-          <DialogHeader className="shrink-0 pr-8">
-            <DialogTitle>Raw Excel data · {metric}</DialogTitle>
-            <DialogDescription>
+      <dialog
+        ref={dialogRef}
+        aria-labelledby={titleId}
+        className="fixed left-1/2 top-1/2 z-50 m-0 max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-lg border bg-background p-5 text-foreground shadow-lg outline-none backdrop:bg-black/50 sm:p-6"
+        style={{ display: open ? "flex" : "none" }}
+        onCancel={() => handleOpenChange(false)}
+        onClose={() => handleOpenChange(false)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) handleOpenChange(false);
+        }}
+      >
+          <div className="flex shrink-0 flex-col gap-2 pr-8 text-center sm:text-left">
+            <h2 id={titleId} className="text-lg leading-none font-semibold">Raw Excel data · {metric}</h2>
+            <p className="text-sm text-muted-foreground">
               {member} · {upload?.filename ?? "No matching workbook uploaded"}. Choose one or more months to view the original rows.
-            </DialogDescription>
-          </DialogHeader>
+            </p>
+          </div>
 
           <section className="shrink-0 space-y-3" aria-label="Month filters">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -284,7 +296,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </p>
             ) : null}
           </div>
-      </DialogContent>
-    </Dialog>
+      </dialog>
+    </>
   );
 }
