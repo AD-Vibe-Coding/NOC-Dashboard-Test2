@@ -2,6 +2,8 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../../_lib/supabase-admin.js";
 import { invalidateMetricsCache } from "../../_lib/crud.js";
 import { requireManager } from "../../_lib/auth-middleware.js";
+import { loadSession } from "../../auth/_lib/session.js";
+import { lookupByEmail } from "../../_lib/roles.js";
 
 /**
  * POST /api/metric_disputes/:id/review
@@ -18,8 +20,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  // Only managers can approve/reject disputes
-  if (!requireManager(req, res)) return;
+  // Google OAuth uses the encrypted __appbuilder_session cookie; development
+  // login still uses the legacy noc_session JWT. Authorize from the verified
+  // server session and current roster mapping, never from client-supplied role.
+  const oauthSession = await loadSession(req);
+  if (oauthSession) {
+    const verifiedRole = oauthSession.email
+      ? lookupByEmail(oauthSession.email.toLowerCase())?.role
+      : null;
+    if (verifiedRole !== "manager") {
+      return res.status(403).json({
+        error: "Manager access required.",
+        hint: "Sign in with a manager account to use this feature.",
+      });
+    }
+  } else if (!requireManager(req, res)) {
+    return;
+  }
 
   const id = Number(req.query.id);
   if (!Number.isFinite(id)) {
