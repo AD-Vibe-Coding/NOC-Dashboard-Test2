@@ -327,7 +327,7 @@ export default function Overview() {
                   <p className="text-sm text-muted-foreground">Not in this file</p>
                 ) : overallDef.unit === "seconds" ? (
                   <p className="font-display flex items-baseline text-3xl tabular-nums">
-                    {formatKpi(v, overallDef.unit)}
+                    {formatKpi(v, overallDef.unit, overallKey === "asa_seconds")}
                     {priorV != null ? (
                       <Delta
                         current={v}
@@ -385,7 +385,7 @@ export default function Overview() {
                             <td className="py-1.5 pr-2 tabular-nums text-muted-foreground">{i + 1}</td>
                             <td className="py-1.5 pr-2 font-medium">{row.name}</td>
                             <td className="py-1.5 text-right tabular-nums">
-                              {formatKpi(row.value, overallDef.unit)}
+                              {formatKpi(row.value, overallDef.unit, overallKey === "asa_seconds")}
                             </td>
                           </tr>
                         ))}

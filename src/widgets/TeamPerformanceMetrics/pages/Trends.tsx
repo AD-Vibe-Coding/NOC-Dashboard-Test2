@@ -319,7 +319,7 @@ export default function Trends() {
               title={k.label}
               data={data}
               grain={grain}
-              formatValue={(val) => formatKpi(val, overallDef.unit)}
+              formatValue={(val) => formatKpi(val, overallDef.unit, overallKey === "asa_seconds")}
               higherIsBetter={overallDef.higherIsBetter}
               unit={overallDef.unit}
               fillId={`kpi-${k.key}`}
