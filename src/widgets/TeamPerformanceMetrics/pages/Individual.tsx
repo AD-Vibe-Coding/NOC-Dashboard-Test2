@@ -197,16 +197,15 @@ function MetricTrend({
 export default function Individual() {
   const [grain, setGrain] = useState<TrendGrain>("month");
   const [member, setMember] = useState<string>(TEAM_MEMBERS[0]);
-  const [activeSourceKind, setActiveSourceKind] = useState<UploadKind>("tickets");
+  const [activeSourceKind, setActiveSourceKind] = useState<UploadKind | null>(null);
   const { uploads } = useSnapshotUploads();
   const sourceOptions = VOLUME_SOURCES.map((source) => ({
     ...source,
     upload: uploads.find((upload) => upload.kind === source.kind),
   }));
-  const selectedSource =
-    sourceOptions.find((source) => source.kind === activeSourceKind && source.upload) ??
-    sourceOptions.find((source) => source.upload) ??
-    sourceOptions[0];
+  const selectedSource = sourceOptions.find(
+    (source) => source.kind === activeSourceKind && source.upload,
+  );
   const live = hasLiveData(uploads);
   const series = liveMemberTrends(uploads, grain, member);
   const windowLabel = grain === "month" ? "13 months (Oct 25–Oct 26)" : "5 quarters (Q4 25–Q4 26)";
@@ -312,17 +311,17 @@ export default function Individual() {
             <Button
               key={source.kind}
               type="button"
-              variant={selectedSource.kind === source.kind ? "default" : "outline"}
-              aria-pressed={selectedSource.kind === source.kind}
+              variant={selectedSource?.kind === source.kind ? "default" : "outline"}
+              aria-pressed={selectedSource?.kind === source.kind}
               disabled={!source.upload}
-              onClick={() => setActiveSourceKind(source.kind)}
+              onClick={() => setActiveSourceKind((current) => current === source.kind ? null : source.kind)}
             >
               <FileSpreadsheet aria-hidden="true" />
               {source.label}
             </Button>
           ))}
         </div>
-        {selectedSource.upload ? (
+        {selectedSource?.upload ? (
           <RawReferenceTable
             key={`${selectedSource.kind}-${selectedSource.upload.uploadId ?? selectedSource.upload.filename}`}
             member={member}
@@ -332,7 +331,9 @@ export default function Individual() {
           />
         ) : (
           <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
-            Upload a tickets, calls, or mobility workbook to view its source rows here.
+            {selectedSource
+              ? "Upload this workbook type to view its source rows here."
+              : "Select a workbook above to show its source rows."}
           </p>
         )}
       </section>
