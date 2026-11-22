@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, real, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, integer, jsonb, pgTable, real, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const breaks = pgTable("breaks", {
   id: serial("id").primaryKey(),
@@ -260,9 +260,12 @@ export const team_performance_uploads = pgTable("team_performance_uploads", {
   id: serial("id").primaryKey(),
   kind: text("kind").notNull(), // tickets | mobility | calls
   filename: text("filename").notNull(),
-  mime_type: text("mime_type").notNull(),
+  // Legacy source-file fields remain nullable so existing uploads can still restore.
+  mime_type: text("mime_type"),
   file_size_bytes: integer("file_size_bytes").notNull(),
-  data_url: text("data_url").notNull(), // Base64 data URL; API enforces a 2 MiB source-file limit.
+  data_url: text("data_url"),
+  // Compact parsed UploadResult JSON; source workbooks are not retained for new uploads.
+  parsed_data: jsonb("parsed_data"),
   uploaded_by: text("uploaded_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });

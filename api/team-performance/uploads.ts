@@ -2,9 +2,9 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { getSessionName, requireManager } from "../_lib/auth-middleware.js";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_PARSED_BYTES = 3 * 1024 * 1024;
 const KINDS = new Set(["tickets", "mobility", "calls"]);
-const SELECT_FIELDS = "id,kind,filename,mime_type,file_size_bytes,data_url,uploaded_by,created_at";
+const SELECT_FIELDS = "id,kind,filename,mime_type,file_size_bytes,data_url,parsed_data,uploaded_by,created_at";
 
 function bodyOf(req: VercelRequest): Record<string, unknown> {
   if (typeof req.body === "string") return JSON.parse(req.body || "{}");
@@ -35,23 +35,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const body = bodyOf(req);
       const kind = String(body.kind ?? "");
       const filename = String(body.filename ?? "").trim().replace(/[\\/]/g, "_").slice(0, 255);
-      const dataUrl = String(body.data_url ?? "");
+      const sourceFileBytes = Number(body.file_size_bytes);
+      const parsed = body.parsed_data;
       if (!KINDS.has(kind)) return res.status(400).json({ error: "A valid upload kind is required." });
       if (!filename) return res.status(400).json({ error: "A filename is required." });
+      if (!Number.isSafeInteger(sourceFileBytes) || sourceFileBytes < 0) {
+        return res.status(400).json({ error: "A valid source file size is required." });
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return res.status(400).json({ error: "Parsed dashboard data is required." });
+      }
+      const snapshot = parsed as Record<string, unknown>;
+      if (snapshot.kind !== kind || snapshot.filename !== filename || !Array.isArray(snapshot.months)) {
+        return res.status(400).json({ error: "Parsed data does not match the selected workbook." });
+      }
 
-      const dataUrlMatch = /^data:([^;,]{1,128});base64,([A-Za-z0-9+/]*={0,2})$/.exec(dataUrl);
-      if (!dataUrlMatch || dataUrl.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 + 256) {
-        return res.status(400).json({ error: "The uploaded file data is invalid." });
-      }
-      const mimeType = String(body.mime_type || dataUrlMatch[1] || "application/octet-stream").slice(0, 128);
-      const base64 = dataUrlMatch[2];
-      const bytes = Buffer.from(base64, "base64");
-      if (bytes.byteLength === 0) return res.status(400).json({ error: "The uploaded file is empty." });
-      if (bytes.byteLength > MAX_FILE_BYTES) {
-        return res.status(413).json({ error: "Files must be 2 MiB or smaller." });
-      }
-      if (Number(body.file_size_bytes) !== bytes.byteLength) {
-        return res.status(400).json({ error: "The uploaded file size did not match its data." });
+      const parsedData = JSON.stringify(snapshot);
+      const parsedBytes = Buffer.byteLength(parsedData, "utf8");
+      if (parsedBytes > MAX_PARSED_BYTES) {
+        return res.status(413).json({ error: "The parsed dashboard data is too large to save (maximum 3 MiB)." });
       }
 
       const { data, error } = await supabaseAdmin
@@ -59,12 +61,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .insert({
           kind,
           filename,
-          mime_type: mimeType,
-          file_size_bytes: bytes.byteLength,
-          data_url: dataUrl,
+          file_size_bytes: sourceFileBytes,
+          parsed_data: snapshot,
           uploaded_by: getSessionName(req),
         })
-        .select("id,kind,filename,mime_type,file_size_bytes,uploaded_by,created_at")
+        .select("id,kind,filename,file_size_bytes,uploaded_by,created_at")
         .single();
       if (error) return res.status(500).json({ error: error.message });
       return res.status(201).json({ upload: data });

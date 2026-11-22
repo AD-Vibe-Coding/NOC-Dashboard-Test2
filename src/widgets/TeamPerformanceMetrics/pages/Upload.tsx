@@ -38,17 +38,6 @@ const ZONES: {
   },
 ];
 
-const MAX_FILE_BYTES = 2 * 1024 * 1024;
-
-function fileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not prepare the file for storage."));
-    reader.onerror = () => reject(new Error("Could not read the selected file."));
-    reader.readAsDataURL(file);
-  });
-}
-
 function Zone({
   zone,
   busy,
@@ -99,10 +88,6 @@ export default function Upload() {
 
   async function onFile(kind: UploadKind, file: File) {
     setError(null);
-    if (file.size > MAX_FILE_BYTES) {
-      setError("Files must be 2 MiB or smaller to store in Supabase.");
-      return;
-    }
     setBusy(true);
     try {
       const buf = await file.arrayBuffer();
@@ -120,18 +105,17 @@ export default function Upload() {
         body: JSON.stringify({
           kind,
           filename: file.name,
-          mime_type: file.type || "application/octet-stream",
           file_size_bytes: file.size,
-          data_url: await fileAsDataUrl(file),
+          parsed_data: result,
         }),
       });
       const payload = await response.json().catch(() => null);
-      if (!response.ok) throw new Error(String(payload?.error ?? `Could not save file (${response.status}).`));
+      if (!response.ok) throw new Error(String(payload?.error ?? `Could not save dashboard data (${response.status}).`));
 
       applyUpload(result);
       setLast(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not read or save that file");
+      setError(e instanceof Error ? e.message : "Could not read or save that workbook");
     } finally {
       setBusy(false);
     }
@@ -144,7 +128,7 @@ export default function Upload() {
           <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Ingest</p>
           <h1 className="font-display mt-1 text-3xl md:text-4xl">Upload Excel</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Uploads are saved in Supabase with history retained; the latest file in each category restores automatically for managers. Each file can be up to 2 MiB.
+            Workbooks are parsed in your browser; only the compact dashboard data is saved in Supabase. The latest snapshot in each category restores automatically for managers. The original workbook is not retained.
           </p>
         </div>
       </BlurFade>

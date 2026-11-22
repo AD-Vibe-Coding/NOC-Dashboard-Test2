@@ -22,9 +22,25 @@ async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
   }
 
   const payload = await response.json();
-  const saved = payload?.upload as { filename?: string; data_url?: string } | null;
-  if (!saved?.filename || !saved.data_url) return null;
+  const saved = payload?.upload as {
+    filename?: string;
+    parsed_data?: string | UploadResult | null;
+    data_url?: string | null;
+  } | null;
+  if (!saved?.filename) return null;
 
+  if (saved.parsed_data) {
+    const result = (typeof saved.parsed_data === "string"
+      ? JSON.parse(saved.parsed_data)
+      : saved.parsed_data) as UploadResult;
+    if (result.kind !== kind || result.filename !== saved.filename || !Array.isArray(result.months)) {
+      throw new Error(`Saved ${kind} dashboard data is invalid.`);
+    }
+    return result;
+  }
+
+  // Compatibility for rows uploaded before persistence switched to parsed data.
+  if (!saved.data_url) return null;
   const fileResponse = await fetch(saved.data_url);
   if (!fileResponse.ok) throw new Error(`Could not read saved ${kind} workbook.`);
   const result = parseWorkbook(kind, saved.filename, await fileResponse.arrayBuffer());
