@@ -566,7 +566,8 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
     kind === "calls" &&
     dataRows.some((grid) => {
       const status = String(grid[15] ?? "").trim().toLowerCase();
-      return parseMonthKey(grid[19]) != null && (status === "answered" || status === "refused");
+      const hasMonthCell = grid[19] != null && String(grid[19]).trim() !== "";
+      return hasMonthCell && ["answered", "answerd", "refused"].includes(status);
     });
 
   dataRows.forEach((grid, i) => {
@@ -788,10 +789,11 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
 
     if (kind === "calls" && inboundCallLayout) {
       const status = String(grid[15] ?? "").trim().toLowerCase();
-      if (status !== "answered" && status !== "refused") return;
+      const isAnswered = status === "answered" || status === "answerd";
+      if (!isAnswered && status !== "refused") return;
 
       const owner = String(grid[7] ?? "").trim() || cell(row, "individual name", "agent name", "agent", "owner", "name");
-      const asaSec = status === "answered" ? toSeconds(grid[21]) : null;
+      const asaSec = isAnswered ? toSeconds(grid[21]) : null;
       used += 1;
       acc.used += 1;
       total.used += 1;
@@ -810,7 +812,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
         mAcc.used += 1;
       }
 
-      if (status === "answered") {
+      if (isAnswered) {
         acc.inbound += 1;
         total.inbound += 1;
         if (mAcc) mAcc.inbound += 1;
