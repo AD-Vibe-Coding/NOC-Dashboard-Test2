@@ -16,7 +16,7 @@ import { useSnapshotUploads } from "./lib/snapshot-store";
 import "./styles.css";
 
 export function TeamPerformanceMetricsTile({ onExpand }: TileProps) {
-  const { uploads } = useSnapshotUploads();
+  const { uploads, isRestoring } = useSnapshotUploads();
   const loaded = hasLiveData(uploads);
 
   return (
@@ -31,7 +31,7 @@ export function TeamPerformanceMetricsTile({ onExpand }: TileProps) {
       <Stack gap="xs">
         <Group justify="space-between" align="center" wrap="nowrap">
           <Text size="sm" fw={600}>
-            {loaded ? "Workbook data is ready" : "Ready for an Excel upload"}
+            {isRestoring ? "Restoring saved workbooks…" : loaded ? "Workbook data is ready" : "Ready for an Excel upload"}
           </Text>
           <Badge color={loaded ? "green" : "gray"} variant="light" size="sm">
             {uploads.length} {uploads.length === 1 ? "file" : "files"}

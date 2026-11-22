@@ -256,6 +256,17 @@ export const team_members = pgTable("team_members", {
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const team_performance_uploads = pgTable("team_performance_uploads", {
+  id: serial("id").primaryKey(),
+  kind: text("kind").notNull(), // tickets | mobility | calls
+  filename: text("filename").notNull(),
+  mime_type: text("mime_type").notNull(),
+  file_size_bytes: integer("file_size_bytes").notNull(),
+  data_url: text("data_url").notNull(), // Base64 data URL; API enforces a 2 MiB source-file limit.
+  uploaded_by: text("uploaded_by"),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+});
+
 export const performance_imports = pgTable("performance_imports", {
   id: serial("id").primaryKey(),
   file_name: text("file_name").notNull(),

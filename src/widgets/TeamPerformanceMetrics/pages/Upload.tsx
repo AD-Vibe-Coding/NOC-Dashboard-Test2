@@ -38,6 +38,17 @@ const ZONES: {
   },
 ];
 
+const MAX_FILE_BYTES = 2 * 1024 * 1024;
+
+function fileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Could not prepare the file for storage."));
+    reader.onerror = () => reject(new Error("Could not read the selected file."));
+    reader.readAsDataURL(file);
+  });
+}
+
 function Zone({
   zone,
   busy,
@@ -81,14 +92,18 @@ function Zone({
 }
 
 export default function Upload() {
-  const { uploads, applyUpload, clearUploads } = useSnapshotUploads();
+  const { uploads, applyUpload, clearUploads, isRestoring, restoreError } = useSnapshotUploads();
   const [busy, setBusy] = useState(false);
   const [last, setLast] = useState<UploadResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function onFile(kind: UploadKind, file: File) {
-    setBusy(true);
     setError(null);
+    if (file.size > MAX_FILE_BYTES) {
+      setError("Files must be 2 MiB or smaller to store in Supabase.");
+      return;
+    }
+    setBusy(true);
     try {
       const buf = await file.arrayBuffer();
       const result = parseWorkbook(kind, file.name, buf);
@@ -97,10 +112,26 @@ export default function Upload() {
         setLast(result);
         return;
       }
+
+      const response = await fetch("/api/team-performance/uploads", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          filename: file.name,
+          mime_type: file.type || "application/octet-stream",
+          file_size_bytes: file.size,
+          data_url: await fileAsDataUrl(file),
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(String(payload?.error ?? `Could not save file (${response.status}).`));
+
       applyUpload(result);
       setLast(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not read that file");
+      setError(e instanceof Error ? e.message : "Could not read or save that file");
     } finally {
       setBusy(false);
     }
@@ -113,12 +144,16 @@ export default function Upload() {
           <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">Ingest</p>
           <h1 className="font-display mt-1 text-3xl md:text-4xl">Upload Excel</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Three files, parsed in the browser. Results stay in this session and overlay the snapshot
-            volumes on Dashboard and Trends.
+            Uploads are saved in Supabase with history retained; the latest file in each category restores automatically for managers. Each file can be up to 2 MiB.
           </p>
         </div>
       </BlurFade>
 
+      {restoreError ? (
+        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          Saved workbooks could not be restored: {restoreError}
+        </p>
+      ) : null}
       {error ? (
         <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {error}
@@ -127,7 +162,7 @@ export default function Upload() {
 
       <div className="grid gap-4 lg:grid-cols-3">
         {ZONES.map((z) => (
-          <Zone key={z.kind} zone={z} busy={busy} onFile={onFile} />
+          <Zone key={z.kind} zone={z} busy={busy || isRestoring} onFile={onFile} />
         ))}
       </div>
 
@@ -159,10 +194,10 @@ export default function Upload() {
       ) : null}
 
       <div className="flex items-center justify-between">
-        <h2 className="font-display text-2xl">This session</h2>
+        <h2 className="font-display text-2xl">Current data</h2>
         {uploads.length ? (
           <Button type="button" variant="outline" onClick={clearUploads}>
-            Clear uploads
+            Clear session
           </Button>
         ) : null}
       </div>
