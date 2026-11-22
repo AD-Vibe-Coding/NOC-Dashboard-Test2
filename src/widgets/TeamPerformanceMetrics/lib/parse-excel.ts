@@ -4,6 +4,11 @@ import type { VolumeKey } from "./volumes";
 import { matchTeamMember } from "./team-members";
 
 export type UploadKind = "tickets" | "mobility" | "calls";
+/** Zero-based Excel columns retained and displayed for individual raw-row reference. */
+export const RAW_REFERENCE_COLUMNS: Partial<Record<UploadKind, readonly number[]>> = {
+  tickets: [0, 1, 32, 39], // A, B, AG, AN
+  calls: [7, 11, 13, 15, 17], // H, L, N, P, R
+};
 export type RawCellValue = string | number | boolean;
 export type RawReferenceRow = {
   memberName: string;
@@ -654,7 +659,9 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
         }
       }
       const cells: Record<string, RawCellValue> = {};
+      const allowedColumns = RAW_REFERENCE_COLUMNS[kind];
       grid.forEach((value, column) => {
+        if (allowedColumns && !allowedColumns.includes(column)) return;
         const normalized = rawCellValue(value);
         if (normalized !== null) cells[String(column)] = normalized;
       });

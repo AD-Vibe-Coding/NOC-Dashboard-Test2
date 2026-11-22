@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, FileSpreadsheet } from "lucide-react";
-import type { UploadKind, UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
+import { RAW_REFERENCE_COLUMNS, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
 import {
   Dialog,
@@ -31,6 +31,17 @@ export function uploadKindForMetric(metricKey: string): UploadKind {
   return "tickets";
 }
 
+function excelColumnLabel(index: number) {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    value -= 1;
+    label = String.fromCharCode(65 + (value % 26)) + label;
+    value = Math.floor(value / 26);
+  }
+  return label;
+}
+
 export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [open, setOpen] = useState(false);
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
@@ -58,10 +69,17 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   );
   const visibleColumns = useMemo(() => {
     const headers = upload?.rawHeaders ?? [];
+    const requestedIndexes = upload ? RAW_REFERENCE_COLUMNS[upload.kind] : undefined;
+    if (requestedIndexes) {
+      return requestedIndexes.map((index) => ({
+        header: headers[index] || `Column ${excelColumnLabel(index)}`,
+        index,
+      }));
+    }
     return headers
       .map((header, index) => ({ header, index }))
       .filter(({ index }) => visibleRows.some((row) => row.cells[String(index)] !== undefined));
-  }, [upload?.rawHeaders, visibleRows]);
+  }, [upload?.kind, upload?.rawHeaders, visibleRows]);
 
   function toggleMonth(monthKey: string) {
     setSelectedMonths((current) => current.includes(monthKey)
