@@ -193,6 +193,18 @@ function toSeconds(raw: unknown): number | null {
   return n * 60;
 }
 
+/** Inbound ASA is mm:ss; Excel may surface a formatted cell as a Date. */
+function asaMmSsToSeconds(raw: unknown): number | null {
+  if (raw instanceof Date && !Number.isNaN(raw.getTime())) {
+    const hours = raw.getUTCHours();
+    const minutes = raw.getUTCMinutes();
+    const seconds = raw.getUTCSeconds();
+    // Some mm:ss-formatted cells are surfaced as HH:mm Date components.
+    return hours > 0 ? hours * 60 + minutes : minutes * 60 + seconds;
+  }
+  return toSeconds(raw);
+}
+
 /** Column AN "Ticket Acknowledge Time" is minutes (1, 8, 13…) or Excel time. */
 function ackMinutesToSeconds(raw: unknown): number | null {
   if (raw == null || raw === "") return null;
@@ -793,7 +805,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       if (!isAnswered && status !== "refused") return;
 
       const owner = String(grid[7] ?? "").trim() || cell(row, "individual name", "agent name", "agent", "owner", "name");
-      const asaSec = isAnswered ? toSeconds(grid[21]) : null;
+      const asaSec = isAnswered ? asaMmSsToSeconds(grid[21]) : null;
       used += 1;
       acc.used += 1;
       total.used += 1;
