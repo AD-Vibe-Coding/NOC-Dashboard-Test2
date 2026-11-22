@@ -146,15 +146,13 @@ export const KPI_BY_KEY = Object.fromEntries([...KPI_DEFS, ACK_UNDER_5].map((k) 
 
 export const TEAM_KPI_DEFS = KPI_DEFS.filter((k) => k.showOnTeam);
 
-export function formatKpi(value: number, unit: KpiUnit, forceMmSs = false) {
+export function formatKpi(value: number, unit: KpiUnit, forceSecondsLabel = false) {
   if (!Number.isFinite(value)) return "—";
   if (unit === "percent") return `${value.toFixed(1)}%`;
   if (unit === "seconds") {
-    if (forceMmSs) {
-      const totalSeconds = Math.round(value);
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `${minutes}:${String(seconds).padStart(2, "0")}`;
+    if (forceSecondsLabel) {
+      const seconds = Math.round(value);
+      return `${seconds} ${seconds === 1 ? "second" : "seconds"}`;
     }
     if (value >= 3600) {
       const h = Math.floor(value / 3600);
