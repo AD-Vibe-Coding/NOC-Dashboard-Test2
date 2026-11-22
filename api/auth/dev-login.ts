@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { signJwt } from "../_lib/jwt.js";
-import { lookupByEmail } from "../_lib/roles.js";
+import { lookupByEmail, ROSTER_BY_EMAIL } from "../_lib/roles.js";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
 
 /**
@@ -8,7 +8,7 @@ import { supabaseAdmin } from "../_lib/supabase-admin.js";
  * Only works when GOOGLE_CLIENT_ID is NOT set. In production this
  * endpoint returns 403.
  *
- * Body: { email: "name@appdirect.com" }
+ * Body: { email: "name@appdirect.com" } or { name: "Roster Name" }
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (process.env.GOOGLE_CLIENT_ID) {
@@ -22,9 +22,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const email = String((req.body as Record<string, unknown>)?.email ?? "").trim().toLowerCase();
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const suppliedEmail = String(body.email ?? "").trim().toLowerCase();
+  const suppliedName = String(body.name ?? "").trim().toLowerCase();
+  const email = suppliedEmail || Object.entries(ROSTER_BY_EMAIL).find(
+    ([, entry]) => entry.name.toLowerCase() === suppliedName,
+  )?.[0] || "";
   if (!email) {
-    return res.status(400).json({ error: "Email is required" });
+    return res.status(400).json({ error: "A roster email or name is required" });
   }
 
   const rosterEntry = lookupByEmail(email);
