@@ -5,6 +5,74 @@ import { requireManager } from "../../_lib/auth-middleware.js";
 import { loadSession } from "../../auth/_lib/session.js";
 import { lookupByEmail } from "../../_lib/roles.js";
 
+const TICKET_REFERENCE_HEADERS = new Set([
+  "troubleid",
+  "troubleticketid",
+  "troubleticketnumber",
+  "ticketid",
+  "ticketnumber",
+  "referencenumber",
+  "refnumber",
+]);
+
+type LegacyRawRowLookup =
+  | { status: "matched"; rawRowId: number }
+  | { status: "missing" }
+  | { status: "ambiguous" }
+  | { status: "error"; message: string };
+
+/** Recover an old missing raw_row_id only when ticket + technician resolve uniquely. */
+async function findLegacyRawRow(dispute: {
+  ticket_ref: string | null;
+  submitted_by: string;
+  created_at: string;
+}): Promise<LegacyRawRowLookup> {
+  const ticketRef = String(dispute.ticket_ref ?? "").trim();
+  const memberName = String(dispute.submitted_by ?? "").trim();
+  if (!ticketRef || !memberName) return { status: "missing" };
+
+  const { data: uploads, error: uploadsError } = await supabaseAdmin
+    .from("team_performance_uploads")
+    .select("id,parsed_data")
+    .eq("kind", "tickets")
+    .lte("created_at", dispute.created_at)
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  if (uploadsError) return { status: "error", message: uploadsError.message };
+  if ((uploads ?? []).length >= 1000) {
+    return { status: "ambiguous" };
+  }
+
+  const matches: number[] = [];
+  for (const upload of uploads ?? []) {
+    const parsed = upload.parsed_data && typeof upload.parsed_data === "object"
+      ? upload.parsed_data as Record<string, unknown>
+      : {};
+    const rawHeaders = Array.isArray(parsed.rawHeaders)
+      ? parsed.rawHeaders.map((header) => String(header ?? ""))
+      : [];
+    const headerIndex = rawHeaders.findIndex((header) =>
+      TICKET_REFERENCE_HEADERS.has(header.toLowerCase().replace(/[^a-z0-9]/g, ""))
+    );
+    // The raw-reference UI uses column A when the workbook has no recognized ID header.
+    const ticketColumn = headerIndex >= 0 ? headerIndex : 0;
+    const { data: rows, error: rowsError } = await supabaseAdmin
+      .from("team_performance_raw_rows")
+      .select("id")
+      .eq("upload_id", upload.id)
+      .eq("member_name", memberName)
+      .filter(`cells->>${ticketColumn}`, "eq", ticketRef)
+      .limit(2);
+    if (rowsError) return { status: "error", message: rowsError.message };
+    for (const row of rows ?? []) matches.push(Number(row.id));
+    if (matches.length > 1) return { status: "ambiguous" };
+  }
+
+  return matches.length === 1
+    ? { status: "matched", rawRowId: matches[0] }
+    : { status: "missing" };
+}
+
 /**
  * POST /api/metric_disputes/:id/review
  *
@@ -118,6 +186,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       } catch {
         // Invalid or legacy context is not sufficient to identify a source.
+      }
+    }
+
+    if (rawRowId == null && dispute.metric_id == null) {
+      const lookup = await findLegacyRawRow(dispute);
+      if (lookup.status === "matched") {
+        rawRowId = lookup.rawRowId;
+      } else if (lookup.status === "ambiguous") {
+        return res.status(409).json({
+          error: `Ticket #${dispute.ticket_ref ?? "(unknown)"} matches multiple possible source rows. The dispute remains pending; no row was changed.`,
+        });
+      } else if (lookup.status === "error") {
+        return res.status(500).json({ error: `Could not search for the legacy dispute source: ${lookup.message}` });
+      } else {
+        return res.status(409).json({
+          error: `No unique source row was found for ticket #${dispute.ticket_ref ?? "(unknown)"} and ${dispute.submitted_by}. The dispute remains pending; no row was changed. Re-upload the original ticket workbook if its raw rows are not available.`,
+        });
       }
     }
 
