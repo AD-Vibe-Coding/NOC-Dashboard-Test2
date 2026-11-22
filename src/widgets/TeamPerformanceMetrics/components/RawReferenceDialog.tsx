@@ -1,6 +1,7 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, FileSpreadsheet } from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import { RAW_REFERENCE_COLUMNS, type RawReferenceRow, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
+import type { VolumeKey } from "@/widgets/TeamPerformanceMetrics/lib/volumes";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
 import {
   Table,
@@ -15,12 +16,19 @@ type Props = {
   member: string;
   metric: string;
   upload?: UploadResult;
+  active: boolean;
 };
 
 export function uploadKindForMetric(metricKey: string): UploadKind {
   if (metricKey === "asa_seconds" || metricKey === "refused_calls") return "calls";
   if (metricKey === "mobility_sla_pct") return "mobility";
   return "tickets";
+}
+
+export function uploadKindForVolume(volumeKey: VolumeKey): UploadKind {
+  if (volumeKey === "tickets_received") return "tickets";
+  if (volumeKey === "mobility_tasks") return "mobility";
+  return "calls";
 }
 
 function excelColumnLabel(index: number) {
@@ -34,9 +42,37 @@ function excelColumnLabel(index: number) {
   return label;
 }
 
-export function RawReferenceDialog({ member, metric, upload }: Props) {
-  const [open, setOpen] = useState(false);
-  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
+function rowSortValue(row: RawReferenceRow, column: string): string | number | boolean | null {
+  if (column === "excelRow") return row.sourceRow;
+  if (column === "month") return row.monthKey;
+  if (column.startsWith("cell:")) return row.cells[column.slice(5)] ?? null;
+  return null;
+}
+
+function compareSortValues(a: string | number | boolean | null, b: string | number | boolean | null) {
+  if (a == null && b == null) return 0;
+  if (a == null) return -1;
+  if (b == null) return 1;
+  if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
+  const numericA = typeof a === "number" ? a : typeof a === "string" && a.trim() ? Number(a) : Number.NaN;
+  const numericB = typeof b === "number" ? b : typeof b === "string" && b.trim() ? Number(b) : Number.NaN;
+  if (Number.isFinite(numericA) && Number.isFinite(numericB)) return numericA - numericB;
+  return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+}
+
+function compareRows(a: RawReferenceRow, b: RawReferenceRow, column: string, direction: "asc" | "desc") {
+  const primary = compareSortValues(rowSortValue(a, column), rowSortValue(b, column));
+  const directed = primary * (direction === "asc" ? 1 : -1);
+  return directed || a.monthKey.localeCompare(b.monthKey) || a.sourceRow - b.sourceRow;
+}
+
+export function RawReferenceTable({ member, metric, upload, active }: Props) {
+  const [selectedMonths, setSelectedMonths] = useState<string[]>(() => {
+    const months = [...(upload?.months ?? [])].sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+    const latest = months[months.length - 1];
+    return latest ? [latest.monthKey] : [];
+  });
+  const [sortBy, setSortBy] = useState("month");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [memberRows, setMemberRows] = useState<RawReferenceRow[]>([]);
   const [totalRows, setTotalRows] = useState(0);
@@ -45,15 +81,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [serverPaged, setServerPaged] = useState(false);
   const [page, setPage] = useState(0);
   const pageSize = 100;
-  const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    else if (!open && dialog.open) dialog.close();
-  }, [open]);
 
   const monthOptions = useMemo(() =>
     (upload?.months ?? [])
@@ -63,7 +91,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const selectedSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
 
   useEffect(() => {
-    if (!open || selectedSet.size === 0) {
+    if (!active || selectedSet.size === 0) {
       setMemberRows([]);
       setTotalRows(0);
       setLoadingRows(false);
@@ -91,8 +119,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
         if (cursor < sourceRows.length) {
           timer = window.setTimeout(processChunk, 0);
         } else if (!cancelled) {
-          const direction = sortDirection === "asc" ? 1 : -1;
-          matchingRows.sort((a, b) => (a.monthKey.localeCompare(b.monthKey) || a.sourceRow - b.sourceRow) * direction);
+          matchingRows.sort((a, b) => compareRows(a, b, sortBy, sortDirection));
           setMemberRows(matchingRows);
           setTotalRows(matchingRows.length);
           setServerPaged(false);
@@ -114,6 +141,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
           page: String(page),
           limit: String(pageSize),
           direction: sortDirection,
+          sortBy,
         });
         const response = await fetch(`/api/team-performance/uploads/${upload.uploadId}/raw-rows?${params}`, { credentials: "include" });
         const payload = await response.json().catch(() => null);
@@ -145,17 +173,13 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [member, open, page, selectedMonths, selectedSet, sortDirection, upload?.rawRows, upload?.uploadId]);
+  }, [active, member, page, selectedMonths, selectedSet, sortBy, sortDirection, upload?.rawRows, upload?.uploadId]);
 
   const visibleRows = useMemo(() => {
     if (loadingRows || selectedSet.size === 0) return [];
     if (serverPaged) return memberRows;
-    return [...memberRows].sort((a, b) => {
-      const monthOrder = a.monthKey.localeCompare(b.monthKey);
-      const rowOrder = a.sourceRow - b.sourceRow;
-      return (monthOrder || rowOrder) * (sortDirection === "asc" ? 1 : -1);
-    });
-  }, [loadingRows, memberRows, selectedSet, serverPaged, sortDirection]);
+    return [...memberRows].sort((a, b) => compareRows(a, b, sortBy, sortDirection));
+  }, [loadingRows, memberRows, selectedSet, serverPaged, sortBy, sortDirection]);
   const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
   const pageRows = useMemo(
     () => serverPaged ? visibleRows : visibleRows.slice(page * pageSize, (page + 1) * pageSize),
@@ -173,16 +197,6 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
     return headers.map((header, index) => ({ header, index }));
   }, [upload?.kind, upload?.rawHeaders]);
 
-  function handleOpenChange(nextOpen: boolean) {
-    setOpen(nextOpen);
-    setMemberRows([]);
-    setTotalRows(0);
-    setSelectedMonths([]);
-    setLoadingRows(false);
-    setLoadError(null);
-    setPage(0);
-  }
-
   function selectMonths(months: string[]) {
     setSelectedMonths(months);
     setMemberRows([]);
@@ -199,33 +213,47 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
     selectMonths(nextMonths);
   }
 
+  function toggleSort(column: string) {
+    if (sortBy === column) {
+      setSortDirection((current) => current === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(column);
+      setSortDirection("asc");
+    }
+    setPage(0);
+  }
+
+  function sortableHeader(label: string, column: string, className?: string) {
+    const active = sortBy === column;
+    const sortLabel = active ? sortDirection === "asc" ? "ascending" : "descending" : "none";
+    return (
+      <TableHead key={column} className={className} aria-sort={sortLabel}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 gap-1.5 px-2 text-left font-medium"
+          onClick={() => toggleSort(column)}
+          aria-label={`Sort by ${label}${active ? `, ${sortDirection === "asc" ? "ascending" : "descending"}` : ""}`}
+          aria-pressed={active}
+        >
+          <span>{label}</span>
+          {active
+            ? sortDirection === "asc" ? <ArrowUp aria-hidden="true" /> : <ArrowDown aria-hidden="true" />
+            : <ArrowUpDown aria-hidden="true" />}
+        </Button>
+      </TableHead>
+    );
+  }
+
+  if (!active) return null;
+
   return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`View raw Excel data for ${metric}`}
-        title="View raw Excel data"
-        onClick={() => handleOpenChange(true)}
-      >
-        <FileSpreadsheet aria-hidden="true" />
-      </Button>
-      <dialog
-        ref={dialogRef}
-        aria-labelledby={titleId}
-        className="fixed left-1/2 top-1/2 z-50 m-0 max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl -translate-x-1/2 -translate-y-1/2 flex-col gap-4 overflow-hidden rounded-lg border bg-background p-5 text-foreground shadow-lg outline-none backdrop:bg-black/50 sm:p-6"
-        style={{ display: open ? "flex" : "none" }}
-        onCancel={() => handleOpenChange(false)}
-        onClose={() => handleOpenChange(false)}
-        onClick={(event) => {
-          if (event.target === event.currentTarget) handleOpenChange(false);
-        }}
-      >
+      <section aria-labelledby={titleId} className="space-y-4 rounded-lg border bg-card p-4 shadow-sm sm:p-5">
           <div className="flex shrink-0 flex-col gap-2 pr-8 text-center sm:text-left">
             <h2 id={titleId} className="text-lg leading-none font-semibold">Raw Excel data · {metric}</h2>
             <p className="text-sm text-muted-foreground">
-              {member} · {upload?.filename ?? "No matching workbook uploaded"}. Choose one or more months to view the original rows.
+              {member} · {upload?.filename ?? "No matching workbook uploaded"}. The latest month is selected initially; choose other months to compare source rows.
             </p>
           </div>
 
@@ -287,17 +315,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               <p className="text-sm text-muted-foreground" aria-live="polite">
                 {selectedMonths.length ? `${totalRows} source row${totalRows === 1 ? "" : "s"}` : "Select one or more months to show source rows."}
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setSortDirection((direction) => direction === "asc" ? "desc" : "asc")}
-                disabled={!selectedMonths.length}
-                aria-label={`Sort ${sortDirection === "asc" ? "descending" : "ascending"}`}
-              >
-                {sortDirection === "asc" ? <ArrowUp aria-hidden="true" /> : <ArrowDown aria-hidden="true" />}
-                {sortDirection === "asc" ? "Ascending" : "Descending"}
-              </Button>
+              <p className="text-xs text-muted-foreground">Select any column heading to sort the table.</p>
             </div>
 
             {loadingRows ? (
@@ -314,11 +332,11 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
                   <Table className="min-w-max">
                     <TableHeader className="sticky top-0 z-10 bg-muted">
                       <TableRow>
-                        <TableHead className="sticky left-0 z-20 bg-muted">Excel row</TableHead>
-                        <TableHead>Month</TableHead>
-                        {visibleColumns.map(({ header, index }) => (
-                          <TableHead key={index}>{header}</TableHead>
-                        ))}
+                        {sortableHeader("Excel row", "excelRow", "sticky left-0 z-20 bg-muted")}
+                        {sortableHeader("Month", "month")}
+                        {visibleColumns.map(({ header, index }) =>
+                          sortableHeader(header, `cell:${index}`)
+                        )}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -362,7 +380,6 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </p>
             ) : null}
           </div>
-      </dialog>
-    </>
+      </section>
   );
 }

@@ -69,6 +69,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const page = Math.max(0, Math.floor(Number(req.query.page) || 0));
       const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit) || 100)));
       const direction = req.query.direction === "desc" ? false : true;
+      const requestedSort = String(req.query.sortBy ?? "month");
+      const sortColumn = requestedSort === "excelRow"
+        ? "source_row"
+        : requestedSort === "month"
+          ? "month_key"
+          : /^cell:\d{1,4}$/.test(requestedSort)
+            ? `cells->>${requestedSort.slice(5)}`
+            : "month_key";
       if (!member || months.length === 0 || months.length > 24) {
         return res.status(400).json({ error: "A member and one or more valid months are required." });
       }
@@ -80,8 +88,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .eq("upload_id", uploadId)
         .eq("member_name", member)
         .in("month_key", months)
-        .order("month_key", { ascending: direction })
-        .order("source_row", { ascending: direction })
+        .order(sortColumn, { ascending: direction })
+        .order("month_key", { ascending: true })
+        .order("source_row", { ascending: true })
         .range(from, from + limit - 1);
       if (error) return res.status(500).json({ error: error.message });
 

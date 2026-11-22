@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { FileSpreadsheet } from "lucide-react";
 import {
   Area,
   AreaChart,
@@ -14,8 +15,8 @@ import { KPI_BY_KEY, KPI_DEFS, formatKpi } from "@/widgets/TeamPerformanceMetric
 import { VOLUME_DEFS } from "@/widgets/TeamPerformanceMetrics/lib/volumes";
 import { type TrendGrain } from "@/widgets/TeamPerformanceMetrics/lib/seed-snapshot";
 import { useSnapshotUploads } from "@/widgets/TeamPerformanceMetrics/lib/snapshot-store";
-import type { UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
-import { RawReferenceDialog, uploadKindForMetric } from "@/widgets/TeamPerformanceMetrics/components/RawReferenceDialog";
+import type { UploadKind } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
+import { RawReferenceTable } from "@/widgets/TeamPerformanceMetrics/components/RawReferenceDialog";
 import { hasLiveData, liveMemberTrends } from "@/widgets/TeamPerformanceMetrics/lib/live-data";
 import { TEAM_MEMBERS } from "@/widgets/TeamPerformanceMetrics/lib/team-members";
 import { Card, CardContent } from "@/widgets/TeamPerformanceMetrics/components/ui/card";
@@ -32,6 +33,11 @@ import {
 } from "@/widgets/TeamPerformanceMetrics/components/ui/select";
 
 const STROKE = "#0b5cab";
+const VOLUME_SOURCES: { kind: UploadKind; label: string }[] = [
+  { kind: "tickets", label: "Tickets" },
+  { kind: "calls", label: "Calls" },
+  { kind: "mobility", label: "Mobility tasks" },
+];
 
 function TrendArea({
   data,
@@ -136,7 +142,6 @@ function MetricTrend({
   higherIsBetter,
   unit,
   fillId,
-  rawReference,
 }: {
   title: string;
   data: { label: string; value: number }[];
@@ -145,7 +150,6 @@ function MetricTrend({
   higherIsBetter: boolean;
   unit: "percent" | "number" | "seconds";
   fillId: string;
-  rawReference?: { member: string; metricKey: string; upload?: UploadResult };
 }) {
   const last = data[data.length - 1];
   const prev = data[data.length - 2];
@@ -181,13 +185,6 @@ function MetricTrend({
               {prev ? ` vs ${prev.label}` : ""}
             </p>
           </div>
-          {rawReference ? (
-            <RawReferenceDialog
-              member={rawReference.member}
-              metric={title}
-              upload={rawReference.upload}
-            />
-          ) : null}
         </div>
         <div className="mt-2 h-64">
           <TrendArea data={data} grain={grain} formatValue={formatValue} fillId={fillId} />
@@ -200,7 +197,16 @@ function MetricTrend({
 export default function Individual() {
   const [grain, setGrain] = useState<TrendGrain>("month");
   const [member, setMember] = useState<string>(TEAM_MEMBERS[0]);
+  const [activeSourceKind, setActiveSourceKind] = useState<UploadKind>("tickets");
   const { uploads } = useSnapshotUploads();
+  const sourceOptions = VOLUME_SOURCES.map((source) => ({
+    ...source,
+    upload: uploads.find((upload) => upload.kind === source.kind),
+  }));
+  const selectedSource =
+    sourceOptions.find((source) => source.kind === activeSourceKind && source.upload) ??
+    sourceOptions.find((source) => source.upload) ??
+    sourceOptions[0];
   const live = hasLiveData(uploads);
   const series = liveMemberTrends(uploads, grain, member);
   const windowLabel = grain === "month" ? "13 months (Oct 25–Oct 26)" : "5 quarters (Q4 25–Q4 26)";
@@ -294,6 +300,43 @@ export default function Individual() {
         })}
       </div>
 
+      <section aria-labelledby="volume-source-heading" className="space-y-4">
+        <div>
+          <h3 id="volume-source-heading" className="font-display text-xl">Volume source rows</h3>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Choose a workbook to inspect the original rows behind this person’s volume totals.
+          </p>
+        </div>
+        <div role="group" aria-label="Volume source workbook" className="flex flex-wrap gap-2">
+          {sourceOptions.map((source) => (
+            <Button
+              key={source.kind}
+              type="button"
+              variant={selectedSource.kind === source.kind ? "default" : "outline"}
+              aria-pressed={selectedSource.kind === source.kind}
+              disabled={!source.upload}
+              onClick={() => setActiveSourceKind(source.kind)}
+            >
+              <FileSpreadsheet aria-hidden="true" />
+              {source.label}
+            </Button>
+          ))}
+        </div>
+        {selectedSource.upload ? (
+          <RawReferenceTable
+            key={`${selectedSource.kind}-${selectedSource.upload.uploadId ?? selectedSource.upload.filename}`}
+            member={member}
+            metric={selectedSource.label}
+            upload={selectedSource.upload}
+            active
+          />
+        ) : (
+          <p className="rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+            Upload a tickets, calls, or mobility workbook to view its source rows here.
+          </p>
+        )}
+      </section>
+
       <div>
         <h2 className="font-display text-2xl">SLA</h2>
         <p className="mt-1 text-sm text-muted-foreground">Same SLA charts as Team Trends, for {member} only.</p>
@@ -302,7 +345,6 @@ export default function Individual() {
         {KPI_DEFS.filter((k) => k.showOnTeam).map((k) => {
           const overallKey = k.overallKey ?? k.key;
           const overallDef = KPI_BY_KEY[overallKey];
-          const rawUpload = uploads.find((upload) => upload.kind === uploadKindForMetric(overallKey));
           const data = series.map((p) => ({
             label: p.label,
             value: p.kpis[overallKey] ?? p.kpis[k.key] ?? 0,
@@ -317,7 +359,6 @@ export default function Individual() {
               higherIsBetter={overallDef.higherIsBetter}
               unit={overallDef.unit}
               fillId={`ind-kpi-${k.key}`}
-              rawReference={{ member, metricKey: overallKey, upload: rawUpload }}
             />
           );
         })}
