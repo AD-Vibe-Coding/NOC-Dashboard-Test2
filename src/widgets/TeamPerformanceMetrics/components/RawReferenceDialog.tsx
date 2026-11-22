@@ -8,7 +8,6 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/widgets/TeamPerformanceMetrics/components/ui/dialog";
 import {
   Table,
@@ -51,14 +50,27 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
 
   useEffect(() => {
     if (!open) return;
+    const sourceRows = upload?.rawRows ?? [];
+    const matchingRows: RawReferenceRow[] = [];
+    let cursor = 0;
+    let timer = 0;
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      const rows = (upload?.rawRows ?? []).filter((row) => row.memberName === member);
-      if (!cancelled) {
-        setMemberRows(rows);
+
+    const processChunk = () => {
+      const end = Math.min(cursor + 1000, sourceRows.length);
+      for (; cursor < end; cursor += 1) {
+        const row = sourceRows[cursor];
+        if (row.memberName === member) matchingRows.push(row);
+      }
+      if (cursor < sourceRows.length) {
+        timer = window.setTimeout(processChunk, 0);
+      } else if (!cancelled) {
+        setMemberRows(matchingRows);
         setLoadingRows(false);
       }
-    }, 20);
+    };
+
+    timer = window.setTimeout(processChunk, 20);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
@@ -94,6 +106,13 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
       .filter(({ index }) => visibleRows.some((row) => row.cells[String(index)] !== undefined));
   }, [upload?.kind, upload?.rawHeaders, visibleRows]);
 
+  function handleOpenChange(nextOpen: boolean) {
+    setOpen(nextOpen);
+    setMemberRows([]);
+    setSelectedMonths([]);
+    setLoadingRows(nextOpen);
+  }
+
   function toggleMonth(monthKey: string) {
     setSelectedMonths((current) => current.includes(monthKey)
       ? current.filter((month) => month !== monthKey)
@@ -101,24 +120,17 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) setLoadingRows(true);
-      }}
-    >
-      <DialogTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          aria-label={`View raw Excel data for ${metric}`}
-          title="View raw Excel data"
-        >
-          <FileSpreadsheet aria-hidden="true" />
-        </Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-label={`View raw Excel data for ${metric}`}
+        title="View raw Excel data"
+        onClick={() => handleOpenChange(true)}
+      >
+        <FileSpreadsheet aria-hidden="true" />
+      </Button>
       <DialogContent className="flex max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl flex-col gap-4 overflow-hidden p-5 sm:p-6">
           <DialogHeader className="shrink-0 pr-8">
             <DialogTitle>Raw Excel data · {metric}</DialogTitle>
