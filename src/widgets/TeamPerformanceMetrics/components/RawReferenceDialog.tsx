@@ -47,9 +47,24 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [memberRows, setMemberRows] = useState<RawReferenceRow[]>([]);
   const [loadingRows, setLoadingRows] = useState(false);
+  const [page, setPage] = useState(0);
+  const pageSize = 100;
+
+  const monthOptions = useMemo(() =>
+    (upload?.months ?? [])
+      .map(({ monthKey, monthLabel }) => [monthKey, monthLabel] as [string, string])
+      .sort(([a], [b]) => a.localeCompare(b)),
+  [upload?.months]);
+  const selectedSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || selectedSet.size === 0) {
+      setMemberRows([]);
+      setLoadingRows(false);
+      return;
+    }
+
+    setLoadingRows(true);
     const sourceRows = upload?.rawRows ?? [];
     const matchingRows: RawReferenceRow[] = [];
     let cursor = 0;
@@ -60,7 +75,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
       const end = Math.min(cursor + 1000, sourceRows.length);
       for (; cursor < end; cursor += 1) {
         const row = sourceRows[cursor];
-        if (row.memberName === member) matchingRows.push(row);
+        if (row.memberName === member && selectedSet.has(row.monthKey)) matchingRows.push(row);
       }
       if (cursor < sourceRows.length) {
         timer = window.setTimeout(processChunk, 0);
@@ -75,23 +90,21 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [member, open, upload]);
-  const monthOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    memberRows.forEach((row) => map.set(row.monthKey, row.monthLabel));
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
-  }, [memberRows]);
-  const selectedSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
+  }, [member, open, selectedSet, upload]);
+
   const visibleRows = useMemo(() => {
     if (loadingRows || selectedSet.size === 0) return [];
-    return memberRows
-      .filter((row) => selectedSet.has(row.monthKey))
-      .sort((a, b) => {
-        const monthOrder = a.monthKey.localeCompare(b.monthKey);
-        const rowOrder = a.sourceRow - b.sourceRow;
-        return (monthOrder || rowOrder) * (sortDirection === "asc" ? 1 : -1);
-      });
+    return [...memberRows].sort((a, b) => {
+      const monthOrder = a.monthKey.localeCompare(b.monthKey);
+      const rowOrder = a.sourceRow - b.sourceRow;
+      return (monthOrder || rowOrder) * (sortDirection === "asc" ? 1 : -1);
+    });
   }, [loadingRows, memberRows, selectedSet, sortDirection]);
+  const pageCount = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+  const pageRows = useMemo(
+    () => visibleRows.slice(page * pageSize, (page + 1) * pageSize),
+    [page, pageSize, visibleRows],
+  );
   const visibleColumns = useMemo(() => {
     const headers = upload?.rawHeaders ?? [];
     const requestedIndexes = upload ? RAW_REFERENCE_COLUMNS[upload.kind] : undefined;
@@ -110,13 +123,22 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
     setOpen(nextOpen);
     setMemberRows([]);
     setSelectedMonths([]);
-    setLoadingRows(nextOpen);
+    setLoadingRows(false);
+    setPage(0);
+  }
+
+  function selectMonths(months: string[]) {
+    setSelectedMonths(months);
+    setMemberRows([]);
+    setLoadingRows(months.length > 0);
+    setPage(0);
   }
 
   function toggleMonth(monthKey: string) {
-    setSelectedMonths((current) => current.includes(monthKey)
-      ? current.filter((month) => month !== monthKey)
-      : [...current, monthKey]);
+    const nextMonths = selectedMonths.includes(monthKey)
+      ? selectedMonths.filter((month) => month !== monthKey)
+      : [...selectedMonths, monthKey];
+    selectMonths(nextMonths);
   }
 
   return (
@@ -147,7 +169,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setSelectedMonths(monthOptions.map(([key]) => key))}
+                  onClick={() => selectMonths(monthOptions.map(([key]) => key))}
                   disabled={!monthOptions.length}
                 >
                   Select all
@@ -156,7 +178,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => setSelectedMonths([])}
+                  onClick={() => selectMonths([])}
                   disabled={!selectedMonths.length}
                 >
                   Clear
@@ -215,32 +237,47 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
                 Preparing the selected individual’s source rows…
               </p>
             ) : selectedMonths.length > 0 && visibleRows.length > 0 ? (
-              <div className="min-h-0 flex-1 overflow-auto rounded-md border">
-                <Table className="min-w-max">
-                  <TableHeader className="sticky top-0 z-10 bg-muted">
-                    <TableRow>
-                      <TableHead className="sticky left-0 z-20 bg-muted">Excel row</TableHead>
-                      <TableHead>Month</TableHead>
-                      {visibleColumns.map(({ header, index }) => (
-                        <TableHead key={index}>{header}</TableHead>
-                      ))}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleRows.map((row) => (
-                      <TableRow key={`${row.monthKey}-${row.sourceRow}`}>
-                        <TableCell className="sticky left-0 z-[1] bg-background font-mono text-xs">{row.sourceRow}</TableCell>
-                        <TableCell>{row.monthLabel}</TableCell>
-                        {visibleColumns.map(({ index }) => (
-                          <TableCell key={index} className="max-w-64 truncate" title={String(row.cells[String(index)] ?? "")}>
-                            {row.cells[String(index)] == null ? "" : String(row.cells[String(index)])}
-                          </TableCell>
+              <>
+                <div className="min-h-0 flex-1 overflow-auto rounded-md border">
+                  <Table className="min-w-max">
+                    <TableHeader className="sticky top-0 z-10 bg-muted">
+                      <TableRow>
+                        <TableHead className="sticky left-0 z-20 bg-muted">Excel row</TableHead>
+                        <TableHead>Month</TableHead>
+                        {visibleColumns.map(({ header, index }) => (
+                          <TableHead key={index}>{header}</TableHead>
                         ))}
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {pageRows.map((row) => (
+                        <TableRow key={`${row.monthKey}-${row.sourceRow}`}>
+                          <TableCell className="sticky left-0 z-[1] bg-background font-mono text-xs">{row.sourceRow}</TableCell>
+                          <TableCell>{row.monthLabel}</TableCell>
+                          {visibleColumns.map(({ index }) => (
+                            <TableCell key={index} className="max-w-64 truncate" title={String(row.cells[String(index)] ?? "")}>
+                              {row.cells[String(index)] == null ? "" : String(row.cells[String(index)])}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                {pageCount > 1 ? (
+                  <div className="flex shrink-0 items-center justify-between gap-3 border-t pt-2 text-sm">
+                    <span className="text-muted-foreground">Page {page + 1} of {pageCount} · {pageSize} rows per page</span>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page === 0}>
+                        Previous
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page >= pageCount - 1}>
+                        Next
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </>
             ) : selectedMonths.length > 0 ? (
               <p className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
                 No rows for the selected month or months.
