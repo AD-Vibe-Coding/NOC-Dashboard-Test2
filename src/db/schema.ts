@@ -1,4 +1,4 @@
-import { boolean, integer, jsonb, pgTable, real, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, real, serial, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const breaks = pgTable("breaks", {
   id: serial("id").primaryKey(),
@@ -269,6 +269,19 @@ export const team_performance_uploads = pgTable("team_performance_uploads", {
   uploaded_by: text("uploaded_by"),
   created_at: timestamp("created_at").defaultNow().notNull(),
 });
+
+export const team_performance_raw_rows = pgTable("team_performance_raw_rows", {
+  id: serial("id").primaryKey(),
+  upload_id: integer("upload_id").notNull(),
+  member_name: text("member_name").notNull(),
+  month_key: text("month_key").notNull(),
+  month_label: text("month_label").notNull(),
+  source_row: integer("source_row").notNull(),
+  cells: jsonb("cells").notNull(),
+  created_at: timestamp("created_at").defaultNow().notNull(),
+}, (table) => [
+  index("team_performance_raw_rows_lookup_idx").on(table.upload_id, table.member_name, table.month_key),
+]);
 
 export const performance_imports = pgTable("performance_imports", {
   id: serial("id").primaryKey(),
