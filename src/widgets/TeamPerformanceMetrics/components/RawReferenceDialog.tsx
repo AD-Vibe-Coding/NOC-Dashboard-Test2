@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, FileSpreadsheet } from "lucide-react";
-import { RAW_REFERENCE_COLUMNS, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
+import { RAW_REFERENCE_COLUMNS, type RawReferenceRow, type UploadKind, type UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
 import {
   Dialog,
@@ -46,27 +46,40 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   const [open, setOpen] = useState(false);
   const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [memberRows, setMemberRows] = useState<RawReferenceRow[]>([]);
+  const [loadingRows, setLoadingRows] = useState(false);
 
-  const memberRows = useMemo(
-    () => (upload?.rawRows ?? []).filter((row) => row.memberName === member),
-    [member, upload],
-  );
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const rows = (upload?.rawRows ?? []).filter((row) => row.memberName === member);
+      if (!cancelled) {
+        setMemberRows(rows);
+        setLoadingRows(false);
+      }
+    }, 20);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [member, open, upload]);
   const monthOptions = useMemo(() => {
     const map = new Map<string, string>();
     memberRows.forEach((row) => map.set(row.monthKey, row.monthLabel));
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [memberRows]);
   const selectedSet = useMemo(() => new Set(selectedMonths), [selectedMonths]);
-  const visibleRows = useMemo(
-    () => memberRows
+  const visibleRows = useMemo(() => {
+    if (loadingRows || selectedSet.size === 0) return [];
+    return memberRows
       .filter((row) => selectedSet.has(row.monthKey))
       .sort((a, b) => {
         const monthOrder = a.monthKey.localeCompare(b.monthKey);
         const rowOrder = a.sourceRow - b.sourceRow;
         return (monthOrder || rowOrder) * (sortDirection === "asc" ? 1 : -1);
-      }),
-    [memberRows, selectedSet, sortDirection],
-  );
+      });
+  }, [loadingRows, memberRows, selectedSet, sortDirection]);
   const visibleColumns = useMemo(() => {
     const headers = upload?.rawHeaders ?? [];
     const requestedIndexes = upload ? RAW_REFERENCE_COLUMNS[upload.kind] : undefined;
@@ -88,7 +101,13 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) setLoadingRows(true);
+      }}
+    >
       <DialogTrigger asChild>
         <Button
           type="button"
@@ -132,7 +151,11 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
                 </Button>
               </div>
             </div>
-            {monthOptions.length ? (
+            {loadingRows ? (
+              <p role="status" className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                Loading source rows…
+              </p>
+            ) : monthOptions.length ? (
               <div className="flex max-h-24 flex-wrap gap-2 overflow-y-auto">
                 {monthOptions.map(([key, label]) => {
                   const selected = selectedSet.has(key);
@@ -175,7 +198,11 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </Button>
             </div>
 
-            {selectedMonths.length > 0 && visibleRows.length > 0 ? (
+            {loadingRows ? (
+              <p role="status" className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+                Preparing the selected individual’s source rows…
+              </p>
+            ) : selectedMonths.length > 0 && visibleRows.length > 0 ? (
               <div className="min-h-0 flex-1 overflow-auto rounded-md border">
                 <Table className="min-w-max">
                   <TableHeader className="sticky top-0 z-10 bg-muted">
