@@ -11,6 +11,7 @@ import Individual from "./pages/Individual";
 import Insights from "./pages/Insights";
 import Generate from "./pages/Generate";
 import Upload from "./pages/Upload";
+import Disputes from "./pages/Disputes";
 import { hasLiveData } from "./lib/live-data";
 import { useSnapshotUploads } from "./lib/snapshot-store";
 import "./styles.css";
@@ -62,6 +63,7 @@ export function TeamPerformanceMetricsWidget() {
             <Route path="/insights" element={<Insights />} />
             <Route path="/generate" element={<Generate />} />
             <Route path="/upload" element={<Upload />} />
+            <Route path="/disputes" element={<Disputes />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

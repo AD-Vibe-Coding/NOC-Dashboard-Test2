@@ -1,5 +1,5 @@
 import { NavLink, Outlet } from "react-router-dom";
-import { BarChart3, LayoutDashboard, PenLine, Sparkles, TrendingUp, Upload, UserRound } from "lucide-react";
+import { BarChart3, Gavel, LayoutDashboard, PenLine, Sparkles, TrendingUp, Upload, UserRound } from "lucide-react";
 import { cn } from "@/widgets/TeamPerformanceMetrics/lib/utils";
 
 const NAV = [
@@ -9,6 +9,7 @@ const NAV = [
   { to: "/insights", label: "Insights", icon: Sparkles },
   { to: "/generate", label: "Generate", icon: PenLine },
   { to: "/upload", label: "Upload", icon: Upload },
+  { to: "/disputes", label: "Disputes", icon: Gavel },
 ];
 
 export function AppShell() {
