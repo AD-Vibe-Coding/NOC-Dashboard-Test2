@@ -560,14 +560,22 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
   })();
 
   const dataRows = matrix.slice(1);
+  // Inbound call exports use T for month, H for agent, P for call outcome, and V for ASA.
+  // Keep support for the older direction/ASA/refused layout when these markers are absent.
+  const inboundCallLayout =
+    kind === "calls" &&
+    dataRows.some((grid) => {
+      const status = String(grid[15] ?? "").trim().toLowerCase();
+      return parseMonthKey(grid[19]) != null && (status === "answered" || status === "refused");
+    });
 
   dataRows.forEach((grid, i) => {
-    // Mobility task reports store the month in P; tickets and calls use B.
-    const monthCol = kind === "mobility" ? 15 : 1;
+    // Mobility reports use P for month; inbound call exports use T; other reports use B.
+    const monthCol = kind === "mobility" ? 15 : inboundCallLayout ? 19 : 1;
     const monthRaw = grid[monthCol];
     const parsedMonth = parseMonthKey(monthRaw);
     if (!parsedMonth) {
-      const monthColumn = kind === "mobility" ? "P" : "B";
+      const monthColumn = kind === "mobility" ? "P" : inboundCallLayout ? "T" : "B";
       if (i < 8) errors.push(`Row ${i + 2}: column ${monthColumn} is not a recognizable month (${String(monthRaw)})`);
       return;
     }
@@ -778,7 +786,47 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       }
     }
 
-    if (kind === "calls") {
+    if (kind === "calls" && inboundCallLayout) {
+      const status = String(grid[15] ?? "").trim().toLowerCase();
+      if (status !== "answered" && status !== "refused") return;
+
+      const owner = String(grid[7] ?? "").trim() || cell(row, "individual name", "agent name", "agent", "owner", "name");
+      const asaSec = status === "answered" ? toSeconds(grid[21]) : null;
+      used += 1;
+      acc.used += 1;
+      total.used += 1;
+
+      const memberName = matchTeamMember(owner);
+      let mAcc: Acc | null = null;
+      if (memberName) {
+        let mmap = byMemberMonth.get(memberName);
+        if (!mmap) {
+          mmap = new Map();
+          byMemberMonth.set(memberName, mmap);
+        }
+        const slot = mmap.get(parsedMonth.key) ?? { label: parsedMonth.label, acc: emptyAcc() };
+        if (!mmap.has(parsedMonth.key)) mmap.set(parsedMonth.key, slot);
+        mAcc = slot.acc;
+        mAcc.used += 1;
+      }
+
+      if (status === "answered") {
+        acc.inbound += 1;
+        total.inbound += 1;
+        if (mAcc) mAcc.inbound += 1;
+        if (asaSec != null) {
+          acc.asa.push(asaSec);
+          total.asa.push(asaSec);
+          mAcc?.asa.push(asaSec);
+        }
+      } else {
+        acc.refused += 1;
+        total.refused += 1;
+        if (mAcc) mAcc.refused += 1;
+      }
+    }
+
+    if (kind === "calls" && !inboundCallLayout) {
       const dir = direction(cell(row, "direction", "type", "call type"));
       const asaSec = toSeconds(cell(row, "asa", "speed of answer", "answer time"));
       const refusedFlag = yesNo(cell(row, "refused", "abandoned"));

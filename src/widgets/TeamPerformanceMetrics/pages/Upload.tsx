@@ -34,7 +34,7 @@ const ZONES: {
     title: "Inbound / outbound calls",
     hint: "One row per call.",
     icon: Phone,
-    columns: "Direction (inbound/outbound), ASA, Refused",
+    columns: "Inbound export: T = month · H = individual · P = Answered / Refused · V = ASA (Answered rows). Legacy call format is also supported.",
   },
 ];
 
