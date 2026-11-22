@@ -22,7 +22,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const legacySession = session ? null : getSession(req);
     const sessionEmail = session?.email ?? legacySession?.email;
     const member = sessionEmail ? lookupByEmail(String(sessionEmail).toLowerCase()) : null;
-    if ((!session && !legacySession) || member?.role !== "manager") {
+    // Prefer the current roster when an email matches; otherwise use the role
+    // carried by the cryptographically verified server session.
+    const verifiedRole = member?.role ?? session?.role ?? legacySession?.role;
+    if ((!session && !legacySession) || String(verifiedRole ?? "").toLowerCase() !== "manager") {
       return res.status(403).json({
         error: "Manager access required.",
         hint: "Sign in with a manager account to use this feature.",
