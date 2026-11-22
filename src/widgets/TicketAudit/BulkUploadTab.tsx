@@ -40,7 +40,7 @@ import {
 } from "@tabler/icons-react";
 import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
-import { isExcludedAuditActor, resolveTeamMember } from "../PerformanceTracker/team";
+import { isExcludedAuditActor, resolveTeamMember } from "@/lib/team";
 import {
   parseAuditJson,
   extractAnalysisMarkdown,

@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import { resolveTeamMember } from "./team";
+import { resolveTeamMember } from "../team";
 
 // =============================================================================
 // Excel import pipeline for the Performance Tracker.

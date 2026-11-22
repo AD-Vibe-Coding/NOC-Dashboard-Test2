@@ -32,7 +32,7 @@ import {
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "@/lib/team";
 import { ROLE_BY_NAME } from "../../lib/roles";
 
 export { TrainingUpdatesTile } from "./Tile";

@@ -66,7 +66,7 @@ import {
 import { BrandLogo } from "./widgets/BrandLogo";
 import { IdentityBadge } from "./widgets/IdentityBadge";
 import { NewsTicker } from "./widgets/NewsTicker";
-import { resolveTeamMember } from "./widgets/PerformanceTracker/team";
+import { resolveTeamMember } from "./lib/team";
 import { WIDGETS } from "./widgets/registry";
 import { ZoomQueueTile } from "./widgets/ZoomQueue/Tile";
 import { MyDayPanel } from "./widgets/WorkActivity/MeetingPreview";
@@ -144,7 +144,7 @@ const NAV_SECTIONS: NavSection[] = [
     title: "My Work", 
     items: [
       { id: "meeting-notes", label: "Notebook", icon: IconNotes, color: "grape", description: "OneNote-style individual ..." },
-      { id: "performance-tracker", label: "My Metrics", icon: IconChartBar, color: "green", description: "Performance & disputes" },
+      { id: "performance-tracker", label: "Team Performance Metrics", icon: IconChartBar, color: "green", description: "Team trends, individual metrics & disputes" },
       { id: "noc-mttr-report", label: "NOC MTTR Report", icon: IconClock, color: "orange", description: "Upload MTTR Excel and trend by month" },
       { id: "break-tracker", label: "Breaks", icon: IconCoffee, color: "orange", description: "Start & track breaks" },
     ],

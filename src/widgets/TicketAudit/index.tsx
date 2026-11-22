@@ -53,7 +53,7 @@ import ReactMarkdown from "react-markdown";
 import { parseMhtmlFile } from "../../lib/mhtml";
 import { useIdentity } from "../../lib/identity";
 import { WidgetFrame } from "../WidgetFrame";
-import { isExcludedAuditActor, resolveTeamMember } from "../PerformanceTracker/team";
+import { isExcludedAuditActor, resolveTeamMember } from "@/lib/team";
 import { BulkUploadTab } from "./BulkUploadTab";
 import { AuditChat } from "./AuditChat";
 import {

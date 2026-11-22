@@ -33,7 +33,7 @@ import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { ROLE_BY_NAME, ROSTER_BY_EMAIL } from "../../lib/roles";
 import { WidgetFrame } from "../WidgetFrame";
 import { WidgetTile } from "../WidgetTile";
-import { aggregateMetrics, type SourceBucket } from "../PerformanceTracker/data";
+import { aggregateMetrics, type SourceBucket } from "@/lib/performance-tracker/data";
 
 type DiscussionRow = Awaited<ReturnType<typeof db.performance_discussions.list>>[number];
 type SubmissionRow = Awaited<ReturnType<typeof db.performance_discussion_submissions.list>>[number];

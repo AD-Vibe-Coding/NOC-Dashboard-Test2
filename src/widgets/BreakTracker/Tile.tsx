@@ -7,7 +7,7 @@ import { BREAK_TYPE_COLORS, emojiForBreak, formatBreakStartMessage, postSlackMes
 import { useIdentity } from "../../lib/identity";
 import { formatElapsedIso } from "../../lib/format";
 import { db } from "../../db";
-import { resolveTeamMember } from "../PerformanceTracker/team";
+import { resolveTeamMember } from "../../lib/team";
 import { syncQueueCallsForBreak } from "../../lib/queue-automation";
 
 interface Props {

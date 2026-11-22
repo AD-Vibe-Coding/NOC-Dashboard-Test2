@@ -10,7 +10,7 @@ import {
 import { db } from "../../db";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "@/lib/team";
 
 type Kudos = Awaited<ReturnType<typeof db.kudos.list>>[number];
 

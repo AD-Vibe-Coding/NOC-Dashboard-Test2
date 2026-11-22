@@ -41,7 +41,7 @@ import { WidgetFrame } from "../WidgetFrame";
 import { useTeamAvailability } from "./data";
 import { useBreakData } from "../BreakTracker/data";
 import { useRosterShift, type ShiftWindow } from "../../lib/use-roster-shift";
-import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../PerformanceTracker/team";
+import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember, SECTION_LABELS, teamFor, TIER_COLORS, TIER_SHORT_LABELS, tierFor } from "../../lib/team";
 import { useIdentity } from "../../lib/identity";
 import { db } from "../../db";
 import { postSlackMessage } from "../../lib/slack";

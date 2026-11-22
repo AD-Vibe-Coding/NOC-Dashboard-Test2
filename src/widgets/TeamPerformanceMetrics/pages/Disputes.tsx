@@ -1,8 +1,8 @@
 import { useCallback } from "react";
 import { Gavel } from "lucide-react";
 import { useIdentity } from "../../../lib/identity";
-import { DisputesPanel } from "../../PerformanceTracker/DisputesPanel";
-import { resolveTeamMember } from "../../PerformanceTracker/team";
+import { DisputesPanel } from "../components/DisputesPanel";
+import { resolveTeamMember } from "@/lib/team";
 
 export default function Disputes() {
   const { identity } = useIdentity();

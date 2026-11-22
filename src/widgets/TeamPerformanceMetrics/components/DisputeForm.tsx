@@ -28,7 +28,7 @@ import {
   IconPaperclip,
   IconX,
 } from "@tabler/icons-react";
-import { type PerformanceMetric } from "./data";
+import { type PerformanceMetric } from "@/lib/performance-tracker/data";
 
 export type DisputeField = "ack_minutes" | "carrier_ticket_minutes" | "success_count" | "ai_feedback";
 

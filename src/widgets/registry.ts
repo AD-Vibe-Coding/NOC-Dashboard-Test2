@@ -48,10 +48,6 @@ import { FortigateTroubleshooterWidget, FortigateTroubleshooterTile } from "./Fo
 import { PiabTroubleshooterWidget, PiabTroubleshooterTile } from "./PiabTroubleshooter";
 import { VelocloudApiWidget, VelocloudApiTile } from "./VelocloudApi";
 import {
-  PerformanceTrackerWidget,
-  PerformanceTrackerTile,
-} from "./PerformanceTracker";
-import {
   TeamPerformanceMetricsWidget,
   TeamPerformanceMetricsTile,
 } from "./TeamPerformanceMetrics";
@@ -135,18 +131,8 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "performance-tracker",
-    title: "Old Team Performance",
-    description: "Legacy Excel-imported team metrics + per-member drill-down",
-    icon: IconChartBar,
-    iconColor: "green",
-    tileSize: "sm",
-    Tile: PerformanceTrackerTile,
-    Full: PerformanceTrackerWidget,
-  },
-  {
-    id: "team-performance-metrics",
     title: "Team Performance Metrics",
-    description: "NOC trends, individual metrics, and AI insights from Excel data",
+    description: "NOC trends, individual metrics, and insights from Excel data",
     icon: IconChartBar,
     iconColor: "appdirect",
     tileSize: "lg",

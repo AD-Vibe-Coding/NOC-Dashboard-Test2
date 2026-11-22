@@ -9,7 +9,7 @@ import { useBreakData } from "../BreakTracker/data";
 import { WidgetTile } from "../WidgetTile";
 import { useTeamAvailability } from "./data";
 import { useRosterShift } from "../../lib/use-roster-shift";
-import { resolveTeamMember } from "../PerformanceTracker/team";
+import { resolveTeamMember } from "../../lib/team";
 import { toggleRingCentralQueueCalls } from "../../lib/ringcentral";
 import { syncQueueCallsForBreak, syncQueueCallsForPunch } from "../../lib/queue-automation";
 

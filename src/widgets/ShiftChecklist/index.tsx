@@ -13,7 +13,7 @@ import { db } from "../../db";
 import { WidgetFrame } from "../WidgetFrame";
 import { useIdentity } from "../../lib/identity";
 import { postSlackMessage } from "../../lib/slack";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "@/lib/team";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

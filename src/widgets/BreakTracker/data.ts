@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { db, dbReady, schema } from "../../db";
-import { resolveTeamMember } from "../PerformanceTracker/team";
+import { resolveTeamMember } from "../../lib/team";
 
 type Break = typeof schema.breaks.$inferSelect;
 

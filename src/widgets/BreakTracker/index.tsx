@@ -41,7 +41,7 @@ import {
   formatTime,
 } from "../../lib/format";
 import { WidgetFrame } from "../WidgetFrame";
-import { PERSON_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES, resolveTeamMember } from "../../lib/team";
 import { useBreakData } from "./data";
 import { syncQueueCallsForBreak } from "../../lib/queue-automation";
 

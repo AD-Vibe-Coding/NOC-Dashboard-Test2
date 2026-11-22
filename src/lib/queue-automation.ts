@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { resolveTeamMember } from "../widgets/PerformanceTracker/team";
+import { resolveTeamMember } from "./team";
 import { toggleRingCentralQueueCalls } from "./ringcentral";
 
 type PunchAction = "punch_in" | "punch_out";

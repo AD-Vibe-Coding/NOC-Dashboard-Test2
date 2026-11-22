@@ -14,7 +14,7 @@ import {
 } from "@mantine/core";
 import { IconAlertCircle, IconCalendarClock, IconClockEdit, IconListDetails } from "@tabler/icons-react";
 import { db } from "../../db";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "../../lib/team";
 
 export type BreakScheduleRow = Awaited<ReturnType<typeof db.break_schedules.list>>[number];
 

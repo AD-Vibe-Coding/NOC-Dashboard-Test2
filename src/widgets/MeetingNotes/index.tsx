@@ -52,7 +52,7 @@ import {
   IconUser,
 } from "@tabler/icons-react";
 import { WidgetFrame } from "../WidgetFrame";
-import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember } from "../PerformanceTracker/team";
+import { LOCKED_TEAM_NAMES, PERSON_TEAM_NAMES, resolveTeamMember } from "@/lib/team";
 import { useIdentity } from "../../lib/identity";
 import { useCompletion } from "../../lib/devs-ai/use-completion";
 import { getDefaultAgentId } from "../../lib/devs-ai/agents";

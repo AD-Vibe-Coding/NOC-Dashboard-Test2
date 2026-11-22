@@ -30,7 +30,7 @@ import {
   IconGavel,
   IconX,
 } from "@tabler/icons-react";
-import { downloadBlob } from "../../lib/download";
+import { downloadBlob } from "../../../lib/download";
 import { type Attachment } from "./DisputeForm";
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ import {
 import { api } from "../../lib/api";
 import { useIdentity } from "../../lib/identity";
 import { effectiveRoleForIdentity, ROSTER_BY_EMAIL } from "../../lib/roles";
-import { PERSON_TEAM_NAMES } from "../PerformanceTracker/team";
+import { PERSON_TEAM_NAMES } from "@/lib/team";
 import { WidgetFrame } from "../WidgetFrame";
 
 type FeedbackRow = {
