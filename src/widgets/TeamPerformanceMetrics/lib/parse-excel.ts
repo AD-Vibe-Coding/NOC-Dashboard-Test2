@@ -219,7 +219,7 @@ function yesNo(raw: string): boolean | null {
   const t = raw.toLowerCase();
   if (!t) return null;
   if (["y", "yes", "true", "1", "met", "on time", "ontime", "pass"].includes(t)) return true;
-  if (["n", "no", "false", "0", "missed", "fail", "late"].includes(t)) return false;
+  if (["n", "no", "false", "0", "not met", "not_met", "not-met", "unmet", "missed", "fail", "late", "breached"].includes(t)) return false;
   return null;
 }
 
@@ -562,10 +562,13 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
   const dataRows = matrix.slice(1);
 
   dataRows.forEach((grid, i) => {
-    const monthRaw = grid[1];
+    // Mobility task reports store the month in P; tickets and calls use B.
+    const monthCol = kind === "mobility" ? 15 : 1;
+    const monthRaw = grid[monthCol];
     const parsedMonth = parseMonthKey(monthRaw);
     if (!parsedMonth) {
-      if (i < 8) errors.push(`Row ${i + 2}: column B is not a recognizable month (${String(monthRaw)})`);
+      const monthColumn = kind === "mobility" ? "P" : "B";
+      if (i < 8) errors.push(`Row ${i + 2}: column ${monthColumn} is not a recognizable month (${String(monthRaw)})`);
       return;
     }
 
@@ -735,17 +738,44 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
     }
 
     if (kind === "mobility") {
+      // Mobility task reports: F = task owner, L = SLA met status.
+      const owner = String(grid[5] ?? "").trim() || cell(row, "task owner", "task assignee", "owner", "assignee");
+      const slaRaw = String(grid[11] ?? "").trim() || cell(row, "sla status", "sla met", "sla");
       const dur = toSeconds(cell(row, "duration", "handle time", "minutes", "elapsed"));
-      const sla = yesNo(cell(row, "sla", "met", "under 60"));
+      const sla = yesNo(slaRaw);
       if (dur == null && sla == null) {
-        if (i < 5) errors.push(`Row ${i + 2}: no mobility fields recognized`);
+        if (i < 5) errors.push(`Row ${i + 2}: no mobility SLA or duration value recognized in column L or duration field`);
         return;
       }
       used += 1;
       acc.used += 1;
+      total.used += 1;
+
+      const memberName = matchTeamMember(owner);
+      let mAcc: Acc | null = null;
+      if (memberName) {
+        let mmap = byMemberMonth.get(memberName);
+        if (!mmap) {
+          mmap = new Map();
+          byMemberMonth.set(memberName, mmap);
+        }
+        const slot = mmap.get(parsedMonth.key) ?? { label: parsedMonth.label, acc: emptyAcc() };
+        if (!mmap.has(parsedMonth.key)) mmap.set(parsedMonth.key, slot);
+        mAcc = slot.acc;
+        mAcc.used += 1;
+      }
+
       if (sla != null) {
-        if (sla) acc.mobilityOk += 1;
-      } else if (dur != null && dur <= 3600) acc.mobilityOk += 1;
+        if (sla) {
+          acc.mobilityOk += 1;
+          total.mobilityOk += 1;
+          if (mAcc) mAcc.mobilityOk += 1;
+        }
+      } else if (dur != null && dur <= 3600) {
+        acc.mobilityOk += 1;
+        total.mobilityOk += 1;
+        if (mAcc) mAcc.mobilityOk += 1;
+      }
     }
 
     if (kind === "calls") {

@@ -201,7 +201,7 @@ export default function Trends() {
             <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">NOC</p>
             <h1 className="font-display mt-1 text-3xl md:text-4xl">Team Trends</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Charts use only uploaded Excel rows, grouped by column B (month).
+              Charts use uploaded Excel rows grouped by the report’s month column (B for tickets/calls; P for mobility).
             </p>
           </div>
         </BlurFade>

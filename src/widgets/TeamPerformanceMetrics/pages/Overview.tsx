@@ -51,7 +51,7 @@ export default function Overview() {
             <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">NOC</p>
             <h1 className="font-display mt-1 text-3xl md:text-4xl">Overall team performance</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Numbers come only from your Excel (column B = month, Oct 25–Oct 26). Upload the workbook to populate this page.
+              Numbers come from your uploaded workbooks (tickets/calls grouped by column B; mobility grouped by column P). Upload the files to populate this page.
             </p>
           </div>
         </BlurFade>

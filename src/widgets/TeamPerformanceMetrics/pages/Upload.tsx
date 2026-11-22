@@ -27,7 +27,7 @@ const ZONES: {
     title: "Mobility tasks",
     hint: "One row per mobility task.",
     icon: Truck,
-    columns: "Column B = month, then Duration or SLA (under 60 minutes)",
+    columns: "Column P = month · Column F = task owner · Column L = SLA met status (Met / Not Met)",
   },
   {
     kind: "calls",

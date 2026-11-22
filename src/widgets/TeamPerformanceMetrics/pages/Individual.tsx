@@ -226,7 +226,7 @@ export default function Individual() {
             <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">NOC</p>
             <h1 className="font-display mt-1 text-3xl md:text-4xl">Individual metrics</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Tickets attributed to {member} via Acked By. Last {windowLabel}. Calls and mobility stay 0 unless those files name this person.
+              Tickets are attributed via Acked By and mobility via Task Owner. Last {windowLabel}. Call metrics appear only when the calls report identifies this person.
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
