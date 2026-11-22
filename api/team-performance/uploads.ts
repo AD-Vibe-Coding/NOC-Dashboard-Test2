@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
 import { getSession } from "../_lib/auth-middleware.js";
-import { loadSession } from "../auth/_lib/session.js";
+import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
 import { lookupByEmail } from "../_lib/roles.js";
 
 const MAX_PARSED_BYTES = 3 * 1024 * 1024;
@@ -18,12 +18,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Google SSO uses the encrypted iframe-partitioned cookie; dev sign-in
     // still uses the signed legacy noc_session cookie. Accept either verified
     // session, but always derive authorization from the server-side roster.
-    const session = await loadSession(req);
+    const session = await getAppBuilderSession(req);
     const legacySession = session ? null : getSession(req);
     const sessionEmail = session?.email ?? legacySession?.email;
     const member = sessionEmail ? lookupByEmail(String(sessionEmail).toLowerCase()) : null;
-    // Prefer the current roster when an email matches; otherwise use the role
-    // carried by the cryptographically verified server session.
+    // Prefer the roster when an email matches; otherwise use the role resolved
+    // by the shared App Builder session helper or the verified legacy session.
     const verifiedRole = member?.role ?? session?.role ?? legacySession?.role;
     if ((!session && !legacySession) || String(verifiedRole ?? "").toLowerCase() !== "manager") {
       return res.status(403).json({
