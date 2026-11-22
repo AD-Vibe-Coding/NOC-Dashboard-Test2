@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { getSessionName, requireManager } from "../_lib/auth-middleware.js";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
+import { loadSession } from "../auth/_lib/session.js";
+import { lookupByEmail } from "../_lib/roles.js";
 
 const MAX_PARSED_BYTES = 3 * 1024 * 1024;
 const KINDS = new Set(["tickets", "mobility", "calls"]);
@@ -13,7 +14,17 @@ function bodyOf(req: VercelRequest): Record<string, unknown> {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    if (!requireManager(req, res)) return;
+    // Use the same encrypted, iframe-partitioned session as /api/auth/me.
+    // The legacy auth-middleware only reads `noc_session`, so it rejects
+    // valid Google SSO sessions (`SESSION_COOKIE`) in the current app.
+    const session = await loadSession(req);
+    const member = session?.email ? lookupByEmail(String(session.email).toLowerCase()) : null;
+    if (!session || member?.role !== "manager") {
+      return res.status(403).json({
+        error: "Manager access required.",
+        hint: "Sign in with a manager account to use this feature.",
+      });
+    }
 
     if (req.method === "GET") {
       const kind = typeof req.query.kind === "string" ? req.query.kind : "";
@@ -63,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           filename,
           file_size_bytes: sourceFileBytes,
           parsed_data: snapshot,
-          uploaded_by: getSessionName(req),
+          uploaded_by: member.name,
         })
         .select("id,kind,filename,file_size_bytes,uploaded_by,created_at")
         .single();
