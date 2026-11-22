@@ -14,6 +14,8 @@ import { KPI_BY_KEY, KPI_DEFS, formatKpi } from "@/widgets/TeamPerformanceMetric
 import { VOLUME_DEFS } from "@/widgets/TeamPerformanceMetrics/lib/volumes";
 import { type TrendGrain } from "@/widgets/TeamPerformanceMetrics/lib/seed-snapshot";
 import { useSnapshotUploads } from "@/widgets/TeamPerformanceMetrics/lib/snapshot-store";
+import type { UploadResult } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
+import { RawReferenceDialog, uploadKindForMetric } from "@/widgets/TeamPerformanceMetrics/components/RawReferenceDialog";
 import { hasLiveData, liveMemberTrends } from "@/widgets/TeamPerformanceMetrics/lib/live-data";
 import { TEAM_MEMBERS } from "@/widgets/TeamPerformanceMetrics/lib/team-members";
 import { Card, CardContent } from "@/widgets/TeamPerformanceMetrics/components/ui/card";
@@ -134,6 +136,7 @@ function MetricTrend({
   higherIsBetter,
   unit,
   fillId,
+  rawReference,
 }: {
   title: string;
   data: { label: string; value: number }[];
@@ -142,6 +145,7 @@ function MetricTrend({
   higherIsBetter: boolean;
   unit: "percent" | "number" | "seconds";
   fillId: string;
+  rawReference?: { member: string; metricKey: string; upload?: UploadResult };
 }) {
   const last = data[data.length - 1];
   const prev = data[data.length - 2];
@@ -177,6 +181,13 @@ function MetricTrend({
               {prev ? ` vs ${prev.label}` : ""}
             </p>
           </div>
+          {rawReference ? (
+            <RawReferenceDialog
+              member={rawReference.member}
+              metric={title}
+              upload={rawReference.upload}
+            />
+          ) : null}
         </div>
         <div className="mt-2 h-64">
           <TrendArea data={data} grain={grain} formatValue={formatValue} fillId={fillId} />
@@ -291,6 +302,7 @@ export default function Individual() {
         {KPI_DEFS.filter((k) => k.showOnTeam).map((k) => {
           const overallKey = k.overallKey ?? k.key;
           const overallDef = KPI_BY_KEY[overallKey];
+          const rawUpload = uploads.find((upload) => upload.kind === uploadKindForMetric(overallKey));
           const data = series.map((p) => ({
             label: p.label,
             value: p.kpis[overallKey] ?? p.kpis[k.key] ?? 0,
@@ -305,6 +317,7 @@ export default function Individual() {
               higherIsBetter={overallDef.higherIsBetter}
               unit={overallDef.unit}
               fillId={`ind-kpi-${k.key}`}
+              rawReference={{ member, metricKey: overallKey, upload: rawUpload }}
             />
           );
         })}

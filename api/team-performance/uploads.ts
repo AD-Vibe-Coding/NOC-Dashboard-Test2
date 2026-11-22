@@ -4,7 +4,7 @@ import { getSession } from "../_lib/auth-middleware.js";
 import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
 import { lookupByEmail } from "../_lib/roles.js";
 
-const MAX_PARSED_BYTES = 3 * 1024 * 1024;
+const MAX_PARSED_BYTES = 4 * 1024 * 1024;
 const KINDS = new Set(["tickets", "mobility", "calls"]);
 const SELECT_FIELDS = "id,kind,filename,mime_type,file_size_bytes,data_url,parsed_data,uploaded_by,created_at";
 
@@ -70,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const parsedData = JSON.stringify(snapshot);
       const parsedBytes = Buffer.byteLength(parsedData, "utf8");
       if (parsedBytes > MAX_PARSED_BYTES) {
-        return res.status(413).json({ error: "The parsed dashboard data is too large to save (maximum 3 MiB)." });
+        return res.status(413).json({ error: "The parsed dashboard data is too large to save (maximum 4 MiB)." });
       }
 
       const { data, error } = await supabaseAdmin

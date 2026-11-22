@@ -4,6 +4,15 @@ import type { VolumeKey } from "./volumes";
 import { matchTeamMember } from "./team-members";
 
 export type UploadKind = "tickets" | "mobility" | "calls";
+export type RawCellValue = string | number | boolean;
+export type RawReferenceRow = {
+  memberName: string;
+  monthKey: string;
+  monthLabel: string;
+  sourceRow: number;
+  /** Sparse map from zero-based Excel column index to its non-empty source value. */
+  cells: Record<string, RawCellValue>;
+};
 
 export type MonthSlice = {
   monthKey: string;
@@ -61,6 +70,9 @@ export type UploadResult = {
   months: MonthSlice[];
   /** Per-roster-member month slices (tickets attributed via Acked By / agent). */
   members?: Record<string, MonthSlice[]>;
+  /** Original source-row values for individual reference, grouped by upload/month. */
+  rawHeaders?: string[];
+  rawRows?: RawReferenceRow[];
 };
 
 const MONTH_NAMES = [
@@ -80,6 +92,24 @@ const MONTH_NAMES = [
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
+}
+
+function excelColumnName(index: number): string {
+  let value = index + 1;
+  let label = "";
+  while (value > 0) {
+    const remainder = (value - 1) % 26;
+    label = String.fromCharCode(65 + remainder) + label;
+    value = Math.floor((value - 1) / 26);
+  }
+  return label;
+}
+
+function rawCellValue(value: unknown): RawCellValue | null {
+  if (value == null || value === "") return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") return value;
+  return String(value);
 }
 
 export function parseMonthKey(raw: unknown): { key: string; label: string } | null {
@@ -524,7 +554,9 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const matrix = XLSX.utils.sheet_to_json<(string | number | Date)[]>(sheet, { header: 1, defval: "", raw: true });
   const headerRow = (matrix[0] ?? []).map((h) => String(h || "").trim());
+  const rawHeaders = headerRow.map((header, index) => header || `Column ${excelColumnName(index)}`);
   const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+  const rawRows: RawReferenceRow[] = [];
   const errors: string[] = [];
   const byMonth = new Map<string, { label: string; acc: Acc }>();
   const byMemberMonth = new Map<string, Map<string, { label: string; acc: Acc }>>();
@@ -614,6 +646,26 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
     if (!byMonth.has(parsedMonth.key)) byMonth.set(parsedMonth.key, { label: parsedMonth.label, acc });
 
     const row = rows[i] ?? {};
+    const saveRawReferenceRow = (memberName: string | null) => {
+      if (!memberName) return;
+      if (grid.length > rawHeaders.length) {
+        for (let column = rawHeaders.length; column < grid.length; column += 1) {
+          rawHeaders.push(`Column ${excelColumnName(column)}`);
+        }
+      }
+      const cells: Record<string, RawCellValue> = {};
+      grid.forEach((value, column) => {
+        const normalized = rawCellValue(value);
+        if (normalized !== null) cells[String(column)] = normalized;
+      });
+      rawRows.push({
+        memberName,
+        monthKey: parsedMonth.key,
+        monthLabel: parsedMonth.label,
+        sourceRow: i + 2,
+        cells,
+      });
+    };
 
     if (kind === "tickets") {
       const agentFromGrid = String(grid[ackedByCol] ?? "").trim();
@@ -645,6 +697,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       acc.used += 1;
       total.used += 1;
       const memberName = matchTeamMember(agent);
+      saveRawReferenceRow(memberName);
       let mAcc: Acc | null = null;
       if (memberName) {
         let mmap = byMemberMonth.get(memberName);
@@ -790,6 +843,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       total.used += 1;
 
       const memberName = matchTeamMember(owner);
+      saveRawReferenceRow(memberName);
       let mAcc: Acc | null = null;
       if (memberName) {
         let mmap = byMemberMonth.get(memberName);
@@ -828,6 +882,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
       total.used += 1;
 
       const memberName = matchTeamMember(owner);
+      saveRawReferenceRow(memberName);
       let mAcc: Acc | null = null;
       if (memberName) {
         let mmap = byMemberMonth.get(memberName);
@@ -915,5 +970,7 @@ export function parseWorkbook(kind: UploadKind, filename: string, buffer: ArrayB
     carriers: totals.carriers,
     months,
     members,
+    rawHeaders,
+    rawRows,
   };
 }
