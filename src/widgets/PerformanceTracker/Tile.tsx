@@ -59,7 +59,7 @@ export function PerformanceTrackerTile({ onExpand }: Props) {
 
   return (
     <WidgetTile
-      title={isManager ? "Team Performance Metrics" : `${canonicalSelf ?? "My"} Metrics`}
+      title={isManager ? "Old Team Performance" : `${canonicalSelf ?? "My"} Metrics`}
       description={isManager ? "Team metrics + Excel import" : "Your metrics"}
       icon={IconChartBar}
       iconColor="green"

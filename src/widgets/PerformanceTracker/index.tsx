@@ -520,7 +520,7 @@ export function PerformanceTrackerWidget() {
 
   return (
     <WidgetFrame
-      title={isManager ? "Team Performance Metrics" : `${canonicalSelf ?? identity?.name ?? "My"} Metrics`}
+      title={isManager ? "Old Team Performance" : `${canonicalSelf ?? identity?.name ?? "My"} Metrics`}
       subtitle={
         isManager
           ? "Team-wide metrics + per-member drill-down · Excel import"

@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import { slackProxyPlugin } from "./vite-plugins/slack-proxy";
 import { zoomProxyPlugin } from "./vite-plugins/zoom-proxy";
@@ -13,6 +14,7 @@ export default defineConfig({
   optimizeDeps: { exclude: ["@electric-sql/pglite"] },
   plugins: [
     react(),
+    tailwindcss(),
     // appbuilderApiDevServer MUST come before the other proxy plugins so
     // its /api middleware is registered first and can pick up table CRUD
     // routes under api/<table>.ts before any catch-all matchers below.
@@ -29,6 +31,7 @@ export default defineConfig({
     // ("useIdentity() must be used inside <IdentityProvider>").
     dedupe: ["react", "react-dom"],
     alias: {
+      "@/widgets": path.resolve(__dirname, "src/widgets"),
       "@": path.resolve(__dirname, "."),
       react: path.resolve(__dirname, "node_modules/react"),
       "react-dom": path.resolve(__dirname, "node_modules/react-dom"),

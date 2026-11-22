@@ -22,6 +22,9 @@
     "noUncheckedSideEffectImports": true,
     "baseUrl": ".",
     "paths": {
+      "@/widgets/*": [
+        "./src/widgets/*"
+      ],
       "@/*": [
         "./*"
       ]

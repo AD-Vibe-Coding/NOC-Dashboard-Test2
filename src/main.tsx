@@ -7,6 +7,7 @@ import "./index.css";
 import App from "./App";
 import { IdentityProvider } from "./lib/identity";
 import { DashboardPreferencesProvider } from "./lib/dashboard-preferences";
+import { SnapshotProvider } from "./widgets/TeamPerformanceMetrics/lib/snapshot-store";
 
 // Custom theme — built around AppDirect's official brand palette.
 // AppDirect's Base design-system documents `#006080` (deep petrol teal,
@@ -100,7 +101,9 @@ createRoot(rootEl).render(
           singletons so a dual Vite-module load cannot desync them. */}
       <IdentityProvider>
         <DashboardPreferencesProvider>
-          <App />
+          <SnapshotProvider>
+            <App />
+          </SnapshotProvider>
         </DashboardPreferencesProvider>
       </IdentityProvider>
     </MantineProvider>

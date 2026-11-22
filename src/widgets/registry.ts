@@ -52,6 +52,10 @@ import {
   PerformanceTrackerTile,
 } from "./PerformanceTracker";
 import {
+  TeamPerformanceMetricsWidget,
+  TeamPerformanceMetricsTile,
+} from "./TeamPerformanceMetrics";
+import {
   AccessControlWidget,
   AccessControlTile,
 } from "./AccessControl";
@@ -131,13 +135,25 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "performance-tracker",
-    title: "Team Performance Metrics",
-    description: "Excel-imported team metrics + per-member drill-down",
+    title: "Old Team Performance",
+    description: "Legacy Excel-imported team metrics + per-member drill-down",
     icon: IconChartBar,
     iconColor: "green",
     tileSize: "sm",
     Tile: PerformanceTrackerTile,
     Full: PerformanceTrackerWidget,
+  },
+  {
+    id: "team-performance-metrics",
+    title: "Team Performance Metrics",
+    description: "NOC trends, individual metrics, and AI insights from Excel data",
+    icon: IconChartBar,
+    iconColor: "appdirect",
+    tileSize: "lg",
+    roles: ["manager"],
+    featured: true,
+    Tile: TeamPerformanceMetricsTile,
+    Full: TeamPerformanceMetricsWidget,
   },
   {
     id: "noc-mttr-report",
