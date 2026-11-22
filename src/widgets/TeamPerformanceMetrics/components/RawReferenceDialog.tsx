@@ -8,6 +8,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/widgets/TeamPerformanceMetrics/components/ui/dialog";
 import {
   Table,
@@ -69,19 +70,19 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
   }
 
   return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`View raw Excel data for ${metric}`}
-        title="View raw Excel data"
-        onClick={() => setOpen(true)}
-      >
-        <FileSpreadsheet aria-hidden="true" />
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="flex max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl flex-col gap-4 overflow-hidden p-5 sm:p-6">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`View raw Excel data for ${metric}`}
+          title="View raw Excel data"
+        >
+          <FileSpreadsheet aria-hidden="true" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="flex max-h-[90vh] w-[calc(100%-2rem)] max-w-6xl flex-col gap-4 overflow-hidden p-5 sm:p-6">
           <DialogHeader className="shrink-0 pr-8">
             <DialogTitle>Raw Excel data · {metric}</DialogTitle>
             <DialogDescription>
@@ -189,8 +190,7 @@ export function RawReferenceDialog({ member, metric, upload }: Props) {
               </p>
             ) : null}
           </div>
-        </DialogContent>
-      </Dialog>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }
