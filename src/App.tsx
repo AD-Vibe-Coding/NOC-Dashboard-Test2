@@ -602,7 +602,9 @@ function ManagerHome({
     );
   }
 
-  const monitoringWidgets = featuredWidgets.filter((w) => w.id !== "my-day");
+  const monitoringWidgets = featuredWidgets.filter(
+    (w) => w.id !== "my-day" && w.id !== "performance-tracker",
+  );
   const highlightedWidgets =
     template === "learning"
       ? monitoringWidgets.slice(0, 2)
