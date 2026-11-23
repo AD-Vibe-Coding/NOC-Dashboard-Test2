@@ -1,8 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../_lib/supabase-admin.js";
-import { getSession } from "../_lib/auth-middleware.js";
-import { getAppBuilderSession } from "../_lib/appbuilder-auth.js";
-import { lookupByEmail } from "../_lib/roles.js";
+import { getTeamPerformanceViewer } from "../_lib/team-performance-access.js";
 
 const MAX_PARSED_BYTES = 4 * 1024 * 1024;
 const KINDS = new Set(["tickets", "mobility", "calls"]);
@@ -13,23 +11,47 @@ function bodyOf(req: VercelRequest): Record<string, unknown> {
   return (req.body ?? {}) as Record<string, unknown>;
 }
 
+function scopeUploadToMember(upload: Record<string, unknown>, memberName: string) {
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const value = upload.parsed_data;
+    parsed = typeof value === "string"
+      ? JSON.parse(value) as Record<string, unknown>
+      : value && typeof value === "object" && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (parsed) {
+    const safeParsed = { ...parsed };
+    delete safeParsed.rawRows;
+    const allMembers = safeParsed.members;
+    const ownData = allMembers && typeof allMembers === "object" && !Array.isArray(allMembers)
+      ? (allMembers as Record<string, unknown>)[memberName]
+      : undefined;
+    return {
+      ...upload,
+      data_url: null,
+      parsed_data: {
+        ...safeParsed,
+        members: ownData ? { [memberName]: ownData } : {},
+      },
+    };
+  }
+  return { ...upload, data_url: null, parsed_data: null };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    // Google SSO uses the encrypted iframe-partitioned cookie; dev sign-in
-    // still uses the signed legacy noc_session cookie. Accept either verified
-    // session, but always derive authorization from the server-side roster.
-    const session = await getAppBuilderSession(req);
-    const legacySession = session ? null : getSession(req);
-    const sessionEmail = session?.email ?? legacySession?.email;
-    const member = sessionEmail ? lookupByEmail(String(sessionEmail).toLowerCase()) : null;
-    // Prefer the roster when an email matches; otherwise use the role resolved
-    // by the shared App Builder session helper or the verified legacy session.
-    const verifiedRole = member?.role ?? session?.role ?? legacySession?.role;
-    if ((!session && !legacySession) || String(verifiedRole ?? "").toLowerCase() !== "manager") {
-      return res.status(403).json({
-        error: "Manager access required.",
-        hint: "Sign in with a manager account to use this feature.",
-      });
+    const viewer = await getTeamPerformanceViewer(req);
+    if (!viewer) {
+      return res.status(403).json({ error: "Team Performance access requires an approved team account." });
+    }
+    const isManager = viewer.role === "manager";
+    if (req.method !== "GET" && !isManager) {
+      return res.status(403).json({ error: "Manager access required to modify workbook uploads." });
     }
 
     if (req.method === "GET") {
@@ -45,7 +67,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .limit(1)
         .maybeSingle();
       if (error) return res.status(500).json({ error: error.message });
-      return res.status(200).json({ upload: data ?? null });
+      const upload = data && !isManager
+        ? scopeUploadToMember(data as unknown as Record<string, unknown>, viewer.name)
+        : data;
+      return res.status(200).json({ upload: upload ?? null });
     }
 
     if (req.method === "POST") {

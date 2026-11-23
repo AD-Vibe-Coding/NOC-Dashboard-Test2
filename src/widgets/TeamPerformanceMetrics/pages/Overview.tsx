@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useIdentity } from "../../../lib/identity";
 import {
   KPI_BY_KEY,
   KPI_DEFS,
@@ -27,6 +28,8 @@ import {
 } from "@/widgets/TeamPerformanceMetrics/components/ui/select";
 
 export default function Overview() {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
   const [grain, setGrain] = useState<PeriodGrain>("month");
   const labels = periodLabelsLive(grain);
   const [index, setIndex] = useState(labels.length - 1);
@@ -60,9 +63,13 @@ export default function Overview() {
             <p className="text-sm text-muted-foreground">
               No file loaded yet. Snapshot / demo figures are not used.
             </p>
-            <Button asChild>
-              <Link to="/upload">Upload Excel</Link>
-            </Button>
+            {isManager ? (
+              <Button asChild>
+                <Link to="/upload">Upload Excel</Link>
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">Ask your manager to upload the latest workbooks.</p>
+            )}
           </CardContent>
         </Card>
       </div>

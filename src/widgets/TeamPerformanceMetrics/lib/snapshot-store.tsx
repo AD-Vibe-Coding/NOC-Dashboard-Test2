@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useIdentity } from "../../../lib/identity";
 import { parseWorkbook, type UploadKind, type UploadResult } from "./parse-excel";
 
 type SnapshotState = {
@@ -14,7 +15,7 @@ const Ctx = createContext<SnapshotState | null>(null);
 
 async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
   const response = await fetch(`/api/team-performance/uploads?kind=${kind}`, { credentials: "include" });
-  // Non-managers can mount the global provider too; they simply have no access to this manager-only data.
+  // Unauthenticated and out-of-team accounts receive no workbook data.
   if (response.status === 401 || response.status === 403) return null;
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
@@ -52,12 +53,24 @@ async function restoreKind(kind: UploadKind): Promise<UploadResult | null> {
 }
 
 export function SnapshotProvider({ children }: { children: ReactNode }) {
+  const { identity, loading: identityLoading } = useIdentity();
   const [uploads, setUploads] = useState<UploadResult[]>([]);
   const [isRestoring, setIsRestoring] = useState(true);
   const [restoreError, setRestoreError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (identityLoading) return;
+    if (!identity) {
+      setUploads([]);
+      setRestoreError(null);
+      setIsRestoring(false);
+      return;
+    }
+
     let cancelled = false;
+    setUploads([]);
+    setRestoreError(null);
+    setIsRestoring(true);
     void Promise.all(KINDS.map(async (kind) => {
       try {
         return { result: await restoreKind(kind), error: null };
@@ -72,7 +85,7 @@ export function SnapshotProvider({ children }: { children: ReactNode }) {
       setIsRestoring(false);
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [identityLoading, identity?.email, identity?.name]);
 
   const value = useMemo(
     () => ({

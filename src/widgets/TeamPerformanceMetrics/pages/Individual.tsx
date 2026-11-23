@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useIdentity } from "../../../lib/identity";
 import { FileSpreadsheet } from "lucide-react";
 import {
   Area,
@@ -18,7 +19,7 @@ import { useSnapshotUploads } from "@/widgets/TeamPerformanceMetrics/lib/snapsho
 import type { UploadKind } from "@/widgets/TeamPerformanceMetrics/lib/parse-excel";
 import { RawReferenceTable } from "@/widgets/TeamPerformanceMetrics/components/RawReferenceDialog";
 import { hasLiveData, liveMemberTrends } from "@/widgets/TeamPerformanceMetrics/lib/live-data";
-import { TEAM_MEMBERS } from "@/widgets/TeamPerformanceMetrics/lib/team-members";
+import { TEAM_MEMBERS, matchTeamMember } from "@/widgets/TeamPerformanceMetrics/lib/team-members";
 import { Card, CardContent } from "@/widgets/TeamPerformanceMetrics/components/ui/card";
 import { Button } from "@/widgets/TeamPerformanceMetrics/components/ui/button";
 import { BlurFade } from "@/widgets/TeamPerformanceMetrics/components/ui/blur-fade";
@@ -195,8 +196,12 @@ function MetricTrend({
 }
 
 export default function Individual() {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
+  const ownMember = identity ? matchTeamMember(identity.name) ?? "" : "";
   const [grain, setGrain] = useState<TrendGrain>("month");
-  const [member, setMember] = useState<string>(TEAM_MEMBERS[0]);
+  const [selectedMember, setSelectedMember] = useState<string>(TEAM_MEMBERS[0]);
+  const member = isManager ? selectedMember : ownMember;
   const [activeSourceKind, setActiveSourceKind] = useState<UploadKind | null>(null);
   const { uploads } = useSnapshotUploads();
   const sourceOptions = VOLUME_SOURCES.map((source) => ({
@@ -224,13 +229,27 @@ export default function Individual() {
         </BlurFade>
         <Card>
           <CardContent className="flex flex-col items-start gap-4 py-10">
-            <p className="text-sm text-muted-foreground">No file loaded yet.</p>
-            <Button asChild>
-              <Link to="/upload">Upload Excel</Link>
-            </Button>
+            <p className="text-sm text-muted-foreground">
+              {isManager ? "No file loaded yet." : "Performance data is not available yet. Ask your manager to upload the workbook."}
+            </p>
+            {isManager ? (
+              <Button asChild>
+                <Link to="/upload">Upload Excel</Link>
+              </Button>
+            ) : null}
           </CardContent>
         </Card>
       </div>
+    );
+  }
+
+  if (!isManager && !TEAM_MEMBERS.includes(member as (typeof TEAM_MEMBERS)[number])) {
+    return (
+      <Card>
+        <CardContent className="py-10 text-sm text-muted-foreground">
+          Your individual performance profile could not be matched to this workbook roster. Contact your manager to verify your roster name.
+        </CardContent>
+      </Card>
     );
   }
 
@@ -246,21 +265,28 @@ export default function Individual() {
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <label className="flex flex-col gap-1 text-xs text-muted-foreground">
-              Team member
-              <Select value={member} onValueChange={setMember}>
-                <SelectTrigger className="w-[260px]" aria-label="Team member">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {TEAM_MEMBERS.map((name) => (
-                    <SelectItem key={name} value={name}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </label>
+            {isManager ? (
+              <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+                Team member
+                <Select value={member} onValueChange={setSelectedMember}>
+                  <SelectTrigger className="w-[260px]" aria-label="Team member">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TEAM_MEMBERS.map((name) => (
+                      <SelectItem key={name} value={name}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            ) : (
+              <div className="flex flex-col gap-1 text-xs text-muted-foreground" aria-label="Your individual metrics">
+                <span>Your metrics</span>
+                <span className="text-sm font-medium text-foreground">{member}</span>
+              </div>
+            )}
             <label className="flex flex-col gap-1 text-xs text-muted-foreground">
               Window
               <Select value={grain} onValueChange={(v) => setGrain(v as TrendGrain)}>

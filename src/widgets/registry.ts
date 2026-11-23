@@ -136,7 +136,7 @@ export const WIDGETS: WidgetDefinition[] = [
     icon: IconChartBar,
     iconColor: "appdirect",
     tileSize: "lg",
-    roles: ["manager"],
+    roles: ["manager", "tier1", "tier2", "tier3"],
     featured: true,
     Tile: TeamPerformanceMetricsTile,
     Full: TeamPerformanceMetricsWidget,

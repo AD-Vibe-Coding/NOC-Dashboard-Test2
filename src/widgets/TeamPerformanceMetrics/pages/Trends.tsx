@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useIdentity } from "../../../lib/identity";
 import {
   Area,
   AreaChart,
@@ -185,6 +186,8 @@ function MetricTrend({
 }
 
 export default function Trends() {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
   const [grain, setGrain] = useState<TrendGrain>("month");
   const { uploads } = useSnapshotUploads();
   const live = hasLiveData(uploads);
@@ -199,7 +202,7 @@ export default function Trends() {
         <BlurFade>
           <div>
             <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">NOC</p>
-            <h1 className="font-display mt-1 text-3xl md:text-4xl">Team Trends</h1>
+            <h1 className="font-display mt-1 text-3xl md:text-4xl">Team Metrics</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Charts use uploaded Excel rows grouped by the report’s month column (B for tickets/calls; P for mobility).
             </p>
@@ -208,9 +211,13 @@ export default function Trends() {
         <Card>
           <CardContent className="flex flex-col items-start gap-4 py-10">
             <p className="text-sm text-muted-foreground">No file loaded. Demo snapshot series is not shown.</p>
-            <Button asChild>
-              <Link to="/upload">Upload Excel</Link>
-            </Button>
+            {isManager ? (
+              <Button asChild>
+                <Link to="/upload">Upload Excel</Link>
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">Ask your manager to upload the latest workbooks.</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -223,7 +230,7 @@ export default function Trends() {
         <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[11px] uppercase tracking-[0.2em] text-muted-foreground">NOC</p>
-            <h1 className="font-display mt-1 text-3xl md:text-4xl">Team Trends</h1>
+            <h1 className="font-display mt-1 text-3xl md:text-4xl">Team Metrics</h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
               Last {windowLabel}. Filled area shows the path of each metric; Y-axis zooms to the range so dips and rises read clearly.
             </p>

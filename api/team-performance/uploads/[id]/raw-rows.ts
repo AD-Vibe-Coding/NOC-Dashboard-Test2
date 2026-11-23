@@ -1,8 +1,6 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { supabaseAdmin } from "../../../_lib/supabase-admin.js";
-import { getSession } from "../../../_lib/auth-middleware.js";
-import { getAppBuilderSession } from "../../../_lib/appbuilder-auth.js";
-import { lookupByEmail } from "../../../_lib/roles.js";
+import { getTeamPerformanceViewer } from "../../../_lib/team-performance-access.js";
 
 const MAX_BATCH_ROWS = 500;
 const MAX_BATCH_BYTES = 1_500_000;
@@ -18,16 +16,6 @@ type RawRowInput = {
 function bodyOf(req: VercelRequest): Record<string, unknown> {
   if (typeof req.body === "string") return JSON.parse(req.body || "{}");
   return (req.body ?? {}) as Record<string, unknown>;
-}
-
-async function managerName(req: VercelRequest): Promise<string | null> {
-  const session = await getAppBuilderSession(req);
-  const legacySession = session ? null : getSession(req);
-  const email = session?.email ?? legacySession?.email;
-  const member = email ? lookupByEmail(String(email).toLowerCase()) : null;
-  const role = member?.role ?? session?.role ?? legacySession?.role;
-  if ((!session && !legacySession) || String(role ?? "").toLowerCase() !== "manager") return null;
-  return member?.name ?? "Manager";
 }
 
 function uploadIdFrom(req: VercelRequest): number | null {
@@ -56,14 +44,21 @@ function parseRows(value: unknown): RawRowInput[] | null {
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
-    const manager = await managerName(req);
-    if (!manager) return res.status(403).json({ error: "Manager access required." });
+    const viewer = await getTeamPerformanceViewer(req);
+    if (!viewer) return res.status(403).json({ error: "Team Performance access requires an approved team account." });
+    const isManager = viewer.role === "manager";
+    if (req.method !== "GET" && !isManager) {
+      return res.status(403).json({ error: "Manager access required to modify workbook rows." });
+    }
 
     const uploadId = uploadIdFrom(req);
     if (!uploadId) return res.status(400).json({ error: "A valid upload id is required." });
 
     if (req.method === "GET") {
       const member = String(req.query.member ?? "").trim();
+      if (!isManager && member !== viewer.name) {
+        return res.status(403).json({ error: "You can only view your own performance source rows." });
+      }
       const monthsRaw = String(req.query.months ?? "");
       const months = monthsRaw.split(",").map((month) => month.trim()).filter((month) => /^\d{4}-\d{2}$/.test(month));
       const page = Math.max(0, Math.floor(Number(req.query.page) || 0));

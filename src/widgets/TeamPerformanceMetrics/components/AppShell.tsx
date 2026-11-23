@@ -1,18 +1,25 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { BarChart3, Gavel, LayoutDashboard, PenLine, Sparkles, TrendingUp, Upload, UserRound } from "lucide-react";
 import { cn } from "@/widgets/TeamPerformanceMetrics/lib/utils";
+import { useIdentity } from "../../../lib/identity";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/trends", label: "Team Trends", icon: TrendingUp },
-  { to: "/individual", label: "Individual metrics", icon: UserRound },
+  { to: "/trends", label: "Team Metrics", icon: TrendingUp },
+  { to: "/individual", label: "Individual Metrics", icon: UserRound },
   { to: "/insights", label: "Insights", icon: Sparkles },
   { to: "/generate", label: "Generate", icon: PenLine },
   { to: "/upload", label: "Upload", icon: Upload },
   { to: "/disputes", label: "Disputes", icon: Gavel },
 ];
 
+const TEAM_MEMBER_NAV_PATHS = new Set(["/", "/trends", "/individual"]);
+
 export function AppShell() {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
+  const navItems = isManager ? NAV : NAV.filter((item) => TEAM_MEMBER_NAV_PATHS.has(item.to));
+
   return (
     <div className="flex min-h-full flex-col bg-background text-foreground">
       <a
@@ -35,7 +42,7 @@ export function AppShell() {
             </div>
           </div>
           <nav className="hidden min-w-0 flex-1 items-center justify-center gap-1 md:flex" aria-label="Widget navigation">
-            {NAV.map((item) => (
+            {navItems.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -56,7 +63,7 @@ export function AppShell() {
           </nav>
         </div>
         <nav className="flex gap-1 overflow-x-auto border-t border-border px-3 py-2 md:hidden" aria-label="Widget navigation">
-          {NAV.map((item) => (
+          {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}

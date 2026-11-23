@@ -3,6 +3,7 @@ import { Badge, Group, Stack, Text } from "@mantine/core";
 import { IconChartBar } from "@tabler/icons-react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { WidgetTile } from "../WidgetTile";
+import { useIdentity } from "../../lib/identity";
 import type { TileProps } from "../types";
 import { AppShell } from "./components/AppShell";
 import Overview from "./pages/Overview";
@@ -49,6 +50,8 @@ export function TeamPerformanceMetricsTile({ onExpand }: TileProps) {
 }
 
 export function TeamPerformanceMetricsWidget() {
+  const { identity } = useIdentity();
+  const isManager = identity?.role === "manager";
   const { colorScheme } = useMantineColorScheme();
   const themeClass = colorScheme === "dark" ? " dark" : "";
 
@@ -60,10 +63,10 @@ export function TeamPerformanceMetricsWidget() {
             <Route path="/" element={<Overview />} />
             <Route path="/trends" element={<Trends />} />
             <Route path="/individual" element={<Individual />} />
-            <Route path="/insights" element={<Insights />} />
-            <Route path="/generate" element={<Generate />} />
-            <Route path="/upload" element={<Upload />} />
-            <Route path="/disputes" element={<Disputes />} />
+            <Route path="/insights" element={isManager ? <Insights /> : <Navigate to="/" replace />} />
+            <Route path="/generate" element={isManager ? <Generate /> : <Navigate to="/" replace />} />
+            <Route path="/upload" element={isManager ? <Upload /> : <Navigate to="/" replace />} />
+            <Route path="/disputes" element={isManager ? <Disputes /> : <Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
