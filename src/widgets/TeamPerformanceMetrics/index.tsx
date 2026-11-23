@@ -23,7 +23,7 @@ export function TeamPerformanceMetricsTile({ onExpand }: TileProps) {
 
   return (
     <WidgetTile
-      title="Team Performance Metrics"
+      title="NOC Metrics"
       description="NOC trends, individual metrics, and AI insights"
       icon={IconChartBar}
       iconColor="appdirect"

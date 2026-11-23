@@ -1344,7 +1344,7 @@ function PushToMetricsTab({ audits, onPushed, onDelete }: { audits: TicketAudit[
       <Stack gap="md" pt="md">
         <Alert icon={<IconChartBar size={16} />} color="violet" variant="light" radius="md">
         <Text size="sm">
-          Select audits below to push their scores to the <b>Team Performance</b> widget as <code>source_type = "audit"</code>. 
+          Select audits below to push their scores to the <b>NOC Metrics</b> widget as <code>source_type = "audit"</code>. 
           Each pushed audit creates a performance metric row for the agent, visible in their drill-down.
         </Text>
       </Alert>

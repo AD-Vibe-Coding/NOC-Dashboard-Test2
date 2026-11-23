@@ -818,7 +818,7 @@ const MANAGER_QUICK_GROUPS: Array<{
   {
     label: "Team Management",
     items: [
-      { id: "performance-tracker", emoji: "📊", label: "Team Performance Metrics", desc: "Team metrics, trends & disputes", color: "green" },
+      { id: "performance-tracker", emoji: "📊", label: "NOC Metrics", desc: "Team metrics, trends & disputes", color: "green" },
       { id: "noc-mttr-report",     emoji: "⏱️", label: "NOC MTTR Report",   desc: "Upload MTTR Excel and trend by month", color: "orange" },
       { id: "wfh",                 emoji: "🏠", label: "WFH Requests",      desc: "Review & approve WFH",        color: "appdirect" },
       { id: "training-updates",    emoji: "🎓", label: "Training Hub",      desc: "Requests, sessions, progress", color: "blue" },

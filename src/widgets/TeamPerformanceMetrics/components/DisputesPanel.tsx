@@ -104,7 +104,7 @@ function rawSourceSummary(sourceContext: string | null | undefined): string | nu
     const parts = [context.memberName, context.monthLabel, context.filename]
       .filter((part): part is string => typeof part === "string" && part.length > 0);
     if (typeof context.sourceRow === "number") parts.push(`Excel row ${context.sourceRow}`);
-    return parts.join(" · ") || "Team Performance raw row";
+    return parts.join(" · ") || "NOC Metrics source row";
   } catch {
     return null;
   }

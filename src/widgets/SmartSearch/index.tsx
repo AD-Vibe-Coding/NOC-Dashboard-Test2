@@ -44,7 +44,7 @@ const DEFAULT_WIDGET_LIST: SmartSearchWidgetMeta[] = [
   },
   {
     id: "performance-tracker",
-    title: "Team Performance",
+    title: "NOC Metrics",
     desc: "Excel-imported team metrics + per-member drill-down",
     keywords: ["performance", "kpi", "metrics", "score", "dispute", "audit"],
   },

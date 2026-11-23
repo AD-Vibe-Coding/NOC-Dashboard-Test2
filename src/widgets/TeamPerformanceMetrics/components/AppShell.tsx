@@ -37,7 +37,7 @@ export function AppShell() {
             <div className="leading-tight">
               <p className="font-display text-sm font-semibold tracking-wide text-foreground">Devs.ai</p>
               <p className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                Team Performance Metrics
+                NOC Metrics
               </p>
             </div>
           </div>

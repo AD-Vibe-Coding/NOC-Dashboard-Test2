@@ -131,7 +131,7 @@ export const WIDGETS: WidgetDefinition[] = [
   },
   {
     id: "performance-tracker",
-    title: "Team Performance Metrics",
+    title: "NOC Metrics",
     description: "NOC trends, individual metrics, and insights from Excel data",
     icon: IconChartBar,
     iconColor: "appdirect",
